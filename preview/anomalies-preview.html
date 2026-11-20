@@ -79,6 +79,7 @@
     <div class="row"><input id="lDrift" type="checkbox" checked><label for="lDrift">дрейф и след</label></div>
     <div class="row"><input id="lRings" type="checkbox" checked><label for="lRings">границы классов</label></div>
     <div class="row"><input id="lScars" type="checkbox" checked><label for="lScars">шрамы умерших</label></div>
+    <div class="row"><input id="lDamage" type="checkbox" checked><label for="lDamage">следы разрушения</label></div>
 
     <h2>Классы</h2>
     <div class="legend">
@@ -191,7 +192,15 @@ function makeField(seed) {
     const harmonics = [];
     const count = 2 + Math.floor(rnd() * 4); // 2..5
     for (let k = 2; k <= count; k++) {
-      harmonics.push({ k, amp: 0.05 + rnd() * 0.20, phase: rnd() * Math.PI * 2 });
+      harmonics.push({
+        k,
+        amp: 0.05 + rnd() * 0.20,
+        phase: rnd() * Math.PI * 2,
+        spin: (0.001 + rnd() * 0.009) * (rnd() < 0.5 ? -1 : 1),   // фаза уплывает
+        wob: 0.10 + rnd() * 0.20,                                 // амплитуда качается ±20 %
+        wobSpeed: 0.10 + rnd() * 0.30,
+        wobPhase: rnd() * Math.PI * 2
+      });
     }
 
     out.push({
@@ -210,7 +219,9 @@ function makeField(seed) {
       curve: (rnd() - 0.5) * 0.02,       // медленный поворот траектории
       coreOff: 0.12 + rnd() * 0.25,
       coreAngle: rnd() * Math.PI * 2,
-      coreSpin: (rnd() - 0.5) * 0.03
+      coreSpin: (rnd() - 0.5) * 0.03,
+      breath: 0.01 + rnd() * 0.02,          // общий радиус «вздыхает» на 1–3 %
+      breathSpeed: 0.2 + rnd() * 0.4
     });
   }
   return out;
@@ -224,11 +235,28 @@ const state = {
   zoom: 1,
   panX: 0, panY: 0,
   hover: null,
-  show: { forms: true, cores: true, drift: true, rings: true, scars: true }
+  show: { forms: true, cores: true, drift: true, rings: true, scars: true, damage: true }
 };
 
-function radiusAt(a, t) {
-  const age = t - a.birth;
+// бюджет разрушения: ноль у безопасных и мелких, растёт с радиусом (таблица из README)
+const DAMAGE_TABLE = [[100, 0], [500, 300], [1000, 5000], [2000, 60000], [3000, 250000]];
+
+function damageBlocks(a) {
+  if (a.cls.key === "safe") return 0;
+  const r = a.baseRadius;
+  if (r <= DAMAGE_TABLE[0][0]) return 0;
+  for (let i = 1; i < DAMAGE_TABLE.length; i++) {
+    const [r1, b1] = DAMAGE_TABLE[i];
+    const [r0, b0] = DAMAGE_TABLE[i - 1];
+    if (r <= r1) {
+      const k = (r - r0) / (r1 - r0);
+      return Math.round(b0 + (b1 - b0) * k * k);
+    }
+  }
+  return DAMAGE_TABLE[DAMAGE_TABLE.length - 1][1];
+}
+
+function radiusAt(a, t) {  const age = t - a.birth;
   const frac = Math.max(0, Math.min(1, age / a.life));
   if (frac < 0.22) return a.baseRadius * (frac / 0.22);          // рост
   if (frac > 0.80) return a.baseRadius * ((1 - frac) / 0.20);    // распад
@@ -284,11 +312,16 @@ function toWorld(px, py) {
 function shapePoints(a, st, scale = 1) {
   const pts = [];
   const N = 96;
+  const t = state.t;
   const r0 = st.radius * scale;
   for (let i = 0; i < N; i++) {
     const th = i / N * Math.PI * 2;
-    let r = 1;
-    for (const h of a.harmonics) r += h.amp * Math.sin(h.k * th + h.phase);
+    // граница меняется: общий «вздох» + плывущие фазы + качающиеся амплитуды
+    let r = 1 + a.breath * Math.sin(t * a.breathSpeed);
+    for (const h of a.harmonics) {
+      const amp = h.amp * (1 + h.wob * Math.sin(t * h.wobSpeed + h.wobPhase));
+      r += amp * Math.sin(h.k * th + h.phase + h.spin * t);
+    }
     r = Math.max(0.35, r);
     const lx = Math.cos(th) * r * a.stretch;
     const lz = Math.sin(th) * r;
@@ -462,6 +495,39 @@ function drawAnomaly(a, st) {
     ctx.closePath(); ctx.fillStyle = withAlpha(a.cls.color, 0.55); ctx.fill();
     ctx.restore();
   }
+  if (state.show.damage) drawDamage(a, st);
+}
+
+// последствия: большие опасные/смертельные уродуют землю, мелкие — почти нет
+function drawDamage(a, st) {
+  const blocks = damageBlocks(a);
+  if (blocks <= 0) return;
+  const alpha = Math.min(0.40, 0.05 + Math.log10(blocks + 1) * 0.08);
+  polygonPath(shapePoints(a, { x: st.x, z: st.z, radius: st.radius * 0.55 }, 1));
+  ctx.fillStyle = `rgba(26,20,14,${alpha})`;
+  ctx.fill();
+  const spikes = blocks >= 5000 ? Math.min(6, 1 + Math.floor(blocks / 50000)) : 0;
+  if (spikes === 0) return;
+  const rnd = mulberry32(a.id * 7919 + 13);
+  const tallest = Math.min(150, 20 + Math.sqrt(blocks) * 0.22);
+  const s = baseScale();
+  for (let i = 0; i < spikes; i++) {
+    const ang = rnd() * Math.PI * 2;
+    const dist = rnd() * st.radius * 0.35;
+    const x = st.x + Math.cos(ang) * dist;
+    const z = st.z + Math.sin(ang) * dist;
+    const h = tallest * (0.5 + rnd() * 0.5);
+    const [sx, sy] = toScreen(x, z);
+    const hpx = Math.max(3, h * s);
+    const wpx = Math.max(1.5, h * 0.35 * s);
+    ctx.beginPath();
+    ctx.moveTo(sx, sy - hpx);
+    ctx.lineTo(sx - wpx, sy);
+    ctx.lineTo(sx + wpx, sy);
+    ctx.closePath();
+    ctx.fillStyle = withAlpha(a.cls.color, 0.6);
+    ctx.fill();
+  }
 }
 
 function drawPlayerMark() {
@@ -482,11 +548,17 @@ function updateStats(alive) {
   const byClass = { home: 0, safe: 0, danger: 0, deadly: 0 };
   let area = 0;
   let biggest = null;
+  let damageTotal = 0;
+  let bigScars = 0;
   for (const [a, st] of alive) {
     byClass[a.cls.key]++;
     area += Math.PI * st.radius * st.radius;
+    const dmg = damageBlocks(a);
+    damageTotal += dmg;
+    if (dmg >= 5000) bigScars++;
     if (!biggest || st.radius > biggest.st.radius) biggest = { a, st };
   }
+  const fmt = (v) => v >= 1e6 ? (v / 1e6).toFixed(1) + " млн" : Math.round(v / 1000) + " тыс";
   const worldArea = Math.PI * WORLD_R * WORLD_R;
   const share = (area / worldArea * 100);
   const rows = [
@@ -495,6 +567,8 @@ function updateStats(alive) {
     ["опасных", byClass.danger],
     ["смертельных", byClass.deadly],
     ["покрыто", share.toFixed(1) + " %"],
+    ["крупных следов", bigScars],
+    ["урон, блоков", fmt(damageTotal)],
     ["крупнейшая", biggest ? Math.round(biggest.st.radius) + " бл" : "—"]
   ];
   statsEl.innerHTML = rows.map(([k, v]) => `<div class="k">${k}</div><div class="v">${v}</div>`).join("");
@@ -607,7 +681,7 @@ document.getElementById("png").addEventListener("click", () => {
 });
 
 const toggles = {
-  lForms: "forms", lCores: "cores", lDrift: "drift", lRings: "rings", lScars: "scars"
+  lForms: "forms", lCores: "cores", lDrift: "drift", lRings: "rings", lScars: "scars", lDamage: "damage"
 };
 for (const [id, key] of Object.entries(toggles)) {
   const el = document.getElementById(id);
