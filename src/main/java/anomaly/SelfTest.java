@@ -32,25 +32,35 @@ public final class SelfTest {
 	}
 
 	public static void run(MinecraftServer server) {
-		try {
-			AnomalyConfig config = AnomalyMod.config;
-			ServerLevel level = server.overworld();
+		AnomalyConfig config = AnomalyMod.config;
+		ServerLevel level = server.overworld();
 
-			checkDensity(config);
-			checkPlacement(level, config);
-			checkDensityByDistance(level, config);
-			checkStacks(config);
-			checkDose(config);
-			checkWorldCalls(server, level, config);
-			checkEdgeConfig();
-		} catch (Throwable t) {
-			failed++;
-			AnomalyMod.LOGGER.error("SELFTEST упал", t);
-		}
+		// каждая группа отдельно: падение одной не должно скрывать остальные проверки
+		runGroup("плотность", () -> checkDensity(config));
+		runGroup("размещение", () -> checkPlacement(level, config));
+		runGroup("распределение", () -> checkDensityByDistance(level, config));
+		runGroup("стопки", () -> checkStacks(config));
+		runGroup("доза", () -> checkDose(config));
+		runGroup("живые вызовы", () -> checkWorldCalls(server, level, config));
+		runGroup("крайние конфиги", SelfTest::checkEdgeConfig);
+
 		AnomalyMod.LOGGER.info("SELFTEST: {} из {} — {}", passed, passed + failed, failed == 0 ? "PASS" : "FAILED");
 	}
 
+	private static void runGroup(String name, Runnable body) {
+		try {
+			body.run();
+		} catch (Throwable t) {
+			failed++;
+			AnomalyMod.LOGGER.error("SELFTEST FAIL: группа «{}» упала", name, t);
+		}
+	}
+
 	private static void checkDensity(AnomalyConfig config) {
+		if (config.density_stages == null || config.density_stages.isEmpty()) {
+			report("стадии плотности заданы", false);
+			return;
+		}
 		checkRate("ближе safe_radius плотность 0", 0.0, config.densityAt(config.safe_radius - 1));
 		checkRate("на первой ступени плотность из конфига", config.density_stages.get(0)[1],
 				config.densityAt(config.density_stages.get(0)[0]));
@@ -163,6 +173,20 @@ public final class SelfTest {
 		check("доза 0.5 → усилитель 1", 1, amp.amplifier());
 		amp.dose = 0.9;
 		check("доза 0.9 → усилитель 2", 2, amp.amplifier());
+
+		// смена типа не тащит чужую дозу: из «Тяжести» на 100 % в «Мороз» приходит не больше 30 %
+		AnomalyState switching = new AnomalyState();
+		switching.dose = 1.0;
+		switching.type = AnomalyType.GRAVITY;
+		switching.enter(new Anomaly(AnomalyType.FROST, 2L, 0, 0, 10, 1.0), 0.0, config);
+		checkRate("смена типа срезает дозу до 0.3", 0.3, switching.dose);
+
+		// счётчик тиков внутри растёт и сбрасывается снаружи (по нему ограничена левитация)
+		check("тиков внутри после входа", 1, switching.ticksInside);
+		switching.enter(new Anomaly(AnomalyType.FROST, 2L, 0, 0, 10, 1.0), 0.0, config);
+		check("тиков внутри после двух входов", 2, switching.ticksInside);
+		switching.leave(0.0, config);
+		check("тиков внутри после выхода", 0, switching.ticksInside);
 	}
 
 	/**

@@ -3,6 +3,7 @@ package anomaly;
 import net.minecraft.ChatFormatting;
 import net.minecraft.core.Holder;
 import net.minecraft.network.chat.Component;
+import net.minecraft.network.protocol.game.ClientboundSetEntityMotionPacket;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.sounds.SoundEvents;
@@ -20,6 +21,13 @@ import net.minecraft.world.entity.LightningBolt;
  * дозу читаем по иконкам эффектов и по строке над хотбаром.
  */
 public final class AnomalyEffects {
+	/** Левитация вихря держится не дольше этого: иначе игрок улетает вверх и падает без контрплея. */
+	private static final int MAX_LEVITATION_TICKS = 60;
+	/** Иней набирается +30 за шаг: ваниль снимает 2 за тик, то есть нетто +10 за 0.5 с. */
+	private static final int FREEZE_PER_STEP = 30;
+	/** 140 — ванильный «полностью замёрз»: дальше уже идёт обморожение. */
+	private static final int FREEZE_FULL = 140;
+
 	private AnomalyEffects() {
 	}
 
@@ -39,17 +47,19 @@ public final class AnomalyEffects {
 				if (dose >= 0.3) {
 					effect(player, MobEffects.NAUSEA, 60, 0);
 				}
-				if (dose >= 0.6) {
+				if (dose >= 0.6 && state.ticksInside <= MAX_LEVITATION_TICKS) {
 					effect(player, MobEffects.LEVITATION, 30, 0);
 				}
 				push(player, anomaly, 0.03 + 0.06 * dose);
 			}
 			case FROST -> {
 				effect(player, MobEffects.SLOWNESS, 60, amplifier);
-				// иней на экране: клиент рисует его сам по счётчику заморозки
-				player.setTicksFrozen(Math.min(300, player.getTicksFrozen() + 20));
-				if (dose >= 0.8) {
-					player.hurt(level.damageSources().freeze(), 1.0f);
+				int frozen = Math.min(FREEZE_FULL * 2, player.getTicksFrozen() + FREEZE_PER_STEP);
+				player.setTicksFrozen(frozen);
+				// раз в секунду, а не каждые 0.5 с: иначе урон держит invulnerableTime
+				// и съедает удары мобов по игроку
+				if (dose >= 0.8 && level.getGameTime() % 20 == 0) {
+					player.hurt(level.damageSources().freeze(), 2.0f);
 				}
 			}
 			case SHADOW -> {
@@ -74,7 +84,7 @@ public final class AnomalyEffects {
 		}
 		switch (type) {
 			case GRAVITY -> effect(player, MobEffects.SLOWNESS, 40, 0);
-			case VORTEX -> effect(player, MobEffects.NAUSEA, 40, 0);
+			case VORTEX -> effect(player, MobEffects.SLOW_FALLING, 100, 0);
 			case FROST -> effect(player, MobEffects.SLOWNESS, 40, 0);
 			case SHADOW -> effect(player, MobEffects.DARKNESS, 40, 0);
 			case STATIC -> effect(player, MobEffects.WEAKNESS, 40, 0);
@@ -95,11 +105,13 @@ public final class AnomalyEffects {
 			double x = anomaly.x() + Math.cos(angle) * radius;
 			double z = anomaly.z() + Math.sin(angle) * radius;
 			double y = player.getY() - 1.0 + random.nextDouble() * 3.0;
-			level.sendParticles(anomaly.type().particle, x, y, z, 1, 0.05, 0.05, 0.05, 0.0);
+			// overrideLimiter: обычный вызов режет частицы на 32 блоках, а view_range по умолчанию 48
+			level.sendParticles(anomaly.type().particle, true, false, x, y, z, 1, 0.05, 0.05, 0.05, 0.0);
 		}
 		if ((level.getGameTime() + anomaly.id()) % Math.max(1, config.sound_period) == 0) {
+			// громкость 2.0 — слышно примерно на 32 блока, это и есть «подошёл и понял»
 			level.playSound(null, anomaly.x(), player.getY(), anomaly.z(),
-					anomaly.type().sound, SoundSource.AMBIENT, 0.9f, anomaly.type().pitch);
+					anomaly.type().sound, SoundSource.AMBIENT, 2.0f, anomaly.type().pitch);
 		}
 	}
 
@@ -111,14 +123,22 @@ public final class AnomalyEffects {
 				.withStyle(ChatFormatting.AQUA));
 	}
 
-	/** Строка над хотбаром вместо HUD: тип и доза в процентах. */
+	/**
+	 * Строка над хотбаром вместо HUD: тип и доза в процентах. Отправляется не чаще, чем меняется
+	 * на 5 %, иначе перебивает action bar других модов (варпы, локейт и т.п.) каждые полсекунды.
+	 */
 	public static void overlay(ServerPlayer player, AnomalyState state) {
 		if (state.type == null || state.dose < 0.03) {
 			return;
 		}
+		int percent = state.percent();
+		if (Math.abs(percent - state.shownPercent) < 5) {
+			return;
+		}
+		state.shownPercent = percent;
 		ChatFormatting colour = state.dose >= 0.75 ? ChatFormatting.RED
 				: state.dose >= 0.4 ? ChatFormatting.GOLD : ChatFormatting.AQUA;
-		player.sendOverlayMessage(Component.literal(state.type.title + " · " + state.percent() + " %")
+		player.sendOverlayMessage(Component.literal(state.type.title + " · " + percent + " %")
 				.withStyle(colour));
 	}
 
@@ -133,7 +153,7 @@ public final class AnomalyEffects {
 		if (length < 0.5) {
 			return;
 		}
-		player.push(dx / length * force, 0.0, dz / length * force);
+		shove(player, dx / length * force, dz / length * force);
 	}
 
 	private static void push(ServerPlayer player, Anomaly anomaly, double force) {
@@ -142,10 +162,23 @@ public final class AnomalyEffects {
 		double length = Math.hypot(dx, dz);
 		if (length < 0.5) {
 			// в самом центре вихря нечего делить — толкаем в случайную сторону
-			player.push(force, 0.0, 0.0);
+			shove(player, force, 0.0);
 			return;
 		}
-		player.push(dx / length * force, 0.0, dz / length * force);
+		shove(player, dx / length * force, dz / length * force);
+	}
+
+	/**
+	 * Толчок игрока. Одного {@code push} мало: клиент — хозяин своей позиции, а
+	 * {@code ChunkMap$TrackedEntity.updatePlayer} для самого игрока выходит сразу
+	 * ({@code if (player == entity) return}), поэтому скорость надо отправить пакетом —
+	 * ровно так же, как это делает ванильный взрыв.
+	 */
+	private static void shove(ServerPlayer player, double dx, double dz) {
+		player.push(dx, 0.0, dz);
+		if (player.connection != null) {
+			player.connection.send(new ClientboundSetEntityMotionPacket(player));
+		}
 	}
 
 	/** Разряд: вспышка молнии без огня и урона по округе, урон только вплотную. */
@@ -173,4 +206,3 @@ public final class AnomalyEffects {
 		return true;
 	}
 }
-

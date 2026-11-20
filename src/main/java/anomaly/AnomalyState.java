@@ -6,25 +6,37 @@ package anomaly;
  */
 public final class AnomalyState {
 	public static final double FULL = 1.0;
+	/** Сколько дозы игрок может принести с собой в аномалию другого типа. */
+	public static final double SWITCH_CARRY = 0.3;
 
 	public double dose;
 	public AnomalyType type;
-	public Anomaly last;
+	/** Сколько тиков подряд игрок внутри — по нему ограничивается левитация вихря. */
+	public int ticksInside;
+	/** Последний процент, отправленный над хотбаром: строка не должна спамить каждые 0.5 с. */
+	public int shownPercent = -100;
 
 	/** Шаг внутрь аномалии: прирост пропорционален силе аномалии и времени. */
 	public void enter(Anomaly anomaly, double seconds, AnomalyConfig config) {
+		if (type != anomaly.type()) {
+			// чужую дозу с собой не тащим: иначе шаг из «Тяжести» в «Мороз» сразу бьёт на полную
+			dose = Math.min(dose, SWITCH_CARRY);
+			ticksInside = 0;
+			shownPercent = -100;
+		}
 		dose = Math.min(FULL, dose + config.dose_gain_per_second * anomaly.strength() * seconds);
 		type = anomaly.type();
-		last = anomaly;
+		ticksInside++;
 	}
 
 	/** Шаг снаружи: доза спадает, на нуле тип забывается. */
 	public void leave(double seconds, AnomalyConfig config) {
+		ticksInside = 0;
 		dose = Math.max(0.0, dose - config.dose_decay_per_second * seconds);
 		if (dose <= 0.0) {
 			dose = 0.0;
 			type = null;
-			last = null;
+			shownPercent = -100;
 		}
 	}
 

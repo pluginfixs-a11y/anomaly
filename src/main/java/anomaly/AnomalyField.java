@@ -47,7 +47,10 @@ public final class AnomalyField {
 
 	/** Все аномалии в {@code range} блоков от точки — для эффектов и для частиц. */
 	public static List<Anomaly> near(ServerLevel level, double px, double pz, double range, AnomalyConfig config) {
-		double reach = range + config.radius_max;
+		// радиус берём по большему из двух: при radius_min > radius_max столб может оказаться
+		// шире, чем область поиска, и игрок внутри него не получил бы эффектов
+		double widest = Math.max(0.0, Math.max(config.radius_min, config.radius_max));
+		double reach = range + widest;
 		int minChunkX = Mth.floor((px - reach) / 16.0);
 		int maxChunkX = Mth.floor((px + reach) / 16.0);
 		int minChunkZ = Mth.floor((pz - reach) / 16.0);

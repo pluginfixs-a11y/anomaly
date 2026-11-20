@@ -74,15 +74,15 @@ public class AnomalyMod implements ModInitializer {
 
 	private static void tickPlayer(ServerPlayer player, double seconds) {
 		ServerLevel level = player.level();
-		if (config.overworld_only && level.dimension() != Level.OVERWORLD) {
-			return;
-		}
-		if (player.isSpectator()) {
+		AnomalyState state = STATES.computeIfAbsent(player.getUUID(), key -> new AnomalyState());
+
+		// вне Верхнего мира и у наблюдателей доза просто спадает, а не замирает
+		if ((config.overworld_only && level.dimension() != Level.OVERWORLD) || player.isSpectator()) {
+			state.leave(seconds, config);
 			return;
 		}
 
 		List<Anomaly> near = AnomalyField.near(level, player.getX(), player.getZ(), config.view_range, config);
-		AnomalyState state = STATES.computeIfAbsent(player.getUUID(), key -> new AnomalyState());
 
 		Anomaly inside = null;
 		for (Anomaly anomaly : near) {
