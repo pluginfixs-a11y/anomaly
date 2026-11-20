@@ -187,6 +187,19 @@ public final class SelfTest {
 		check("тиков внутри после двух входов", 2, switching.ticksInside);
 		switching.leave(0.0, config);
 		check("тиков внутри после выхода", 0, switching.ticksInside);
+
+		// счётчик считается в тиках, а не в вызовах: 0.5 с = 10 тиков, значит кап левитации
+		// в 60 тиков — это честные 3 секунды, а не 30
+		AnomalyState exposure = new AnomalyState();
+		exposure.enter(new Anomaly(AnomalyType.VORTEX, 3L, 0, 0, 10, 1.0), 0.5, config);
+		check("0.5 с внутри = 10 тиков", 10, exposure.ticksInside);
+
+		// перекрывающиеся столбы: тип скачет каждые полсекунды, но игрок не выходил,
+		// поэтому дозу срезать нельзя — иначе в двойной аномалии она не наберётся вообще
+		AnomalyState overlap = new AnomalyState();
+		overlap.enter(new Anomaly(AnomalyType.GRAVITY, 4L, 0, 0, 10, 1.0), 10.0, config);
+		overlap.enter(new Anomaly(AnomalyType.FROST, 5L, 0, 0, 10, 1.0), 0.0, config);
+		checkRate("перескок между столбами не срезает дозу", 0.5, overlap.dose);
 	}
 
 	/**

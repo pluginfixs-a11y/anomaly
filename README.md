@@ -43,7 +43,7 @@ anomalies; a new world gets different ones.
 
 Density is a list of `[distance, chance per chunk]` stages — 0.008 at 3000 blocks (one anomaly per ~125 chunks,
 i.e. roughly every 180 blocks), 0.050 at 20000 (one per ~20 chunks, roughly every 70 blocks). Past `stack_from`
-(10000) a chunk can hold two anomalies (25 % of chunks) or three (7 %, rolled independently).
+(10000) a quarter of the occupied chunks get more than one anomaly: 18 % two, 7 % three.
 
 ## Feedback (and what is not possible)
 
@@ -51,7 +51,8 @@ The mod is server-only, so there is **no HUD, no custom visuals, no per-player f
 learns comes from:
 
 - particles and an occasional sound at the column within 48 blocks — you see an anomaly before you enter it
-  (particles are sent with `overrideLimiter`, otherwise the server cuts them at 32 blocks);
+  (particles are sent with `overrideLimiter`, otherwise the server cuts them at 32 blocks; the sound is audible
+  at about 32 blocks, volume 2.0);
 - a chime and `Аномалия: Мрак` on entry, `Мрак · 62 %` in the action bar while inside;
 - the vanilla effect icons in the inventory.
 
@@ -82,15 +83,16 @@ the mod is not loaded at all (`environment: "server"`).
 
 ## Self-test
 
-`-Danomaly.selftest=1` runs 34 checks on the first tick: density curve (0 below `safe_radius`, monotone, in
+`-Danomaly.selftest=1` runs 36 checks on the first tick: density curve (0 below `safe_radius`, monotone, in
 0..1), placement determinism (same chunk twice → same anomalies), radius/strength bounds, no anomalies near the
 centre, far chunks have at least 3× more than mid ones, stack rules, dose arithmetic, amplifier thresholds, the
-type-switch clamp and the inside-ticks counter, config edge cases (`null`/single/falling stages, `null` disabled
-list), plus live world calls that do not need a connection: player push, freeze counter, particles, sound,
-lightning spawn. Each group runs in its own try/catch, so one crash does not hide the rest.
+type-switch clamp, the exposure-ticks counter (0.5 s = 10 ticks, so the levitation cap really is 3 s), the
+overlap case where flipping between two columns must not cut the dose, config edge cases (`null`/single/falling
+stages, `null` disabled list), plus live world calls that do not need a connection: player push, freeze counter,
+particles, sound, lightning spawn. Each group runs in its own try/catch, so one crash does not hide the rest.
 
-Not covered by the test: `addEffect`, `hurt` and the action bar — a bare `ServerPlayer` has no `connection` and
-they throw. Those paths need a real client.
+Not covered by the test: `addEffect`, `hurt`, the action bar and the motion packet — a bare `ServerPlayer` has no
+`connection`, so those paths need a real client.
 
 ## Build
 

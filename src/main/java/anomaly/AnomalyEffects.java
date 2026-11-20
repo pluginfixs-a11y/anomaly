@@ -32,7 +32,8 @@ public final class AnomalyEffects {
 	}
 
 	/** Нахождение внутри аномалии: эффект по дозе и «физика» самого типа. */
-	public static void apply(ServerLevel level, ServerPlayer player, Anomaly anomaly, AnomalyState state, AnomalyConfig config) {
+	public static void apply(ServerLevel level, ServerPlayer player, Anomaly anomaly, AnomalyState state, AnomalyConfig config,
+			double seconds) {
 		int amplifier = state.amplifier();
 		double dose = state.dose;
 		switch (anomaly.type()) {
@@ -47,8 +48,14 @@ public final class AnomalyEffects {
 				if (dose >= 0.3) {
 					effect(player, MobEffects.NAUSEA, 60, 0);
 				}
-				if (dose >= 0.6 && state.ticksInside <= MAX_LEVITATION_TICKS) {
-					effect(player, MobEffects.LEVITATION, 30, 0);
+				if (dose >= 0.6) {
+					// подъём ограничен по времени: без потолка игрок уходит вверх навсегда,
+					// а когда левитация гаснет — падает с высоты насмерть
+					if (state.ticksInside <= MAX_LEVITATION_TICKS) {
+						effect(player, MobEffects.LEVITATION, 30, 0);
+					} else {
+						effect(player, MobEffects.SLOW_FALLING, 40, 0);
+					}
 				}
 				push(player, anomaly, 0.03 + 0.06 * dose);
 			}
@@ -56,9 +63,11 @@ public final class AnomalyEffects {
 				effect(player, MobEffects.SLOWNESS, 60, amplifier);
 				int frozen = Math.min(FREEZE_FULL * 2, player.getTicksFrozen() + FREEZE_PER_STEP);
 				player.setTicksFrozen(frozen);
-				// раз в секунду, а не каждые 0.5 с: иначе урон держит invulnerableTime
-				// и съедает удары мобов по игроку
-				if (dose >= 0.8 && level.getGameTime() % 20 == 0) {
+				// бьём раз в 20 тиков, а не каждые полсекунды: частый урон держит invulnerableTime
+				// и съедает удары мобов по игроку. Счётчик свой, чтобы период тика не влиял.
+				state.damageTicks += AnomalyState.stepTicks(seconds);
+				if (dose >= 0.8 && state.damageTicks >= 20) {
+					state.damageTicks = 0;
 					player.hurt(level.damageSources().freeze(), 2.0f);
 				}
 			}

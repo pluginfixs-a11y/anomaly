@@ -96,7 +96,7 @@ public class AnomalyMod implements ModInitializer {
 		if (inside != null) {
 			boolean fresh = state.type != inside.type();
 			state.enter(inside, seconds, config);
-			AnomalyEffects.apply(level, player, inside, state, config);
+			AnomalyEffects.apply(level, player, inside, state, config, seconds);
 			AnomalyEffects.overlay(player, state);
 			if (fresh) {
 				AnomalyEffects.entry(level, player, inside);
@@ -115,3 +115,4 @@ public class AnomalyMod implements ModInitializer {
 		return STATES.get(playerId);
 	}
 }
+
