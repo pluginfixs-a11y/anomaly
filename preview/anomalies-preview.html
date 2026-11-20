@@ -138,9 +138,13 @@ function gauss(rnd) { // приблизительно нормальное
   return (rnd() + rnd() + rnd() + rnd() - 2) / 1.2;
 }
 
-function classAt(d) {
-  if (d < RING_SAFE) return CLASS.safe;
-  if (d < RING_DANGER) return CLASS.danger;
+// границы классов размыты: у каждой аномалии свой сдвиг ±800 блоков
+const TIER_BLUR = 800;
+
+function classAt(d, jitter = 0) {
+  const t = d + jitter;
+  if (t < RING_SAFE) return CLASS.safe;
+  if (t < RING_DANGER) return CLASS.danger;
   return CLASS.deadly;
 }
 
@@ -174,7 +178,7 @@ function makeField(seed) {
     if (d > WORLD_R || rnd() > spawnChance(d)) continue;
 
     const radius = pickRadius(rnd);
-    const cls = classAt(d);
+    const cls = classAt(d, (rnd() * 2 - 1) * TIER_BLUR);
 
     // не ставим однотипные друг на друга (как следы в концепции)
     let clash = false;
@@ -216,7 +220,8 @@ function makeField(seed) {
       // мелкие ползут быстро, гиганты почти стоят (идея 12): 10–180 блоков в час
       speed: Math.max(10, Math.min(180, 24000 / radius)),
       dir: rnd() * Math.PI * 2,
-      curve: (rnd() - 0.5) * 0.02,       // медленный поворот траектории
+      // дуга: за всю жизнь направление поворачивает не больше 10°
+      turn: (rnd() * 2 - 1) * (10 * Math.PI / 180),
       coreOff: 0.12 + rnd() * 0.25,
       coreAngle: rnd() * Math.PI * 2,
       coreSpin: (rnd() - 0.5) * 0.03,
@@ -267,9 +272,17 @@ function stateAt(a, t) {
   const age = t - a.birth;
   if (age < 0 || age > a.life) return null;
   const hours = age;
-  const dir = a.dir + a.curve * hours;
-  const x = a.x0 + Math.cos(dir) * a.speed * hours;
-  const z = a.z0 + Math.sin(dir) * a.speed * hours;
+  const omega = a.turn / a.life; // рад/ч, суммарно не больше 10°
+  let x, z;
+  if (Math.abs(omega) < 1e-5) {
+    x = a.x0 + Math.cos(a.dir) * a.speed * hours;
+    z = a.z0 + Math.sin(a.dir) * a.speed * hours;
+  } else {
+    // точная дуга постоянной кривизны
+    x = a.x0 + (a.speed / omega) * (Math.sin(a.dir + omega * hours) - Math.sin(a.dir));
+    z = a.z0 + (a.speed / omega) * (Math.cos(a.dir) - Math.cos(a.dir + omega * hours));
+  }
+  const dir = a.dir + omega * hours;
   // у центра аномалия гаснет, а не просто «не появляется»
   const radius = radiusAt(a, t) * suppressFactor(x, z);
   if (radius < 5) return null;
@@ -332,8 +345,32 @@ function shapePoints(a, st, scale = 1) {
   return pts;
 }
 
-function drawRing(r, color, label, dashed) {
+function drawSoftBand(center, half, color, label) {
   const s = baseScale();
+  const [cx, cy] = toScreen(0, 0);
+  const inner = Math.max(0, (center - half) * s);
+  const outer = (center + half) * s;
+  if (outer <= 0) return;
+  const g = ctx.createRadialGradient(cx, cy, inner, cx, cy, outer);
+  g.addColorStop(0, "rgba(0,0,0,0)");
+  g.addColorStop(0.5, color);
+  g.addColorStop(1, "rgba(0,0,0,0)");
+  ctx.save();
+  ctx.fillStyle = g;
+  ctx.beginPath();
+  ctx.arc(cx, cy, outer, 0, Math.PI * 2);
+  if (inner > 0.5) ctx.arc(cx, cy, inner, 0, Math.PI * 2, true);
+  ctx.fill();
+  ctx.restore();
+  if (label) {
+    const p = toScreen(center * 0.7071, -center * 0.7071);
+    ctx.fillStyle = "#8d948f";
+    ctx.font = "11px Consolas, monospace";
+    ctx.fillText(label, p[0] + 6, p[1] - 4);
+  }
+}
+
+function drawRing(r, color, label, dashed) {  const s = baseScale();
   const [cx, cy] = toScreen(0, 0);
   ctx.save();
   ctx.strokeStyle = color;
@@ -374,8 +411,8 @@ function draw() {
   if (state.show.rings) {
     drawRing(RING_DISSIPATE, "#7d6f58", "3к · аномалии здесь гаснут", true);
     drawRing(RING_HOME, "#3f5866", "6к · дальше мир начинает портиться", true);
-    drawRing(RING_SAFE, "#5d7a58", "10к · опасные");
-    drawRing(RING_DANGER, "#a8712f", "15к · смертельные");
+    drawSoftBand(RING_SAFE, TIER_BLUR, "rgba(93, 122, 88, 0.11)", "10к · опасные");
+    drawSoftBand(RING_DANGER, TIER_BLUR, "rgba(168, 113, 47, 0.11)", "15к · смертельные");
     drawRing(WORLD_R, "#6b7075", "20к · граница мира");
   }
   drawBorder();
@@ -502,22 +539,38 @@ function drawAnomaly(a, st) {
 function drawDamage(a, st) {
   const blocks = damageBlocks(a);
   if (blocks <= 0) return;
-  const alpha = Math.min(0.40, 0.05 + Math.log10(blocks + 1) * 0.08);
-  polygonPath(shapePoints(a, { x: st.x, z: st.z, radius: st.radius * 0.55 }, 1));
-  ctx.fillStyle = `rgba(26,20,14,${alpha})`;
+  const strength = Math.min(1, Math.log10(blocks + 1) / 5.4); // 300 → ~0.46, 250k → 1.0
+
+  // выжженное пятно в ядре — тёмное, с ободком
+  polygonPath(shapePoints(a, { x: st.x, z: st.z, radius: st.radius * 0.5 }, 1));
+  ctx.fillStyle = `rgba(10, 8, 6, ${0.32 + 0.45 * strength})`;
   ctx.fill();
-  const spikes = blocks >= 5000 ? Math.min(6, 1 + Math.floor(blocks / 50000)) : 0;
-  if (spikes === 0) return;
+  ctx.strokeStyle = `rgba(120, 96, 62, ${0.30 + 0.45 * strength})`;
+  ctx.lineWidth = 1;
+  ctx.stroke();
+
   const rnd = mulberry32(a.id * 7919 + 13);
+
+  // обломки: видны даже когда зона мелкая и пятно крошечное
+  const specks = Math.min(30, Math.round(3 + blocks / 3500));
+  for (let i = 0; i < specks; i++) {
+    const ang = rnd() * Math.PI * 2;
+    const dist = Math.sqrt(rnd()) * st.radius * 0.45;
+    const [sx, sy] = toScreen(st.x + Math.cos(ang) * dist, st.z + Math.sin(ang) * dist);
+    const size = 1.2 + rnd() * (blocks > 20000 ? 2.2 : 1.0);
+    ctx.fillStyle = `rgba(168, 143, 104, ${0.45 + 0.45 * strength})`;
+    ctx.fillRect(sx - size / 2, sy - size / 2, size, size);
+  }
+
+  if (blocks < 5000) return;
+  const spikes = Math.min(6, 1 + Math.floor(blocks / 50000));
   const tallest = Math.min(150, 20 + Math.sqrt(blocks) * 0.22);
   const s = baseScale();
   for (let i = 0; i < spikes; i++) {
     const ang = rnd() * Math.PI * 2;
     const dist = rnd() * st.radius * 0.35;
-    const x = st.x + Math.cos(ang) * dist;
-    const z = st.z + Math.sin(ang) * dist;
     const h = tallest * (0.5 + rnd() * 0.5);
-    const [sx, sy] = toScreen(x, z);
+    const [sx, sy] = toScreen(st.x + Math.cos(ang) * dist, st.z + Math.sin(ang) * dist);
     const hpx = Math.max(3, h * s);
     const wpx = Math.max(1.5, h * 0.35 * s);
     ctx.beginPath();
@@ -525,8 +578,11 @@ function drawDamage(a, st) {
     ctx.lineTo(sx - wpx, sy);
     ctx.lineTo(sx + wpx, sy);
     ctx.closePath();
-    ctx.fillStyle = withAlpha(a.cls.color, 0.6);
+    ctx.fillStyle = withAlpha(a.cls.color, 0.75);
     ctx.fill();
+    ctx.strokeStyle = "rgba(18, 14, 10, 0.9)";
+    ctx.lineWidth = 1;
+    ctx.stroke();
   }
 }
 
