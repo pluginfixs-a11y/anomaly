@@ -754,7 +754,10 @@ state.field = makeField(state.seed);
 resize();
 
 // для автоматизации скриншотов и отладки
-window.anomalyPreview = { state, draw, makeField, setZoom(z, x, zz) { state.zoom = z; state.panX = x; state.panY = zz; draw(); } };
+window.anomalyPreview = {
+  state, draw, makeField, stateAt, damageBlocks,
+  setZoom(z, x, zz) { state.zoom = z; state.panX = x; state.panY = zz; draw(); }
+};
 </script>
 </body>
 </html>
