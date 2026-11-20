@@ -82,8 +82,9 @@
 
     <h2>Классы</h2>
     <div class="legend">
-      <div><span class="sw" style="background:var(--home)"></span>дом 0–6к: не трогаем</div>
-      <div><span class="sw" style="background:var(--safe)"></span>5–10к: безопасные</div>
+      <div><span class="sw" style="background:var(--home)"></span>дом 0–3к: всё гаснет</div>
+      <div><span class="sw" style="background:#7d6f58"></span>3–6к: занос и затухание</div>
+      <div><span class="sw" style="background:var(--safe)"></span>6–10к: безопасные</div>
       <div><span class="sw" style="background:var(--danger)"></span>10–15к: опасные</div>
       <div><span class="sw" style="background:var(--deadly)"></span>15к+: смертельные</div>
     </div>
@@ -102,10 +103,19 @@
 
 // ---------- модель мира ----------
 const WORLD_R = 20000;
-const RING_HOME = 6000;     // до 6к ничего не трогаем
+const RING_DISSIPATE = 3000; // ближе 3к аномалия активно рассеивается
+const RING_HOME = 6000;     // до 6к ничего не рождается и не разрушается
 const RING_SAFE = 10000;    // 6–10к безопасные
 const RING_DANGER = 15000;  // 10–15к опасные
 const MAX_LIFE_H = 168;     // 7 реальных суток
+
+// подавление у центра: 3000 → 0, 6000 → 1, между ними плавно
+function suppressFactor(x, z) {
+  const d = Math.hypot(x, z);
+  if (d >= RING_HOME) return 1;
+  const k = (d - RING_DISSIPATE) / (RING_HOME - RING_DISSIPATE);
+  return Math.max(0, Math.min(1, k));
+}
 
 const CLASS = {
   home:   { key: "home",   name: "дом",        color: "#4a6273" },
@@ -230,13 +240,12 @@ function stateAt(a, t) {
   if (age < 0 || age > a.life) return null;
   const hours = age;
   const dir = a.dir + a.curve * hours;
-  return {
-    x: a.x0 + Math.cos(dir) * a.speed * hours,
-    z: a.z0 + Math.sin(dir) * a.speed * hours,
-    radius: radiusAt(a, t),
-    age,
-    dir
-  };
+  const x = a.x0 + Math.cos(dir) * a.speed * hours;
+  const z = a.z0 + Math.sin(dir) * a.speed * hours;
+  // у центра аномалия гаснет, а не просто «не появляется»
+  const radius = radiusAt(a, t) * suppressFactor(x, z);
+  if (radius < 5) return null;
+  return { x, z, radius, age, dir };
 }
 
 // ---------- canvas ----------
@@ -330,6 +339,7 @@ function draw() {
 
   drawGrid();
   if (state.show.rings) {
+    drawRing(RING_DISSIPATE, "#7d6f58", "3к · аномалии здесь гаснут", true);
     drawRing(RING_HOME, "#3f5866", "6к · дальше мир начинает портиться", true);
     drawRing(RING_SAFE, "#5d7a58", "10к · опасные");
     drawRing(RING_DANGER, "#a8712f", "15к · смертельные");
@@ -407,6 +417,8 @@ function drawScars() {
     if (since > 24) continue; // шрам живёт часы, дальше не рисуем
     const st = stateAt(a, dead - 0.001);
     if (!st) continue;
+    // у самого центра шрамов не остаётся — дом должен выглядеть целым
+    if (Math.hypot(st.x, st.z) < RING_DISSIPATE) continue;
     ctx.save();
     ctx.setLineDash([3, 5]);
     ctx.strokeStyle = withAlpha(a.cls.color, 0.35 * (1 - since / 24));
