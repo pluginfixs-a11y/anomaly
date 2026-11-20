@@ -1,0 +1,618 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Anomaly Fields — превью поля</title>
+<style>
+  :root {
+    --bg: #14171a;
+    --panel: #1b1f22;
+    --panel-2: #22272b;
+    --line: #2e3439;
+    --text: #d9d6cb;
+    --muted: #8d948f;
+    --safe: #6f8f6a;
+    --danger: #c8863c;
+    --deadly: #a33a2f;
+    --home: #4a6273;
+    --accent: #57a196;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+    font: 13px/1.45 "Segoe UI", system-ui, sans-serif; }
+  #app { display: grid; grid-template-columns: 1fr 300px; height: 100%; }
+  #stage { position: relative; overflow: hidden; }
+  canvas { display: block; width: 100%; height: 100%; cursor: grab; }
+  canvas.dragging { cursor: grabbing; }
+  #hud { position: absolute; left: 16px; top: 14px; pointer-events: none; }
+  #hud h1 { margin: 0 0 4px; font-size: 15px; font-weight: 600; letter-spacing: .01em; }
+  #hud .sub { color: var(--muted); font-size: 12px; }
+  #tip { position: absolute; pointer-events: none; padding: 7px 9px; background: #0e1113ee;
+    border: 1px solid var(--line); border-radius: 4px; font-size: 12px; white-space: pre;
+    display: none; font-family: Consolas, monospace; }
+  aside { background: var(--panel); border-left: 1px solid var(--line); padding: 14px 16px;
+    overflow-y: auto; }
+  aside h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted);
+    margin: 18px 0 8px; font-weight: 600; }
+  aside h2:first-child { margin-top: 0; }
+  .row { display: flex; align-items: center; gap: 8px; margin: 6px 0; }
+  .row label { flex: 1; color: var(--text); }
+  input[type=range] { width: 100%; accent-color: var(--accent); }
+  button { background: var(--panel-2); color: var(--text); border: 1px solid var(--line);
+    border-radius: 4px; padding: 6px 10px; font: inherit; cursor: pointer; }
+  button:hover { border-color: #3d454b; }
+  button.on { border-color: var(--accent); color: #cfe7e3; }
+  .legend { display: grid; gap: 6px; }
+  .legend div { display: flex; align-items: center; gap: 8px; color: var(--muted); }
+  .sw { width: 12px; height: 12px; border-radius: 2px; opacity: .85; flex: none; }
+  .stats { display: grid; grid-template-columns: 1fr auto; gap: 4px 10px; font-family: Consolas, monospace;
+    font-size: 12px; }
+  .stats .k { color: var(--muted); }
+  .stats .v { text-align: right; }
+  .hint { color: var(--muted); font-size: 12px; margin-top: 8px; }
+  input[type=checkbox] { accent-color: var(--accent); }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="stage">
+    <canvas id="cv"></canvas>
+    <div id="hud">
+      <h1>Anomaly Fields — превью поля</h1>
+      <div class="sub">мир ±20 000 (сторона 40 000, по диагонали 28 284) · колесо — зум, перетаскивание — сдвиг</div>
+    </div>
+    <div id="tip"></div>
+  </div>
+  <aside>
+    <h2>Время</h2>
+    <div class="row"><label for="time">t = <span id="tval">0</span> ч</label></div>
+    <input id="time" type="range" min="0" max="168" step="1" value="0">
+    <div class="row">
+      <button id="play">▶ идёт время</button>
+      <button id="reset" title="назад в 0 ч">⟲</button>
+    </div>
+    <div class="hint">168 ч — потолок жизни аномалии (7 реальных суток).</div>
+
+    <h2>Слои</h2>
+    <div class="row"><input id="lForms" type="checkbox" checked><label for="lForms">формы аномалий</label></div>
+    <div class="row"><input id="lCores" type="checkbox" checked><label for="lCores">смещённые ядра</label></div>
+    <div class="row"><input id="lDrift" type="checkbox" checked><label for="lDrift">дрейф и след</label></div>
+    <div class="row"><input id="lRings" type="checkbox" checked><label for="lRings">границы классов</label></div>
+    <div class="row"><input id="lScars" type="checkbox" checked><label for="lScars">шрамы умерших</label></div>
+
+    <h2>Классы</h2>
+    <div class="legend">
+      <div><span class="sw" style="background:var(--home)"></span>дом 0–6к: не трогаем</div>
+      <div><span class="sw" style="background:var(--safe)"></span>5–10к: безопасные</div>
+      <div><span class="sw" style="background:var(--danger)"></span>10–15к: опасные</div>
+      <div><span class="sw" style="background:var(--deadly)"></span>15к+: смертельные</div>
+    </div>
+
+    <h2>Поле</h2>
+    <div class="stats" id="stats"></div>
+
+    <h2>Управление</h2>
+    <div class="row"><button id="seed">новый мир</button><button id="png">PNG</button></div>
+    <div class="hint">Это превью концепции, а не код мода: плотность, форма, дрейф и фазы посчитаны по описанию
+      из README. Настоящий мод (0.1.0) пока рисует столбы 6–14 блоков.</div>
+  </aside>
+</div>
+<script>
+"use strict";
+
+// ---------- модель мира ----------
+const WORLD_R = 20000;
+const RING_HOME = 6000;     // до 6к ничего не трогаем
+const RING_SAFE = 10000;    // 6–10к безопасные
+const RING_DANGER = 15000;  // 10–15к опасные
+const MAX_LIFE_H = 168;     // 7 реальных суток
+
+const CLASS = {
+  home:   { key: "home",   name: "дом",        color: "#4a6273" },
+  safe:   { key: "safe",   name: "безопасная", color: "#6f8f6a" },
+  danger: { key: "danger", name: "опасная",    color: "#c8863c" },
+  deadly: { key: "deadly", name: "смертельная",color: "#a33a2f" }
+};
+
+function mulberry32(a) {
+  return function () {
+    a |= 0; a = a + 0x6D2B79F5 | 0;
+    let t = Math.imul(a ^ a >>> 15, 1 | a);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+
+function gauss(rnd) { // приблизительно нормальное
+  return (rnd() + rnd() + rnd() + rnd() - 2) / 1.2;
+}
+
+function classAt(d) {
+  if (d < RING_SAFE) return CLASS.safe;
+  if (d < RING_DANGER) return CLASS.danger;
+  return CLASS.deadly;
+}
+
+// вероятность появления аномалии в точке: до 5к ноль, дальше растёт
+function spawnChance(d) {
+  if (d < 5000) return 0;
+  if (d < RING_HOME) return 0.10;
+  if (d < RING_SAFE) return 0.45;
+  if (d < RING_DANGER) return 0.85;
+  return 1.0;
+}
+
+// распределение радиусов: мелких много, гигантов единицы
+function pickRadius(rnd) {
+  const r = rnd();
+  if (r < 0.58) return 100 + rnd() * 200;        // 100–300
+  if (r < 0.83) return 300 + rnd() * 500;        // 300–800
+  if (r < 0.96) return 800 + rnd() * 1200;       // 800–2000
+  return 2000 + rnd() * 1000;                    // 2000–3000
+}
+
+function makeField(seed) {
+  const rnd = mulberry32(seed);
+  const out = [];
+  let guard = 0;
+  // 3800 «записей» на 14 суток даёт ~250 живых в любой момент (в среднем жизнь ~21 ч)
+  while (out.length < 3800 && guard++ < 200000) {
+    const x = (rnd() * 2 - 1) * WORLD_R;
+    const z = (rnd() * 2 - 1) * WORLD_R;
+    const d = Math.hypot(x, z);
+    if (d > WORLD_R || rnd() > spawnChance(d)) continue;
+
+    const radius = pickRadius(rnd);
+    const cls = classAt(d);
+
+    // не ставим однотипные друг на друга (как следы в концепции)
+    let clash = false;
+    for (const a of out) {
+      if (a.cls.key !== cls.key) continue;
+      const need = (a.baseRadius + radius) * 0.55;
+      if (Math.hypot(a.x0 - x, a.z0 - z) < need) { clash = true; break; }
+    }
+    if (clash) continue;
+
+    const life = Math.min(MAX_LIFE_H, 2 + rnd() * (radius > 1500 ? 165 : radius > 600 ? 90 : 40));
+    // рождение в окне ±168 ч: на любом t население в равновесии, видно и рождения, и смерти
+    const birth = (rnd() * 2 - 1) * MAX_LIFE_H;
+
+    const harmonics = [];
+    const count = 2 + Math.floor(rnd() * 4); // 2..5
+    for (let k = 2; k <= count; k++) {
+      harmonics.push({ k, amp: 0.05 + rnd() * 0.20, phase: rnd() * Math.PI * 2 });
+    }
+
+    out.push({
+      id: out.length,
+      x0: x, z0: z,
+      baseRadius: radius,
+      stretch: 0.55 + rnd() * 1.7,       // вытянутость 0.55..2.25
+      angle: rnd() * Math.PI * 2,
+      harmonics,
+      cls,
+      life,
+      birth,
+      // мелкие ползут быстро, гиганты почти стоят (идея 12): 10–180 блоков в час
+      speed: Math.max(10, Math.min(180, 24000 / radius)),
+      dir: rnd() * Math.PI * 2,
+      curve: (rnd() - 0.5) * 0.02,       // медленный поворот траектории
+      coreOff: 0.12 + rnd() * 0.25,
+      coreAngle: rnd() * Math.PI * 2,
+      coreSpin: (rnd() - 0.5) * 0.03
+    });
+  }
+  return out;
+}
+
+// ---------- состояние ----------
+const state = {
+  seed: 20261120,
+  t: 0,
+  field: [],
+  zoom: 1,
+  panX: 0, panY: 0,
+  hover: null,
+  show: { forms: true, cores: true, drift: true, rings: true, scars: true }
+};
+
+function radiusAt(a, t) {
+  const age = t - a.birth;
+  const frac = Math.max(0, Math.min(1, age / a.life));
+  if (frac < 0.22) return a.baseRadius * (frac / 0.22);          // рост
+  if (frac > 0.80) return a.baseRadius * ((1 - frac) / 0.20);    // распад
+  return a.baseRadius;
+}
+
+function stateAt(a, t) {
+  const age = t - a.birth;
+  if (age < 0 || age > a.life) return null;
+  const hours = age;
+  const dir = a.dir + a.curve * hours;
+  return {
+    x: a.x0 + Math.cos(dir) * a.speed * hours,
+    z: a.z0 + Math.sin(dir) * a.speed * hours,
+    radius: radiusAt(a, t),
+    age,
+    dir
+  };
+}
+
+// ---------- canvas ----------
+const cv = document.getElementById("cv");
+const ctx = cv.getContext("2d");
+const stage = document.getElementById("stage");
+const tip = document.getElementById("tip");
+
+let W = 0, H = 0, DPR = 1;
+
+function resize() {
+  DPR = Math.min(2, window.devicePixelRatio || 1);
+  W = stage.clientWidth;
+  H = stage.clientHeight;
+  cv.width = Math.round(W * DPR);
+  cv.height = Math.round(H * DPR);
+  cv.style.width = W + "px";
+  cv.style.height = H + "px";
+  draw();
+}
+
+function baseScale() {
+  return Math.min(W, H) / (2 * WORLD_R) * 0.94 * state.zoom;
+}
+
+function toScreen(x, z) {
+  const s = baseScale();
+  return [W / 2 + (x - state.panX) * s, H / 2 + (z - state.panY) * s];
+}
+
+function toWorld(px, py) {
+  const s = baseScale();
+  return [(px - W / 2) / s + state.panX, (py - H / 2) / s + state.panY];
+}
+
+function shapePoints(a, st, scale = 1) {
+  const pts = [];
+  const N = 96;
+  const r0 = st.radius * scale;
+  for (let i = 0; i < N; i++) {
+    const th = i / N * Math.PI * 2;
+    let r = 1;
+    for (const h of a.harmonics) r += h.amp * Math.sin(h.k * th + h.phase);
+    r = Math.max(0.35, r);
+    const lx = Math.cos(th) * r * a.stretch;
+    const lz = Math.sin(th) * r;
+    const wx = st.x + (lx * Math.cos(a.angle) - lz * Math.sin(a.angle)) * r0;
+    const wz = st.z + (lx * Math.sin(a.angle) + lz * Math.cos(a.angle)) * r0;
+    pts.push([wx, wz]);
+  }
+  return pts;
+}
+
+function drawRing(r, color, label, dashed) {
+  const s = baseScale();
+  const [cx, cy] = toScreen(0, 0);
+  ctx.save();
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 1;
+  ctx.setLineDash(dashed ? [5, 6] : []);
+  ctx.beginPath();
+  ctx.arc(cx, cy, r * s, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.restore();
+  if (label) {
+    const p = toScreen(r * 0.7071, -r * 0.7071);
+    ctx.fillStyle = color;
+    ctx.font = "11px Consolas, monospace";
+    ctx.fillText(label, p[0] + 6, p[1] - 4);
+  }
+}
+
+function polygonPath(pts) {
+  ctx.beginPath();
+  for (let i = 0; i < pts.length; i++) {
+    const [sx, sy] = toScreen(pts[i][0], pts[i][1]);
+    if (i === 0) ctx.moveTo(sx, sy); else ctx.lineTo(sx, sy);
+  }
+  ctx.closePath();
+}
+
+function withAlpha(hex, alpha) {
+  const n = parseInt(hex.slice(1), 16);
+  return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${alpha})`;
+}
+
+function draw() {
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  ctx.fillStyle = "#14171a";
+  ctx.fillRect(0, 0, W, H);
+
+  drawGrid();
+  if (state.show.rings) {
+    drawRing(RING_HOME, "#3f5866", "6к · дальше мир начинает портиться", true);
+    drawRing(RING_SAFE, "#5d7a58", "10к · опасные");
+    drawRing(RING_DANGER, "#a8712f", "15к · смертельные");
+    drawRing(WORLD_R, "#6b7075", "20к · граница мира");
+  }
+  drawBorder();
+
+  const alive = [];
+  for (const a of state.field) {
+    const st = stateAt(a, state.t);
+    if (st) alive.push([a, st]);
+  }
+
+  if (state.show.scars) drawScars();
+  for (const [a, st] of alive) drawAnomaly(a, st);
+  drawPlayerMark();
+  updateStats(alive);
+}
+
+function drawGrid() {
+  const s = baseScale();
+  const stepWorld = s > 0.02 ? 1000 : s > 0.008 ? 5000 : 10000;
+  ctx.strokeStyle = "#232829";
+  ctx.lineWidth = 1;
+  ctx.font = "10px Consolas, monospace";
+  ctx.fillStyle = "#5d6467";
+  const [left, top] = toWorld(0, 0);
+  const [right, bottom] = toWorld(W, H);
+  const startX = Math.ceil(left / stepWorld) * stepWorld;
+  const startY = Math.ceil(top / stepWorld) * stepWorld;
+  const labelStep = stepWorld * (s > 0.02 ? 5 : 1); // не забиваем подписями весь экран
+  for (let x = startX; x <= right; x += stepWorld) {
+    const [sx] = toScreen(x, 0);
+    ctx.beginPath(); ctx.moveTo(sx, 0); ctx.lineTo(sx, H); ctx.stroke();
+    if (Math.abs(x) <= WORLD_R && x % labelStep === 0 && sx > 26 && sx < W - 40) {
+      ctx.fillText(x === 0 ? "0" : String(x / 1000) + "к", sx + 3, H - 6);
+    }
+  }
+  for (let z = startY; z <= bottom; z += stepWorld) {
+    const [, sy] = toScreen(0, z);
+    ctx.beginPath(); ctx.moveTo(0, sy); ctx.lineTo(W, sy); ctx.stroke();
+    if (Math.abs(z) <= WORLD_R && z % labelStep === 0 && sy > 60 && sy < H - 18) {
+      ctx.fillText(z === 0 ? "0" : String(z / 1000) + "к", 6, sy - 3);
+    }
+  }
+  // «дом» — зона, которую не трогаем
+  const [cx, cy] = toScreen(0, 0);
+  ctx.beginPath();
+  ctx.arc(cx, cy, RING_HOME * s, 0, Math.PI * 2);
+  ctx.fillStyle = "rgba(74, 98, 115, 0.06)";
+  ctx.fill();
+}
+
+function drawBorder() {
+  const s = baseScale();
+  const [x0, y0] = toScreen(-WORLD_R, -WORLD_R);
+  const [x1, y1] = toScreen(WORLD_R, WORLD_R);
+  ctx.save();
+  ctx.strokeStyle = "#787e82";
+  ctx.lineWidth = 1.5;
+  ctx.strokeRect(x0, y0, x1 - x0, y1 - y0);
+  ctx.fillStyle = "rgba(255,255,255,0.02)";
+  ctx.fillRect(0, 0, W, y0);
+  ctx.fillRect(0, y1, W, H - y1);
+  ctx.fillRect(0, y0, x0, y1 - y0);
+  ctx.fillRect(x1, y0, W - x1, y1 - y0);
+  ctx.restore();
+}
+
+function drawScars() {
+  for (const a of state.field) {
+    const dead = a.birth + a.life;
+    if (state.t < dead) continue;
+    const since = state.t - dead;
+    if (since > 24) continue; // шрам живёт часы, дальше не рисуем
+    const st = stateAt(a, dead - 0.001);
+    if (!st) continue;
+    ctx.save();
+    ctx.setLineDash([3, 5]);
+    ctx.strokeStyle = withAlpha(a.cls.color, 0.35 * (1 - since / 24));
+    ctx.lineWidth = 1;
+    polygonPath(shapePoints(a, st));
+    ctx.stroke();
+    ctx.restore();
+  }
+}
+
+function drawAnomaly(a, st) {
+  const fresh = st.age < 3; // только родилась — подсвечиваем
+  if (state.show.forms) {
+    polygonPath(shapePoints(a, st));
+    ctx.fillStyle = withAlpha(a.cls.color, 0.16);
+    ctx.fill();
+    ctx.strokeStyle = withAlpha(a.cls.color, fresh ? 0.95 : 0.6);
+    ctx.lineWidth = fresh ? 2 : 1;
+    ctx.stroke();
+  }
+  if (state.show.cores) {
+    const coreT = state.t;
+    const cx = st.x + Math.cos(a.coreAngle + a.coreSpin * coreT) * st.radius * a.coreOff;
+    const cz = st.z + Math.sin(a.coreAngle + a.coreSpin * coreT) * st.radius * a.coreOff;
+    polygonPath(shapePoints(a, { x: cx, z: cz, radius: st.radius * 0.45 }, 1));
+    ctx.fillStyle = withAlpha(a.cls.color, 0.22);
+    ctx.fill();
+  }
+  if (state.show.drift) {
+    const len = Math.max(5, Math.min(34, 8 + a.speed * 0.10));
+    const [sx, sy] = toScreen(st.x, st.z);
+    const ex = sx + Math.cos(st.dir) * len;
+    const ey = sy + Math.sin(st.dir) * len;
+    ctx.save();
+    ctx.strokeStyle = withAlpha(a.cls.color, 0.55);
+    ctx.beginPath(); ctx.moveTo(sx, sy); ctx.lineTo(ex, ey); ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(ex, ey);
+    ctx.lineTo(ex - Math.cos(st.dir - 0.4) * 5, ey - Math.sin(st.dir - 0.4) * 5);
+    ctx.lineTo(ex - Math.cos(st.dir + 0.4) * 5, ey - Math.sin(st.dir + 0.4) * 5);
+    ctx.closePath(); ctx.fillStyle = withAlpha(a.cls.color, 0.55); ctx.fill();
+    ctx.restore();
+  }
+}
+
+function drawPlayerMark() {
+  const [sx, sy] = toScreen(0, 0);
+  ctx.save();
+  ctx.strokeStyle = "#cfd6cf";
+  ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.arc(sx, sy, 4, 0, Math.PI * 2); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(sx - 8, sy); ctx.lineTo(sx + 8, sy);
+  ctx.moveTo(sx, sy - 8); ctx.lineTo(sx, sy + 8); ctx.stroke();
+  ctx.restore();
+}
+
+// ---------- статистика ----------
+const statsEl = document.getElementById("stats");
+
+function updateStats(alive) {
+  const byClass = { home: 0, safe: 0, danger: 0, deadly: 0 };
+  let area = 0;
+  let biggest = null;
+  for (const [a, st] of alive) {
+    byClass[a.cls.key]++;
+    area += Math.PI * st.radius * st.radius;
+    if (!biggest || st.radius > biggest.st.radius) biggest = { a, st };
+  }
+  const worldArea = Math.PI * WORLD_R * WORLD_R;
+  const share = (area / worldArea * 100);
+  const rows = [
+    ["всего", alive.length],
+    ["безопасных", byClass.safe],
+    ["опасных", byClass.danger],
+    ["смертельных", byClass.deadly],
+    ["покрыто", share.toFixed(1) + " %"],
+    ["крупнейшая", biggest ? Math.round(biggest.st.radius) + " бл" : "—"]
+  ];
+  statsEl.innerHTML = rows.map(([k, v]) => `<div class="k">${k}</div><div class="v">${v}</div>`).join("");
+}
+
+// ---------- взаимодействие ----------
+let drag = null;
+
+cv.addEventListener("pointerdown", (e) => {
+  drag = { x: e.clientX, y: e.clientY, panX: state.panX, panY: state.panY };
+  cv.classList.add("dragging");
+  cv.setPointerCapture(e.pointerId);
+});
+cv.addEventListener("pointermove", (e) => {
+  if (drag) {
+    const s = baseScale();
+    state.panX = drag.panX - (e.clientX - drag.x) / s;
+    state.panY = drag.panY - (e.clientY - drag.y) / s;
+    draw();
+    return;
+  }
+  const rect = cv.getBoundingClientRect();
+  const [wx, wz] = toWorld(e.clientX - rect.left, e.clientY - rect.top);
+  let hit = null;
+  for (const a of state.field) {
+    const st = stateAt(a, state.t);
+    if (!st) continue;
+    if (Math.hypot(st.x - wx, st.z - wz) <= st.radius) {
+      hit = [a, st];
+      break;
+    }
+  }
+  state.hover = hit;
+  if (hit) {
+    const [a, st] = hit;
+    const phase = st.age / a.life < 0.22 ? "рост" : st.age / a.life > 0.8 ? "распад" : "зрелость";
+    tip.style.display = "block";
+    tip.style.left = (e.clientX - rect.left + 14) + "px";
+    tip.style.top = (e.clientY - rect.top + 14) + "px";
+    tip.textContent =
+      `${a.cls.name}\n` +
+      `радиус ${Math.round(st.radius)} бл\n` +
+      `фаза ${phase}, возраст ${Math.round(st.age)} ч\n` +
+      `жизнь ${Math.round(a.life)} ч\n` +
+      `дрейф ${Math.round(a.speed)} бл/ч\n` +
+      `от центра ${Math.round(Math.hypot(st.x, st.z) / 1000)}к`;
+  } else {
+    tip.style.display = "none";
+  }
+});
+cv.addEventListener("pointerup", () => { drag = null; cv.classList.remove("dragging"); });
+cv.addEventListener("pointerleave", () => { tip.style.display = "none"; });
+cv.addEventListener("wheel", (e) => {
+  e.preventDefault();
+  const rect = cv.getBoundingClientRect();
+  const [wx, wz] = toWorld(e.clientX - rect.left, e.clientY - rect.top);
+  const factor = Math.exp(-e.deltaY * 0.0015);
+  state.zoom = Math.max(0.35, Math.min(40, state.zoom * factor));
+  // держим точку под курсором
+  const s2 = baseScale();
+  state.panX = wx - (e.clientX - rect.left - W / 2) / s2;
+  state.panY = wz - (e.clientY - rect.top - H / 2) / s2;
+  draw();
+}, { passive: false });
+
+// ---------- панель ----------
+const timeEl = document.getElementById("time");
+const tvalEl = document.getElementById("tval");
+let playing = false;
+let timer = null;
+
+timeEl.addEventListener("input", () => {
+  state.t = Number(timeEl.value);
+  tvalEl.textContent = state.t;
+  draw();
+});
+
+document.getElementById("play").addEventListener("click", (e) => {
+  playing = !playing;
+  e.target.classList.toggle("on", playing);
+  e.target.textContent = playing ? "❚❚ пауза" : "▶ идёт время";
+  if (playing) {
+    timer = setInterval(() => {
+      state.t = (state.t + 1) % (MAX_LIFE_H + 1);
+      timeEl.value = state.t;
+      tvalEl.textContent = state.t;
+      draw();
+    }, 70);
+  } else {
+    clearInterval(timer);
+  }
+});
+
+document.getElementById("reset").addEventListener("click", () => {
+  state.t = 0; timeEl.value = 0; tvalEl.textContent = "0"; draw();
+});
+
+document.getElementById("seed").addEventListener("click", () => {
+  state.seed = Math.floor(Math.random() * 1e9);
+  state.field = makeField(state.seed);
+  state.t = 0; timeEl.value = 0; tvalEl.textContent = "0";
+  draw();
+});
+
+document.getElementById("png").addEventListener("click", () => {
+  const a = document.createElement("a");
+  a.download = `anomalies-${state.seed}-t${state.t}.png`;
+  a.href = cv.toDataURL("image/png");
+  a.click();
+});
+
+const toggles = {
+  lForms: "forms", lCores: "cores", lDrift: "drift", lRings: "rings", lScars: "scars"
+};
+for (const [id, key] of Object.entries(toggles)) {
+  const el = document.getElementById(id);
+  el.addEventListener("change", () => {
+    state.show[key] = el.checked;
+    draw();
+  });
+}
+
+window.addEventListener("resize", resize);
+
+// ---------- старт ----------
+state.field = makeField(state.seed);
+resize();
+
+// для автоматизации скриншотов и отладки
+window.anomalyPreview = { state, draw, makeField, setZoom(z, x, zz) { state.zoom = z; state.panX = x; state.panY = zz; draw(); } };
+</script>
+</body>
+</html>
