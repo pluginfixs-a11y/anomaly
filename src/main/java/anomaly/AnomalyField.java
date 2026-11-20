@@ -23,7 +23,7 @@ import java.util.Random;
  * <p>
  * Поле лежит в {@code world/data/anomaly_field.json} — обычным текстом, чтобы его можно было
  * посмотреть глазами и поправить руками. Пишется атомарно (временный файл + переименование),
- * а сохраняется: при рождении/смерти, раз в минуту и на остановке сервера.
+ * а сохраняется: на изменения не чаще раза в 30 секунд, раз в пять минут для часов и на остановке.
  * <p>
  * Тик дешёвый: у аномалии нет пошагового состояния, поэтому обход списка — это проверка возраста
  * и сжатия у центра, а не расчёт формы. Форма и позиция считаются только тогда, когда о них
@@ -366,8 +366,8 @@ public final class AnomalyField {
 			if (anomaly.pinned) {
 				pinned++;
 			}
-			// площадь эллипса, а не круга: вытянутость до 2.25 заметно меняет покрытие
-			area += Math.PI * zone.radius() * zone.radius() * Math.max(1.0, anomaly.stretch);
+			// площадь эллипса, а не круга: вытянутость 0.55..2.25 заметно меняет покрытие
+			area += Math.PI * zone.radius() * zone.radius() * Math.max(0.2, anomaly.stretch);
 			budget += zone.budget();
 		}
 		double worldArea = Math.PI * (config == null ? 20000.0 : config.world_radius) * (config == null ? 20000.0 : config.world_radius);
@@ -380,8 +380,10 @@ public final class AnomalyField {
 	static boolean saveNow() {
 		data.clock_ms = AnomalyClock.now();
 		lastSaveMs = System.currentTimeMillis();
-		dirty = false;
-		return path != null && write(path, data);
+		boolean ok = path != null && write(path, data);
+		// не сбросили dirty при сбое: следующий тик попробует снова, а не через пять минут
+		dirty = !ok;
+		return ok;
 	}
 
 	public static boolean save() {

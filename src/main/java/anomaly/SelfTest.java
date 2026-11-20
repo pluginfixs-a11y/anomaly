@@ -444,7 +444,9 @@ public final class SelfTest {
 		Anomaly pinned = AnomalyField.create(new AnomalyFieldData(), config, rnd, 0L, 0, 0, 500.0,
 				AnomalyClass.DANGER, true);
 		report(result, "тестовая зона приколота: не дрейфует, не стареет и сразу полноразмерная",
-				pinned.speed == 0.0 && pinned.alive(0L) && pinned.radius(1.0) > pinned.r0 * 0.5);
+				pinned.speed == 0.0
+						&& pinned.alive(pinned.born + (long) (pinned.life_hours * 2.0 * 3_600_000L))
+						&& pinned.radius(1.0) > pinned.r0 * 0.5);
 
 		AnomalyConfig broken = new AnomalyConfig();
 		broken.population = -5;

@@ -85,10 +85,13 @@ public final class AnomalyDebug {
 		// клиент видит частицы максимум в ~512 блоках: точки дальше — впустую посчитанные пакеты
 		double visible = 480.0;
 
-		// контур: плотность точек не зависит от размера — на гиганте они просто реже
-		int points = (int) Math.max(24, Math.min(120, Math.round(radius / 4.0) + 24));
-		for (int i = 0; i < points; i++) {
-			double angle = i * (Math.PI * 2.0) / points;
+		// контур: точки ставим по видимой дуге вокруг направления на игрока — иначе у большой зоны
+		// шаг между точками в сотни блоков и в кадре оказывается ноль-девять штук
+		double toPlayer = Math.atan2(player.getZ() - zone.z(), player.getX() - zone.x());
+		double half = radius <= visible ? Math.PI : Math.asin(Math.min(1.0, visible / radius));
+		int points = 64;
+		for (int i = 0; i <= points; i++) {
+			double angle = toPlayer - half + (2.0 * half) * i / points;
 			double[] point = zone.anomaly().boundaryPoint(angle, zone.ageHours(), radius);
 			if (Math.hypot(point[0] - player.getX(), point[1] - player.getZ()) > visible) {
 				continue;

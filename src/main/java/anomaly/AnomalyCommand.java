@@ -11,6 +11,7 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.tags.FluidTags;
 import net.minecraft.util.Mth;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.levelgen.Heightmap;
@@ -225,6 +226,11 @@ public final class AnomalyCommand {
 		int blockX = Mth.floor(x);
 		int blockZ = Mth.floor(z);
 		int y = safeY(level, blockX, blockZ);
+		if (lavaBelow(level, blockX, y, blockZ)) {
+			reply(source, "Под точкой лава — не ставлю. Повторите /anomaly edge: угол зависит от того, где вы стоите",
+					ChatFormatting.RED);
+			return 0;
+		}
 		player.teleportTo(blockX + 0.5, y + 0.1, blockZ + 0.5);
 		reply(source, (edge ? "Вы у края " : "Вы в ядре ") + "#" + anomaly.id + " " + classTag(zone.cls())
 				+ ", радиус " + Math.round(zone.radius()) + ". /anomaly show — включить контур");
@@ -250,6 +256,17 @@ public final class AnomalyCommand {
 			y++;
 		}
 		return y;
+	}
+
+	/** Лава под точкой: падение в неё — это смерть, а не отладка. */
+	private static boolean lavaBelow(ServerLevel level, int x, int y, int z) {
+		BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
+		for (int dy = 0; dy >= -3; dy--) {
+			if (level.getBlockState(pos.set(x, y + dy, z)).getFluidState().is(FluidTags.LAVA)) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	// --- отладка ---
@@ -309,8 +326,12 @@ public final class AnomalyCommand {
 
 	private static int save(CommandSourceStack source) {
 		boolean saved = AnomalyField.save();
-		reply(source, saved ? "Поле записано: " + AnomalyField.path() : "Не настроен путь сохранения",
-				saved ? ChatFormatting.GREEN : ChatFormatting.RED);
+		if (saved) {
+			reply(source, "Поле записано: " + AnomalyField.path(), ChatFormatting.GREEN);
+		} else {
+			reply(source, "Не смог записать поле в " + AnomalyField.path() + " — смотрите лог сервера",
+					ChatFormatting.RED);
+		}
 		return saved ? 1 : 0;
 	}
 
