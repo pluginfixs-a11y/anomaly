@@ -1,8 +1,6 @@
 package anomaly;
 
-import net.minecraft.ChatFormatting;
 import net.minecraft.core.Holder;
-import net.minecraft.network.chat.Component;
 import net.minecraft.network.protocol.game.ClientboundSetEntityMotionPacket;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
@@ -124,31 +122,10 @@ public final class AnomalyEffects {
 		}
 	}
 
-	/** Вход в аномалию: звук и подпись, чтобы игрок понял, что произошло. */
+	/** Вход в аномалию: только звук. Текст в UI не выводим — механики объясняются средой. */
 	public static void entry(ServerLevel level, ServerPlayer player, Anomaly anomaly) {
 		level.playSound(null, player.getX(), player.getY(), player.getZ(),
 				SoundEvents.AMETHYST_BLOCK_CHIME, SoundSource.AMBIENT, 1.2f, 0.7f);
-		player.sendOverlayMessage(Component.literal("Аномалия: " + anomaly.type().title)
-				.withStyle(ChatFormatting.AQUA));
-	}
-
-	/**
-	 * Строка над хотбаром вместо HUD: тип и доза в процентах. Отправляется не чаще, чем меняется
-	 * на 5 %, иначе перебивает action bar других модов (варпы, локейт и т.п.) каждые полсекунды.
-	 */
-	public static void overlay(ServerPlayer player, AnomalyState state) {
-		if (state.type == null || state.dose < 0.03) {
-			return;
-		}
-		int percent = state.percent();
-		if (Math.abs(percent - state.shownPercent) < 5) {
-			return;
-		}
-		state.shownPercent = percent;
-		ChatFormatting colour = state.dose >= 0.75 ? ChatFormatting.RED
-				: state.dose >= 0.4 ? ChatFormatting.GOLD : ChatFormatting.AQUA;
-		player.sendOverlayMessage(Component.literal(state.type.title + " · " + percent + " %")
-				.withStyle(colour));
 	}
 
 	private static void effect(ServerPlayer player, Holder<MobEffect> effect, int ticks, int amplifier) {
@@ -215,3 +192,4 @@ public final class AnomalyEffects {
 		return true;
 	}
 }
+

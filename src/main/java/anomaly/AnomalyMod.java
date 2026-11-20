@@ -97,7 +97,6 @@ public class AnomalyMod implements ModInitializer {
 			boolean fresh = state.type != inside.type();
 			state.enter(inside, seconds, config);
 			AnomalyEffects.apply(level, player, inside, state, config, seconds);
-			AnomalyEffects.overlay(player, state);
 			if (fresh) {
 				AnomalyEffects.entry(level, player, inside);
 			}
@@ -105,7 +104,6 @@ public class AnomalyMod implements ModInitializer {
 			state.leave(seconds, config);
 			if (state.type != null && state.dose >= config.lingering_floor) {
 				AnomalyEffects.lingering(level, player, state, config);
-				AnomalyEffects.overlay(player, state);
 			}
 		}
 	}

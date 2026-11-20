@@ -126,10 +126,23 @@ public final class SelfTest {
 	}
 
 	private static void checkDensityByDistance(ServerLevel level, AnomalyConfig config) {
-		int nearCount = countChunks(level, config, 250, 40);
-		int farCount = countChunks(level, config, 1125, 40);
-		report("на 18к аномалий заметно больше, чем на 4к (" + farCount + " против " + nearCount + ")",
-				farCount >= nearCount * 3);
+		int side = 40;
+		int samples = side * side;
+		int nearCount = countChunks(level, config, 250, side);
+		int farCount = countChunks(level, config, 1125, side);
+
+		// сравниваем не «втрое», а с ожиданием из самой кривой плотности: полоса 4–4.6к
+		// даёт уже ~1 % на чанк, и жёсткий порог «×3» ловил не баг, а шум выборки
+		double nearExpected = config.densityAt(4250) * samples;
+		double farExpected = config.densityAt(18300) * samples;
+		report("на 18к аномалий больше, чем на 4к (" + farCount + " против " + nearCount + ")",
+				farCount >= nearCount * 2);
+		report("ближняя полоса близка к своей плотности (" + nearCount + " при ожидании "
+						+ String.format("%.1f", nearExpected) + ")",
+				nearCount >= nearExpected * 0.5 && nearCount <= nearExpected * 1.8);
+		report("дальняя полоса близка к своей плотности (" + farCount + " при ожидании "
+						+ String.format("%.1f", farExpected) + ")",
+				farCount >= farExpected * 0.5 && farCount <= farExpected * 1.8);
 	}
 
 	/** Сколько чанков с аномалиями в квадрате {@code side}×{@code side} вокруг чанка {@code originChunk}. */

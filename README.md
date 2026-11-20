@@ -1,105 +1,170 @@
 # Anomaly Fields
 
-Server-side Fabric mod for Minecraft **26.2**. Anomalous zones ("columns") start past 2000 blocks from world
-spawn and get more frequent and stronger the further you go. Vanilla clients need nothing installed: every cue
-is a vanilla one — particles, sounds, potion effects, an action-bar line.
+Server-side Fabric mod for Minecraft **26.2**: anomalous areas in the far lands. This file is the design doc;
+the "как собрано сейчас" section at the bottom describes what the code actually does today.
 
-It pairs with MobScaler (mob stats grow with distance) but does not depend on it.
+---
 
-## Anomaly types
+# Концепция (20.11.2026, владелец)
 
-Each anomaly is a **vertical column**: radius is measured in X/Z, and it is active at any height. That keeps
-placement cheap (no surface lookup) and means a column in a cave is just as real as one in the open.
+## Зачем это вообще
 
-| id | name | what it does |
-|---|---|---|
-| `gravity` | Тяжесть | pulls you toward the centre, slowness; past 60 % dose also mining fatigue |
-| `vortex` | Вихрь | pushes you away from the centre, nausea; past 60 % dose lifts you up (at most 3 s in a row) |
-| `frost` | Мороз | slowness + freeze counter (screen frost); past 80 % dose deals freeze damage |
-| `shadow` | Мрак | darkness (dim screen, heartbeat); past 70 % dose blindness |
-| `static` | Разряд | visual lightning bolts striking inside the column; a close hit hurts |
+Сервер не хочет дальних одиночек: человека, который живёт в 15к от всех, копит ресурсы и ни с кем не
+пересекается. Наказание за расстояние — не «мобы толще» (это у MobScaler, чистая циферка), а **среда**:
+чем дальше, тем больше мир рассыпается и тем сильнее игрок сходит с ума. Жить там можно, но дорого и
+одиноко. Ходить туда — можно и нужно, но это рейд, а не новый дом.
 
-Velocity pushes (`gravity`, `vortex`) are sent to the client as a `ClientboundSetEntityMotionPacket`, the same
-way vanilla explosions do it: a bare server-side `push` never reaches the player's own client, because the
-client owns its position and the entity tracker skips the player entity for itself.
+Отсюда два принципа, которые важнее конкретных чисел:
 
-## Dose
+1. **Сложность нарастает плавно и по-разному на разных дистанциях**, а не ступенькой «после 10к всё злое».
+2. **Никаких надписей в UI.** Механики рассказываются звуком, частицами, эффектами и изменениями мира.
+   Буквы допустимы только в достижениях и книгах — там это обучение, а не HUD.
 
-Standing inside accumulates **dose** 0..1 at `dose_gain_per_second` × the anomaly's strength (0.6–1.0, grows
-with distance): 20–33 seconds to full. Outside, dose decays at `dose_decay_per_second`, and while it stays above
-`lingering_floor` the anomaly's primary effect keeps hanging on you. That is the "the longer you stand, the
-longer it sticks" rule: a full dose takes 50 seconds to fade, so it still hurts well after you left. Walking
-from one anomaly type into another does not carry the old dose: it is clamped to 30 % on the switch, otherwise a
-step from a full "gravity" into "frost" would hit at full strength with no ramp-up.
+## Аномалия — это область, а не точка
 
-Effect amplifier: 0 below 45 % dose, I from 45 %, II from 80 %. The action bar shows `Тяжесть · 62 %` while you
-are in an anomaly or still carrying its tail.
+- Радиус от **100 до 3000+** блоков (диаметр до 6 км). Трёхкилометровая аномалия физически перекрывает
+  маршрут: её **обходят**, а не перепрыгивают.
+- Форма — круг в X/Z на всю высоту мира. Так не надо искать поверхность, и аномалия одинаково настоящая в
+  поле, в пещере и под океаном.
+- **Градиент от края к ядру.** На краю 30 % эффекта, в ядре 100 %: входишь — чувствуешь, как нарастает, и
+  всегда есть возможность повернуть назад. Никакого «нозжа на границе».
+- Внутри больших аномалий могут жить малые: безопасное облако с гнездом смертельной зоны в центре — это
+  естественная цель для рейда.
 
-## Placement
+## Жизненный цикл: ползут, дышат, живут днями
 
-No files, no `SavedData`: whether a chunk has an anomaly, where inside it, which type, its radius and its
-strength are all derived from `splitmix64(worldSeed, chunkX, chunkZ)`. The same world always has the same
-anomalies; a new world gets different ones.
+Аномалия — **живой объект**, а не украшение мира:
 
-Density is a list of `[distance, chance per chunk]` stages — 0.008 at 3000 blocks (one anomaly per ~125 chunks,
-i.e. roughly every 180 blocks), 0.050 at 20000 (one per ~20 chunks, roughly every 70 blocks). Past `stack_from`
-(10000) a quarter of the occupied chunks get more than one anomaly: 18 % two, 7 % three.
+| фаза | что происходит |
+|---|---|
+| рождение | появилась маленькой (100–200) в «холодном» месте, не ближе N блоков к соседям |
+| рост | медленно набухает: единицы блоков в минуту, до своего максимума |
+| зрелость | держит размер, медленно дрейфует по X/Z (0.5–3 блока в минуту) |
+| распад | так же медленно сжимается, на нуле исчезает |
 
-## Feedback (and what is not possible)
+- **Дрейф** ~0.5–3 блока/мин: за игровой час аномалия сдвигается на 30–180 блоков, за сутки — на карту.
+  Игрок видит, что мир живой, а не расчерчен один раз навсегда.
+- **Время жизни:** малые — часы, средние — 1–2 дня, большие (1000+) — 3–7 игровых дней. Большая аномалия
+  успевает перекрыть дорогу, и её обходят неделю.
+- **Состояние сохраняется между рестартами**: позиция, радиус, фаза, направление дрейфа, возраст. Сервер
+  перезапустили — мир не пересобрался, аномалии продолжили ползти с того же места.
+- Одновременно активно ограниченное число (порядка сотни на весь мир до 20к), спавн новых — по плотности от
+  дальности, не ближе N блоков к существующим.
 
-The mod is server-only, so there is **no HUD, no custom visuals, no per-player fog**. Everything the player
-learns comes from:
+## Тир опасности задаётся дистанцией
 
-- particles and an occasional sound at the column within 48 blocks — you see an anomaly before you enter it
-  (particles are sent with `overrideLimiter`, otherwise the server cuts them at 32 blocks; the sound is audible
-  at about 32 blocks, volume 2.0);
-- a chime and `Аномалия: Мрак` on entry, `Мрак · 62 %` in the action bar while inside;
-- the vanilla effect icons in the inventory.
+| от центра | класс | что там | можно ли умереть |
+|---|---|---|---|
+| до 5000 | чисто | ничего | — |
+| 5000+ | **безопасные** | разряд (только вспышки и свет), мрак (тьма, слепота), эхо (звуки, шаги за спиной) | нет, пугают и путают |
+| 10000+ | **опасные** | тяжесть (тянет, замедляет), вихрь (толкает, поднимает), мороз (замедление, обморожение) | да, но медленно и с выходом |
+| 15000+ | **смертельные** | шторм (молнии бьют всерьёз), гниль (иссушение, голод), бездна | да, быстро, без подготовки |
 
-One idea that does not work without a client mod: a true "elytra off" zone. The server cannot cleanly stop
-gliding (the client predicts flight, so forcing it off just jitters). `vortex` throws you upward instead, which
-reaches flyers too.
+Класс — свойство типа аномалии, а дальность решает, какие типы вообще могут появиться. Поэтому на 6к
+встречается только «страшное, но не смертельное», а на 18к — уже всё.
 
-## Command
+## Рейды в аномалии
 
-`/anomaly` (gamemasters): config summary. `/anomaly dose` — your dose and amplifier. `/anomaly near` — up to six
-anomalies within 48 blocks with type, radius and distance. Meant for checking the mod without flying 20k
-yourself.
+Аномалия — единственный источник того, чего нет в обычном мире, иначе никто не пойдёт в мясорубку:
 
-## Config
+- в ядре периодически появляется **узел** (сундук/структура с лутом): вскрыл, вынес, ушёл;
+- пока аномалия жива, узел восстанавливается; когда аномалия распалась — исчезает вместе с ней. Это делает
+  рейд срочным делом, а не вечным фармом;
+- чем выше класс, тем лучше добыча: безопасные дают расходники и книги, опасные — зачарования и снаряжение,
+  смертельные — то, что иначе не достать (незерит, элитры, головы, тотемы);
+- охрана — ванильные мобы, усиленные MobScaler: в аномалии их и так больше и они злее;
+- кемпинг невыгоден: аномалия растёт и выдавливает игрока, а после распада узла нет.
 
-`config/anomaly.json`, generated on first start; editing needs a server restart. Keys: `enabled`,
+## Мир рассыпается, игрок сходит с ума
+
+Плавный градиент по «глубине» (расстояние + время без людей), и он **не должен убивать молча**:
+
+- **звук первым**: шаги за спиной, шёпот, скрип двери, чужое дыхание в пещере;
+- **потом мир спорит с игроком**: гаснут факелы, открываются двери, пропадают предметы из сундука на глазах,
+  мобы, которых не должно быть;
+- **потом силуэты**: чёрные фигуры вдалеке, исчезают на 32 блоках;
+- **потом цена**: слабость, тошнота, бессонница — мешает, но не убивает.
+
+Лечится контактом: другой игрок рядом, торговля с жителем, сон в обжитой зоне, возврат к центру. Это и есть
+серверная «защита от дальних одиночек»: не бан, а выдавливание.
+
+## Чего этот мод никогда не сделает
+
+Клиент ванильный, поэтому: нет HUD и шкал, нет своих визуалов, тумана и шейдеров, нет своих блоков и
+сущностей, нет настоящего «отключения элитр» (сервер не может чисто прервать планирование — только дёргать).
+Всё, что видит игрок, — ванильные частицы, звуки, эффекты, изменения мира, а также достижения и книги.
+
+---
+
+# Как собрано сейчас (0.1.0, 20.11.2026) и чем это расходится с концепцией
+
+Это **основа**, а не реализация концепции. Что уже работает: детерминированное размещение, доза, пять типов,
+эффекты, частицы, звук, `/anomaly`, самопроверка.
+
+| пункт концепции | в 0.1.0 |
+|---|---|
+| область 100–3000+ блоков | **столб 6–14 блоков** — расходится |
+| ползёт, растёт, распадается, живёт днями | статично навсегда — расходится |
+| состояние в мире между рестартами | вычисляется из хэша чанка, состояния нет — расходится |
+| класс по дальности (5к/10к/15к) | все пять типов с 2к, без классов — расходится |
+| рейды и лут | нет — расходится |
+| мир рассыпается, игрок сходит с ума | нет — расходится |
+| без надписей в UI | строка над хотбаром была; **убрана 20.11.2026**, остался звук входа |
+| серверный, без клиентских модов | да |
+
+Что переиспользуется при переписывании: тик и карта состояний игрока, доза и её спад, эффекты пяти типов,
+частицы/звук, команда, самопроверка.
+
+## План 0.2 (порядок работ)
+
+1. **Поле как данные.** `world/data/anomaly_field.json`: список активных аномалий с фазой, радиусом, дрейфом,
+   возрастом. Тик раз в секунду: дрейф, рост/распад, рождение и смерть. Запись раз в минуту и на остановке.
+2. **Большие радиусы и градиент.** Ядро/край, пересчёт эффекта от расстояния до центра. Плотность спавна по
+   дальности, минимум расстояния между аномалиями.
+3. **Классы типов** (безопасные с 5к, опасные с 10к, смертельные с 15к) вместо «всё с 2к».
+4. **Рейд-узлы**: сундук в ядре с лут-таблицей по классу, восстановление, смерть вместе с аномалией.
+5. **Мир рассыпается**: сначала звуковой слой, потом изменения мира, потом силуэты, потом цена; шкала
+   изоляции лечится контактом.
+6. Тесты на всё перечисленное: жизненный цикл, сохранение/загрузка, границы классов, лут.
+
+---
+
+## Конфиг
+
+`config/anomaly.json`, создаётся при первом старте, правка требует рестарта. Ключи: `enabled`,
 `overworld_only`, `safe_radius`, `density_stages`, `radius_min`, `radius_max`, `stack_from`,
 `stack_second_chance`, `stack_third_chance`, `dose_gain_per_second`, `dose_decay_per_second`,
 `lingering_floor`, `view_range`, `sound_period`, `tick_period`, `disabled_types`.
+Битый файл копируется в `anomaly.json.bak`; `density_stages: null` или одна ступень — это «аномалий нет»,
+а не падение.
 
-A broken file is copied to `anomaly.json.bak` before the defaults replace it. A `null` or single-stage
-`density_stages` means "no anomalies" rather than a crash.
+## Команда
 
-## Install
+`/anomaly` (гаммастерам): сводка конфига, `/anomaly dose` — доза игрока, `/anomaly near` — до шести аномалий
+в 48 блоках с типом, радиусом и расстоянием.
 
-Fabric Loader ≥ 0.20.1 + Fabric API on the server, jar into `mods/`. Server-side only: in a single-player world
-the mod is not loaded at all (`environment: "server"`).
+## Установка
 
-## Self-test
+Fabric Loader ≥ 0.20.1 + Fabric API на сервере, jar в `mods/`. Мод серверный: в одиночной игре Fabric Loader
+его не грузит вообще (`environment: "server"`).
 
-`-Danomaly.selftest=1` runs 36 checks on the first tick: density curve (0 below `safe_radius`, monotone, in
-0..1), placement determinism (same chunk twice → same anomalies), radius/strength bounds, no anomalies near the
-centre, far chunks have at least 3× more than mid ones, stack rules, dose arithmetic, amplifier thresholds, the
-type-switch clamp, the exposure-ticks counter (0.5 s = 10 ticks, so the levitation cap really is 3 s), the
-overlap case where flipping between two columns must not cut the dose, config edge cases (`null`/single/falling
-stages, `null` disabled list), plus live world calls that do not need a connection: player push, freeze counter,
-particles, sound, lightning spawn. Each group runs in its own try/catch, so one crash does not hide the rest.
+## Самопроверка
 
-Not covered by the test: `addEffect`, `hurt`, the action bar and the motion packet — a bare `ServerPlayer` has no
-`connection`, so those paths need a real client.
+`-Danomaly.selftest=1` — 38 проверок на первом тике: кривая плотности, детерминизм размещения, границы радиуса
+и силы, пусто у центра, стопки, арифметика дозы и пороги усилителя, срез дозы при входе с улицы, счётчик
+тиков внутри, стык перекрывающихся столбов, крайние конфиги, плюс живые вызовы без коннекта (толчок, счётчик
+заморозки, частицы, звук, молния). Каждая группа в своём `try/catch`.
 
-## Build
+Не покрыто: `addEffect`, `hurt`, motion-пакет — им нужен настоящий клиент (у тестового `ServerPlayer` нет
+`connection`).
+
+## Сборка
 
 ```
 ./gradlew build
 ```
 
-## License
+## Лицензия
 
 CC0-1.0.
+

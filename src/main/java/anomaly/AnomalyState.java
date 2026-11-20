@@ -3,6 +3,8 @@ package anomaly;
 /**
  * Доза игрока — то самое «чем дольше стоишь, тем дольше держится». Копится внутри аномалии,
  * спадает снаружи, а пока она выше {@code lingering_floor}, эффект продолжает висеть.
+ * <p>
+ * Числа в UI не выводятся: доза читается по иконкам эффектов и по тому, насколько плохо.
  */
 public final class AnomalyState {
 	public static final double FULL = 1.0;
@@ -15,20 +17,15 @@ public final class AnomalyState {
 	public int ticksInside;
 	/** Накопитель для урона холодом: бьёт раз в 20 тиков, а не раз в вызов. */
 	public int damageTicks;
-	/** Последний процент, отправленный над хотбаром: строка не должна спамить каждые 0.5 с. */
-	public int shownPercent = -100;
 
 	/** Шаг внутрь аномалии: прирост пропорционален силе аномалии и времени. */
 	public void enter(Anomaly anomaly, double seconds, AnomalyConfig config) {
-		if (type != anomaly.type()) {
-			if (ticksInside == 0) {
-				// первый вход с улицы: чужую дозу с собой не тащим, иначе шаг из «Тяжести»
-				// в «Мороз» сразу бьёт на полную
-				dose = Math.min(dose, SWITCH_CARRY);
-				shownPercent = -100;
-			}
-			// перескок между перекрывающимися столбами (штатно дальше stack_from) дозу не срезает
+		if (type != anomaly.type() && ticksInside == 0) {
+			// первый вход с улицы: чужую дозу с собой не тащим, иначе шаг из «Тяжести»
+			// в «Мороз» сразу бьёт на полную
+			dose = Math.min(dose, SWITCH_CARRY);
 		}
+		// перескок между перекрывающимися столбами (штатно дальше stack_from) дозу не срезает
 		dose = Math.min(FULL, dose + config.dose_gain_per_second * anomaly.strength() * seconds);
 		type = anomaly.type();
 		ticksInside += stepTicks(seconds);
@@ -47,7 +44,6 @@ public final class AnomalyState {
 		if (dose <= 0.0) {
 			dose = 0.0;
 			type = null;
-			shownPercent = -100;
 		}
 	}
 
