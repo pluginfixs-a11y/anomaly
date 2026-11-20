@@ -13,63 +13,73 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Все настройки в {@code config/anomaly.json}. Как у MobScaler: правка требует рестарта,
- * битый файл уходит в {@code .bak}, а не затирается молча.
+ * Настройки в {@code config/anomaly.json}. Правка требует рестарта, битый файл уходит в {@code .bak}.
+ * <p>
+ * Версия в файле есть не просто так: Gson подставляет инициализаторы для отсутствующих ключей,
+ * поэтому по одному «ключа нет» миграцию не отличить от нового поля. {@code config_version = 0}
+ * означает «файл от 0.1.0», и тогда геометрия перезаписывается на концепцию 0.2 (столбы 6–14
+ * блоков → области 100–3000), а пользовательские числа вроде дозы остаются.
  */
 public class AnomalyConfig {
 	private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
 	private static final Path PATH = FabricLoader.getInstance().getConfigDir().resolve("anomaly.json");
+	/** Текущая версия формата конфига. */
+	public static final int VERSION = 2;
+
+	public int config_version = 0;
 
 	/** Выключатель всего мода. */
 	public boolean enabled = true;
-	/** Только Верхний мир (как усиление мобов у MobScaler). */
+	/** Только Верхний мир: поле одно на мир, остальные измерения не трогаем. */
 	public boolean overworld_only = true;
 
-	// --- где аномалии вообще бывают ---
-	/**
-	 * Ближе этой дистанции аномалий нет вовсе. Дальше работает {@code density_stages}.
-	 */
-	public int safe_radius = 2000;
+	// --- где и сколько ---
+	/** Сколько живых аномалий держать в мире (цель). Поле само добивает население. */
+	public int population = 250;
+	/** Ближе этого от центра аномалии не рождаются. */
+	public int spawn_min_radius = 6000;
+	/** Край мира: дальше аномалии не рождаются и не ходят. */
+	public int world_radius = 20000;
 
-	/**
-	 * Плотность: {@code [блоки от центра, вероятность на чанк]}, по возрастанию.
-	 * 0.008 на 3000 — аномалия примерно в каждом 125-м чанке (шаг ~180 блоков),
-	 * 0.050 на 20000 — в каждом 20-м (шаг ~71 блок).
-	 */
-	public List<double[]> density_stages = defaultDensityStages();
+	// --- размеры и жизнь ---
+	public double radius_min = 100.0;
+	public double radius_max = 3000.0;
+	/** Потолок жизни: 7 реальных суток. */
+	public double lifetime_max_hours = 168.0;
+	/** Дрейф, блоков в минуту (мелкие — к верхней границе, гиганты — к нижней). */
+	public double drift_min_per_minute = 0.5;
+	public double drift_max_per_minute = 3.0;
 
-	// --- размеры ---
-	public double radius_min = 6.0;
-	public double radius_max = 14.0;
-	/** С этой дистанции аномалии могут накладываться друг на друга. */
-	public int stack_from = 10000;
-	/** Шанс, что в чанке окажется больше одной аномалии (считается первым). */
-	public double stack_second_chance = 0.25;
-	/** Шанс третьей аномалии в чанке (проверяется раньше второй, шансы не складываются). */
-	public double stack_third_chance = 0.07;
+	// --- классы ---
+	/** Полоса размытия на рубежах классов, блоков в каждую сторону. */
+	public int class_blur = 800;
+	public int danger_from = 10000;
+	public int deadly_from = 15000;
 
-	// --- доза ---
-	/** Прирост дозы в секунду внутри аномалии силы 1.0 (0.05 — 20 с до полной). */
+	// --- рассеивание у центра ---
+	public int dissipate_radius = 3000;
+	public int suppress_until = 6000;
+	public double dissipate_rate_per_min = 5.0;
+	/** Ниже этого радиуса аномалия в подавленной полосе просто удаляется. */
+	public double dissipate_min_radius = 20.0;
+
+	// --- доза и обратная связь ---
 	public double dose_gain_per_second = 0.05;
-	/** Спад дозы в секунду снаружи (0.02 — 50 с с полной до нуля). */
 	public double dose_decay_per_second = 0.02;
-	/** Ниже этой дозы «хвост» эффекта уже не держится. */
 	public double lingering_floor = 0.1;
 
-	// --- обратная связь ---
-	/** С какого расстояния аномалия показывает частицы и звук. */
 	public int view_range = 48;
-	/** Раз во сколько тиков аномалия издаёт звук. */
 	public int sound_period = 90;
-	/** Период серверного тика мода (10 = 0.5 с). */
+	/** Период серверного тика эффектов (10 = 0.5 с). Поле тикает раз в секунду отдельно. */
 	public int tick_period = 10;
 
-	/** Типы, которые не спавнятся: gravity, vortex, frost, shadow, static. */
+	/** Типы, которые не используются при генерации: gravity, vortex, frost, shadow, static. */
 	public List<String> disabled_types = new ArrayList<>();
 
 	public static AnomalyConfig load() {
 		AnomalyConfig config = new AnomalyConfig();
-		if (Files.exists(PATH)) {
+		boolean existed = Files.exists(PATH);
+		if (existed) {
 			try {
 				String json = Files.readString(PATH, StandardCharsets.UTF_8);
 				AnomalyConfig loaded = GSON.fromJson(json, AnomalyConfig.class);
@@ -81,17 +91,67 @@ public class AnomalyConfig {
 				backupBroken();
 			}
 		}
-		if (config.density_stages == null) {
-			config.density_stages = defaultDensityStages();
-		}
-		if (config.disabled_types == null) {
-			config.disabled_types = new ArrayList<>();
+		config.sanitize();
+		if (config.config_version < VERSION) {
+			config.migrate(existed);
 		}
 		config.save();
 		return config;
 	}
 
+	/** Приведение чисел в разумные рамки: конфиг правят руками, и там бывает что угодно. */
+	public void sanitize() {
+		if (disabled_types == null) {
+			disabled_types = new ArrayList<>();
+		}
+		population = Math.max(0, Math.min(5000, population));
+		if (radius_min <= 0) {
+			radius_min = 1.0;
+		}
+		if (radius_max < radius_min) {
+			radius_max = radius_min;
+		}
+		spawn_min_radius = Math.max(0, spawn_min_radius);
+		world_radius = Math.max(spawn_min_radius + 1000, world_radius);
+		if (lifetime_max_hours <= 0.01) {
+			lifetime_max_hours = 168.0;
+		}
+		dissipate_radius = Math.max(0, Math.min(dissipate_radius, suppress_until));
+		dissipate_min_radius = Math.max(1.0, dissipate_min_radius);
+		// 100 % в минуту и больше дают отрицательное основание степени и NaN в радиусе
+		dissipate_rate_per_min = Math.max(0.0, Math.min(99.0, dissipate_rate_per_min));
+		if (tick_period < 1) {
+			tick_period = 1;
+		}
+		if (view_range < 1) {
+			view_range = 1;
+		}
+		if (danger_from < spawn_min_radius) {
+			danger_from = spawn_min_radius;
+		}
+		if (deadly_from < danger_from) {
+			deadly_from = danger_from;
+		}
+		config_version = Math.max(config_version, 0);
+	}
+
+	/** 0.1.0 → 0.2: столбы 6–14 блоков заменяются областями, плотность по чанкам — населением. */
+	private void migrate(boolean existed) {
+		radius_min = 100.0;
+		radius_max = 3000.0;
+		spawn_min_radius = 6000;
+		world_radius = 20000;
+		population = 250;
+		lifetime_max_hours = 168.0;
+		sanitize();
+		config_version = VERSION;
+		if (existed) {
+			AnomalyMod.LOGGER.info("Anomaly: конфиг обновлён до версии {} (геометрия сброшена на концепцию 0.2)", VERSION);
+		}
+	}
+
 	public void save() {
+		config_version = VERSION;
 		try {
 			Files.createDirectories(PATH.getParent());
 			Files.writeString(PATH, GSON.toJson(this), StandardCharsets.UTF_8);
@@ -100,101 +160,28 @@ public class AnomalyConfig {
 		}
 	}
 
-	public static List<double[]> defaultDensityStages() {
-		return new ArrayList<>(List.of(
-				new double[]{3000, 0.008},
-				new double[]{8000, 0.020},
-				new double[]{14000, 0.035},
-				new double[]{20000, 0.050}));
+	// --- производные величины ---
+
+
+	/** Класс по расстоянию с размытием: {@code jitter} в пределах ±class_blur сдвигает рубеж. */
+	public AnomalyClass classFor(double distance, double jitter) {
+		double d = distance + jitter;
+		if (d < danger_from) {
+			return AnomalyClass.SAFE;
+		}
+		return d < deadly_from ? AnomalyClass.DANGER : AnomalyClass.DEADLY;
 	}
 
-	/** Вероятность аномалии на чанк по ступеням; ближе первой ступени — 0. */
-	public double densityAt(double distance) {
-		if (distance < safe_radius) {
-			return 0.0;
-		}
-		double[] table = densityTable();
-		if (table.length == 0) {
-			return 0.0;
-		}
-		if (distance <= table[0]) {
-			return clamp01(table[1]);
-		}
-		for (int i = 2; i < table.length; i += 2) {
-			if (distance < table[i]) {
-				double t = (distance - table[i - 2]) / (table[i] - table[i - 2]);
-				return clamp01(table[i - 1] + (table[i + 1] - table[i - 1]) * t);
-			}
-		}
-		return clamp01(table[table.length - 1]);
-	}
-
-	/** Сколько аномалий в чанке: 1, 2 или 3 по шансам и только дальше {@code stack_from}. */
-	public int stacksAt(double distance, double roll) {
-		if (distance < stack_from) {
-			return 1;
-		}
-		if (roll < stack_third_chance) {
-			return 3;
-		}
-		if (roll < stack_second_chance) {
-			return 2;
-		}
-		return 1;
-	}
-
-	/** 0 у первой ступени плотности, 1 у последней и дальше — из этого считается сила аномалии. */
-	public double depthFactor(double distance) {
-		double[] table = densityTable();
-		if (table.length == 0) {
-			return 0.0;
-		}
-		double start = table[0];
-		double end = table[table.length - 2];
-		if (distance <= start || end <= start) {
-			return 0.0;
-		}
-		return clamp01((distance - start) / (end - start));
+	/** Гиганты почти стоят, мелкие шустрые: 0.5–3 блока в минуту. */
+	public double driftSpeedPerHour(double radius) {
+		double min = Math.max(0.0, drift_min_per_minute * 60.0);
+		double max = Math.max(min, drift_max_per_minute * 60.0);
+		double speed = 24_000.0 / Math.max(1.0, radius);
+		return Math.max(min, Math.min(max, speed));
 	}
 
 	public boolean isEnabled(AnomalyType type) {
 		return disabled_types == null || !disabled_types.contains(type.id);
-	}
-
-	private double[] tableCache;
-	private int cacheSize = -1;
-
-	private double[] densityTable() {
-		if (density_stages == null || density_stages.size() < 2) {
-			tableCache = new double[0];
-			cacheSize = 0;
-			return tableCache;
-		}
-		if (tableCache != null && cacheSize == density_stages.size()) {
-			return tableCache;
-		}
-		double[] out = new double[density_stages.size() * 2];
-		double last = Double.NEGATIVE_INFINITY;
-		int n = 0;
-		for (double[] step : density_stages) {
-			if (step == null || step.length < 2 || step[0] <= last) {
-				continue;
-			}
-			out[n++] = step[0];
-			out[n++] = step[1];
-			last = step[0];
-		}
-		double[] trimmed = n < 4 ? new double[0] : new double[n];
-		if (n >= 4) {
-			System.arraycopy(out, 0, trimmed, 0, n);
-		}
-		tableCache = trimmed;
-		cacheSize = density_stages.size();
-		return trimmed;
-	}
-
-	private static double clamp01(double value) {
-		return value < 0.0 ? 0.0 : Math.min(value, 1.0);
 	}
 
 	private static void backupBroken() {
@@ -207,4 +194,3 @@ public class AnomalyConfig {
 		}
 	}
 }
-

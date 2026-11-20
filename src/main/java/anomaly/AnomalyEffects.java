@@ -15,8 +15,10 @@ import net.minecraft.world.entity.LightningBolt;
 
 /**
  * Всё, чем аномалия действует на игрока. Только ванильные каналы: эффекты, частицы, звук,
- * толчок скорости, молния. Клиент ничего не ставит, поэтому ни HUD, ни своих визуалов нет —
- * дозу читаем по иконкам эффектов и по строке над хотбаром.
+ * толчок скорости, молния. Клиент ничего не ставит, поэтому ни HUD, ни своих визуалов нет.
+ * <p>
+ * В 0.2 зоны стали большими (100–3000 блоков), поэтому «рядом» — это расстояние до границы,
+ * а частицы и звук цепляются за ближайший край, а не за центр в трёх километрах.
  */
 public final class AnomalyEffects {
 	/** Левитация вихря держится не дольше этого: иначе игрок улетает вверх и падает без контрплея. */
@@ -25,22 +27,24 @@ public final class AnomalyEffects {
 	private static final int FREEZE_PER_STEP = 30;
 	/** 140 — ванильный «полностью замёрз»: дальше уже идёт обморожение. */
 	private static final int FREEZE_FULL = 140;
+	/** Молния бьёт не дальше этого от игрока: иначе в трёхкилометровой зоне она невидима. */
+	private static final double STRIKE_RANGE = 24.0;
 
 	private AnomalyEffects() {
 	}
 
 	/** Нахождение внутри аномалии: эффект по дозе и «физика» самого типа. */
-	public static void apply(ServerLevel level, ServerPlayer player, Anomaly anomaly, AnomalyState state, AnomalyConfig config,
+	public static void apply(ServerLevel level, ServerPlayer player, Zone zone, AnomalyState state, AnomalyConfig config,
 			double seconds) {
 		int amplifier = state.amplifier();
 		double dose = state.dose;
-		switch (anomaly.type()) {
+		switch (zone.type()) {
 			case GRAVITY -> {
 				effect(player, MobEffects.SLOWNESS, 60, amplifier);
 				if (dose >= 0.6) {
 					effect(player, MobEffects.MINING_FATIGUE, 60, amplifier);
 				}
-				pull(player, anomaly, 0.02 + 0.05 * dose);
+				pull(player, zone, 0.02 + 0.05 * dose);
 			}
 			case VORTEX -> {
 				if (dose >= 0.3) {
@@ -55,7 +59,7 @@ public final class AnomalyEffects {
 						effect(player, MobEffects.SLOW_FALLING, 40, 0);
 					}
 				}
-				push(player, anomaly, 0.03 + 0.06 * dose);
+				push(player, zone, 0.03 + 0.06 * dose);
 			}
 			case FROST -> {
 				effect(player, MobEffects.SLOWNESS, 60, amplifier);
@@ -77,7 +81,7 @@ public final class AnomalyEffects {
 			}
 			case STATIC -> {
 				if (dose >= 0.3) {
-					strike(level, player, anomaly, dose);
+					strike(level, player, zone, dose);
 				}
 			}
 		}
@@ -98,32 +102,43 @@ public final class AnomalyEffects {
 		}
 	}
 
-	/** Частицы и редкий звук — чтобы аномалию было видно и слышно до входа. */
-	public static void ambience(ServerLevel level, ServerPlayer player, Anomaly anomaly, AnomalyConfig config) {
-		double distance = anomaly.distanceTo(player.getX(), player.getZ());
-		if (distance > config.view_range) {
+	/**
+	 * Частицы и редкий звук — чтобы аномалию было видно и слышно до входа.
+	 * Точка привязки — игрок внутри и ближайший край снаружи: центр большой зоны бесполезен.
+	 */
+	public static void ambience(ServerLevel level, ServerPlayer player, Zone zone, AnomalyConfig config) {
+		double signed = zone.signedDistance(player.getX(), player.getZ());
+		if (signed > config.view_range) {
 			return;
 		}
+		boolean inside = signed <= 0.0;
+		double angle = Math.atan2(player.getZ() - zone.z(), player.getX() - zone.x());
+		double[] edge = inside ? null : zone.anomaly().boundaryPoint(angle, zone.ageHours(), zone.radius());
+
+		double anchorX = inside ? player.getX() : edge[0];
+		double anchorZ = inside ? player.getZ() : edge[1];
+		double spread = inside ? 6.0 : 12.0;
+
 		var random = player.getRandom();
-		int count = distance <= anomaly.radius() ? 3 : 2;
+		int count = inside ? 3 : 2;
 		for (int i = 0; i < count; i++) {
-			double angle = random.nextDouble() * Math.PI * 2.0;
-			double radius = anomaly.radius() * (0.55 + 0.45 * random.nextDouble());
-			double x = anomaly.x() + Math.cos(angle) * radius;
-			double z = anomaly.z() + Math.sin(angle) * radius;
+			double a = random.nextDouble() * Math.PI * 2.0;
+			double radius = 1.5 + random.nextDouble() * spread;
+			double x = anchorX + Math.cos(a) * radius;
+			double z = anchorZ + Math.sin(a) * radius;
 			double y = player.getY() - 1.0 + random.nextDouble() * 3.0;
 			// overrideLimiter: обычный вызов режет частицы на 32 блоках, а view_range по умолчанию 48
-			level.sendParticles(anomaly.type().particle, true, false, x, y, z, 1, 0.05, 0.05, 0.05, 0.0);
+			level.sendParticles(zone.type().particle, true, false, x, y, z, 1, 0.05, 0.05, 0.05, 0.0);
 		}
-		if ((level.getGameTime() + anomaly.id()) % Math.max(1, config.sound_period) == 0) {
+		if ((level.getGameTime() + zone.id()) % Math.max(1, config.sound_period) == 0) {
 			// громкость 2.0 — слышно примерно на 32 блока, это и есть «подошёл и понял»
-			level.playSound(null, anomaly.x(), player.getY(), anomaly.z(),
-					anomaly.type().sound, SoundSource.AMBIENT, 2.0f, anomaly.type().pitch);
+			level.playSound(null, anchorX, player.getY(), anchorZ,
+					zone.type().sound, SoundSource.AMBIENT, 2.0f, zone.type().pitch);
 		}
 	}
 
 	/** Вход в аномалию: только звук. Текст в UI не выводим — механики объясняются средой. */
-	public static void entry(ServerLevel level, ServerPlayer player, Anomaly anomaly) {
+	public static void entry(ServerLevel level, ServerPlayer player, Zone zone) {
 		level.playSound(null, player.getX(), player.getY(), player.getZ(),
 				SoundEvents.AMETHYST_BLOCK_CHIME, SoundSource.AMBIENT, 1.2f, 0.7f);
 	}
@@ -132,9 +147,9 @@ public final class AnomalyEffects {
 		player.addEffect(new MobEffectInstance(effect, ticks, amplifier, false, true, true));
 	}
 
-	private static void pull(ServerPlayer player, Anomaly anomaly, double force) {
-		double dx = anomaly.x() - player.getX();
-		double dz = anomaly.z() - player.getZ();
+	private static void pull(ServerPlayer player, Zone zone, double force) {
+		double dx = zone.x() - player.getX();
+		double dz = zone.z() - player.getZ();
 		double length = Math.hypot(dx, dz);
 		if (length < 0.5) {
 			return;
@@ -142,9 +157,9 @@ public final class AnomalyEffects {
 		shove(player, dx / length * force, dz / length * force);
 	}
 
-	private static void push(ServerPlayer player, Anomaly anomaly, double force) {
-		double dx = player.getX() - anomaly.x();
-		double dz = player.getZ() - anomaly.z();
+	private static void push(ServerPlayer player, Zone zone, double force) {
+		double dx = player.getX() - zone.x();
+		double dz = player.getZ() - zone.z();
 		double length = Math.hypot(dx, dz);
 		if (length < 0.5) {
 			// в самом центре вихря нечего делить — толкаем в случайную сторону
@@ -168,15 +183,15 @@ public final class AnomalyEffects {
 	}
 
 	/** Разряд: вспышка молнии без огня и урона по округе, урон только вплотную. */
-	static boolean strike(ServerLevel level, ServerPlayer player, Anomaly anomaly, double dose) {
+	static boolean strike(ServerLevel level, ServerPlayer player, Zone zone, double dose) {
 		var random = player.getRandom();
 		if (random.nextFloat() > 0.35f) {
 			return false;
 		}
 		double angle = random.nextDouble() * Math.PI * 2.0;
-		double radius = random.nextDouble() * anomaly.radius();
-		double x = anomaly.x() + Math.cos(angle) * radius;
-		double z = anomaly.z() + Math.sin(angle) * radius;
+		double radius = random.nextDouble() * Math.min(zone.radius(), STRIKE_RANGE);
+		double x = player.getX() + Math.cos(angle) * radius;
+		double z = player.getZ() + Math.sin(angle) * radius;
 
 		LightningBolt bolt = EntityTypes.LIGHTNING_BOLT.create(level, EntitySpawnReason.TRIGGERED);
 		if (bolt == null) {
@@ -192,4 +207,3 @@ public final class AnomalyEffects {
 		return true;
 	}
 }
-

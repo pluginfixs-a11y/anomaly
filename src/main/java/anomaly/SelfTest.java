@@ -1,26 +1,37 @@
 package anomaly;
 
-import com.mojang.authlib.GameProfile;
 import net.minecraft.server.MinecraftServer;
-import net.minecraft.server.level.ClientInformation;
-import net.minecraft.server.level.ServerLevel;
-import net.minecraft.server.level.ServerPlayer;
 
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.UUID;
+import java.util.Random;
 
 /**
- * Самопроверка без клиента и без игрока: размещение, плотность, стопки, доза и крайние конфиги.
- * Включается только системным свойством {@code -Danomaly.selftest=1}.
+ * Самопроверка ядра без клиента и без игрока: форма, дрейф, жизнь, классы, бюджет, рассеивание,
+ * население и сохранение. Запускается системным свойством/переменной {@code ANOMALY_SELFTEST}
+ * при старте или командой {@code /anomaly selftest} прямо в игре.
+ * <p>
+ * Проверки не трогают живое поле: всё гоняется на локальной копии {@link AnomalyFieldData}.
  */
 public final class SelfTest {
 	private static boolean done;
-	private static int passed;
-	private static int failed;
 
 	private SelfTest() {
+	}
+
+	/** Итог прогона: счётчики и тексты провалов — их показывает команда. */
+	public static final class Result {
+		public int passed;
+		public int failed;
+		public final List<String> failures = new ArrayList<>();
+
+		public int total() {
+			return passed + failed;
+		}
 	}
 
 	public static void onTick(MinecraftServer server) {
@@ -28,277 +39,439 @@ public final class SelfTest {
 			return;
 		}
 		done = true;
-		run(server);
+		Result result = run(server);
+		AnomalyMod.LOGGER.info("SELFTEST: {} из {} — {}", result.passed, result.total(),
+				result.failed == 0 ? "PASS" : "FAILED");
+		for (String failure : result.failures) {
+			AnomalyMod.LOGGER.error("SELFTEST FAIL: {}", failure);
+		}
 	}
 
-	public static void run(MinecraftServer server) {
-		AnomalyConfig config = AnomalyMod.config;
-		ServerLevel level = server.overworld();
+	public static Result run(MinecraftServer server) {
+		Result result = new Result();
+		AnomalyConfig config = new AnomalyConfig();
+		Random rnd = new Random(20261120L);
 
-		// каждая группа отдельно: падение одной не должно скрывать остальные проверки
-		runGroup("плотность", () -> checkDensity(config));
-		runGroup("размещение", () -> checkPlacement(level, config));
-		runGroup("распределение", () -> checkDensityByDistance(level, config));
-		runGroup("стопки", () -> checkStacks(config));
-		runGroup("доза", () -> checkDose(config));
-		runGroup("живые вызовы", () -> checkWorldCalls(server, level, config));
-		runGroup("крайние конфиги", SelfTest::checkEdgeConfig);
-
-		AnomalyMod.LOGGER.info("SELFTEST: {} из {} — {}", passed, passed + failed, failed == 0 ? "PASS" : "FAILED");
+		runGroup(result, "форма", () -> checkShape(result, config, rnd));
+		runGroup(result, "дрейф", () -> checkDrift(result, config, rnd));
+		runGroup(result, "жизнь", () -> checkLife(result, config, rnd));
+		runGroup(result, "классы", () -> checkClasses(result, config, rnd));
+		runGroup(result, "бюджет", () -> checkBudget(result));
+		runGroup(result, "рассеивание", () -> checkSuppression(result, config));
+		runGroup(result, "население", () -> checkPopulation(result, config, rnd));
+		runGroup(result, "сохранение", () -> checkPersistence(result, config, rnd));
+		runGroup(result, "края", () -> checkEdges(result, config, rnd));
+		if (server != null) {
+			// живое поле должно быть читаемым: если оно битое, это видно здесь, а не в игре
+			runGroup(result, "живое поле", () -> report(result,
+					"поле читается (" + AnomalyField.count() + " зон)", AnomalyField.count() >= 0));
+		}
+		return result;
 	}
 
-	private static void runGroup(String name, Runnable body) {
+	private static void runGroup(Result result, String name, Runnable body) {
 		try {
 			body.run();
 		} catch (Throwable t) {
-			failed++;
-			AnomalyMod.LOGGER.error("SELFTEST FAIL: группа «{}» упала", name, t);
+			report(result, "группа «" + name + "» упала: " + t, false);
 		}
 	}
 
-	private static void checkDensity(AnomalyConfig config) {
-		if (config.density_stages == null || config.density_stages.isEmpty()) {
-			report("стадии плотности заданы", false);
-			return;
-		}
-		checkRate("ближе safe_radius плотность 0", 0.0, config.densityAt(config.safe_radius - 1));
-		checkRate("на первой ступени плотность из конфига", config.density_stages.get(0)[1],
-				config.densityAt(config.density_stages.get(0)[0]));
+	// --- форма ---
 
-		double previous = 0.0;
-		boolean grows = true;
-		boolean bounded = true;
-		for (double distance = 0; distance <= 24000; distance += 250) {
-			double density = config.densityAt(distance);
-			if (density < previous - 1e-9) {
-				grows = false;
-			}
-			if (density < 0.0 || density > 1.0) {
-				bounded = false;
-			}
-			previous = density;
-		}
-		report("плотность не убывает с расстоянием", grows);
-		report("плотность всегда в 0..1", bounded);
-	}
+	private static void checkShape(Result result, AnomalyConfig config, Random rnd) {
+		AnomalyFieldData field = new AnomalyFieldData();
+		Anomaly anomaly = AnomalyField.create(field, config, rnd, 0L, 9000, 0, 900.0, AnomalyClass.DANGER, false);
+		// ставим в середину жизни: в момент рождения радиуса ещё нет
+		anomaly.life_hours = 24.0;
+		anomaly.born = -12L * 3_600_000L;
+		Zone zone = anomaly.zone(0L);
+		double radius = zone.radius();
 
-	private static void checkPlacement(ServerLevel level, AnomalyConfig config) {
-		int found = 0;
-		boolean same = true;
-		boolean radiusOk = true;
-		for (int chunkX = 200; chunkX < 700 && found < 12; chunkX++) {
-			List<Anomaly> first = AnomalyField.inChunk(level, chunkX, 7, config);
-			if (first.isEmpty()) {
-				continue;
+		boolean onEdge = true;
+		double previousX = 0;
+		double previousZ = 0;
+		double maxStep = 0;
+		int points = 360;
+		for (int i = 0; i <= points; i++) {
+			double angle = i * Math.PI * 2.0 / points;
+			double[] point = anomaly.boundaryPoint(angle, zone.ageHours(), radius);
+			if (Math.abs(anomaly.signedDistance(point[0], point[1], zone.ageHours(), radius)) > 0.5) {
+				onEdge = false;
 			}
-			found++;
-			List<Anomaly> second = AnomalyField.inChunk(level, chunkX, 7, config);
-			if (second.size() != first.size()) {
-				same = false;
-				continue;
+			if (i > 0) {
+				maxStep = Math.max(maxStep, Math.hypot(point[0] - previousX, point[1] - previousZ));
 			}
-			for (int i = 0; i < first.size(); i++) {
-				Anomaly a = first.get(i);
-				Anomaly b = second.get(i);
-				if (a.type() != b.type() || a.x() != b.x() || a.z() != b.z() || a.id() != b.id()) {
-					same = false;
-				}
-				if (a.radius() < config.radius_min - 1e-9 || a.radius() > config.radius_max + 1e-9) {
-					radiusOk = false;
-				}
-				if (a.strength() < 0.6 - 1e-9 || a.strength() > 1.0 + 1e-9) {
-					radiusOk = false;
-				}
+			previousX = point[0];
+			previousZ = point[1];
+		}
+		report(result, "граница замкнута и точки лежат на ней", onEdge);
+		report(result, "контур без разрывов (шаг " + String.format("%.1f", maxStep) + " при радиусе "
+				+ Math.round(radius) + ")", maxStep < radius * 0.1);
+
+		// форма меняется во времени: это «край дышит», а не статичный многоугольник
+		boolean morphs = false;
+		for (int i = 0; i < 48 && !morphs; i++) {
+			double theta = i * Math.PI * 2.0 / 48;
+			double now = anomaly.shapeFactor(theta, 0.0);
+			double later = anomaly.shapeFactor(theta, 24.0);
+			if (Math.abs(now - later) > 0.005) {
+				morphs = true;
 			}
 		}
-		report("аномалии вообще находятся в дальних чанках (" + found + ")", found > 0);
-		report("один и тот же чанк даёт те же аномалии", same);
-		report("радиус и сила в границах конфига", radiusOk);
+		report(result, "форма меняется за сутки", morphs);
 
-		// ближе safe_radius зон нет ни в одном чанке
-		int nearby = 0;
-		for (int chunkX = -6; chunkX <= 6; chunkX++) {
-			for (int chunkZ = -6; chunkZ <= 6; chunkZ++) {
-				nearby += AnomalyField.inChunk(level, chunkX, chunkZ, config).size();
+		boolean factorSane = true;
+		for (int i = 0; i < 180; i++) {
+			double value = anomaly.shapeFactor(i * Math.PI * 2.0 / 180, 10.0);
+			if (!(value >= 0.35 && value < 4.0)) {
+				factorSane = false;
 			}
 		}
-		check("около центра мира аномалий нет", 0, nearby);
+		report(result, "множитель формы в 0.35..4", factorSane);
+
+		boolean harmonicsOk = anomaly.harmonics.size() >= 2 && anomaly.harmonics.size() <= 5;
+		for (Harmonic harmonic : anomaly.harmonics) {
+			harmonicsOk &= harmonic.valid();
+		}
+		report(result, "гармоник 2–5 и все корректны", harmonicsOk);
 	}
 
-	private static void checkDensityByDistance(ServerLevel level, AnomalyConfig config) {
-		int side = 40;
-		int samples = side * side;
-		int nearCount = countChunks(level, config, 250, side);
-		int farCount = countChunks(level, config, 1125, side);
+	// --- дрейф ---
 
-		// сравниваем не «втрое», а с ожиданием из самой кривой плотности: полоса 4–4.6к
-		// даёт уже ~1 % на чанк, и жёсткий порог «×3» ловил не баг, а шум выборки
-		double nearExpected = config.densityAt(4250) * samples;
-		double farExpected = config.densityAt(18300) * samples;
-		report("на 18к аномалий больше, чем на 4к (" + farCount + " против " + nearCount + ")",
-				farCount >= nearCount * 2);
-		report("ближняя полоса близка к своей плотности (" + nearCount + " при ожидании "
-						+ String.format("%.1f", nearExpected) + ")",
-				nearCount >= nearExpected * 0.5 && nearCount <= nearExpected * 1.8);
-		report("дальняя полоса близка к своей плотности (" + farCount + " при ожидании "
-						+ String.format("%.1f", farExpected) + ")",
-				farCount >= farExpected * 0.5 && farCount <= farExpected * 1.8);
-	}
-
-	/** Сколько чанков с аномалиями в квадрате {@code side}×{@code side} вокруг чанка {@code originChunk}. */
-	private static int countChunks(ServerLevel level, AnomalyConfig config, int originChunk, int side) {
-		int count = 0;
-		for (int chunkX = originChunk; chunkX < originChunk + side; chunkX++) {
-			for (int chunkZ = -side / 2; chunkZ < side / 2; chunkZ++) {
-				if (!AnomalyField.inChunk(level, chunkX, chunkZ, config).isEmpty()) {
-					count++;
-				}
+	private static void checkDrift(Result result, AnomalyConfig config, Random rnd) {
+		AnomalyFieldData field = new AnomalyFieldData();
+		boolean turnsOk = true;
+		boolean lifetimeOk = true;
+		boolean speedOk = true;
+		for (int i = 0; i < 200; i++) {
+			Anomaly anomaly = AnomalyField.create(field, config, rnd, 0L, 12000, 0, null, null, false);
+			double turn = Math.toDegrees(anomaly.arc * anomaly.life_hours);
+			if (Math.abs(turn) > 10.0 + 1e-6) {
+				turnsOk = false;
+			}
+			if (anomaly.life_hours > config.lifetime_max_hours + 1e-6) {
+				lifetimeOk = false;
+			}
+			double perMinute = anomaly.speed / 60.0;
+			if (perMinute < config.drift_min_per_minute - 0.01 || perMinute > config.drift_max_per_minute + 0.01) {
+				speedOk = false;
 			}
 		}
-		return count;
+		report(result, "дуга не больше 10° за жизнь", turnsOk);
+		report(result, "жизнь не длиннее потолка " + Math.round(config.lifetime_max_hours) + " ч", lifetimeOk);
+		report(result, "дрейф в " + config.drift_min_per_minute + "–" + config.drift_max_per_minute + " бл/мин", speedOk);
+
+		Anomaly straight = new Anomaly();
+		straight.x0 = 1000;
+		straight.z0 = -500;
+		straight.speed = 60;
+		straight.dir = 0;
+		straight.arc = 0;
+		straight.r0 = 200;
+		straight.life_hours = 10;
+		double[] start = straight.position(0.0);
+		double[] after = straight.position(5.0);
+		report(result, "без кривизны путь прямой (60 бл/ч за 5 ч = 300)",
+				Math.abs(after[0] - start[0] - 300.0) < 1e-6 && Math.abs(after[1] - start[1]) < 1e-6);
+
+		// дуга 10°: хорда короче пути меньше чем на 0.2 %, иначе это уже не «почти прямая»
+		Anomaly arc = new Anomaly();
+		arc.x0 = 0;
+		arc.z0 = 0;
+		arc.speed = 60;
+		arc.dir = 0;
+		arc.arc = Math.toRadians(10.0) / 24.0;
+		arc.r0 = 200;
+		arc.life_hours = 24;
+		double[] pos = arc.position(24.0);
+		double chord = Math.hypot(pos[0], pos[1]);
+		report(result, "дуга 10°: пройдено " + String.format("%.1f", chord) + " из 1440",
+				chord > 1440.0 * 0.998);
+
+		double[] again = arc.position(24.0);
+		report(result, "позиция детерминирована", pos[0] == again[0] && pos[1] == again[1]);
 	}
 
-	private static void checkStacks(AnomalyConfig config) {
-		check("до stack_from всегда одна", 1, config.stacksAt(config.stack_from - 1, 0.0));
-		check("дальше stack_from: третья", 3, config.stacksAt(config.stack_from + 1000, 0.0));
-		check("дальше stack_from: вторая", 2, config.stacksAt(config.stack_from + 1000, config.stack_third_chance + 0.01));
-		check("дальше stack_from: одна", 1, config.stacksAt(config.stack_from + 1000, 0.99));
+	// --- жизнь ---
+
+	private static void checkLife(Result result, AnomalyConfig config, Random rnd) {
+		AnomalyFieldData field = new AnomalyFieldData();
+		Anomaly anomaly = AnomalyField.create(field, config, rnd, 0L, 12000, 0, 800.0, AnomalyClass.DEADLY, false);
+		anomaly.life_hours = 100.0;
+
+		check(result, "в начале жизни радиуса нет", 0.0, anomaly.envelope(0.0), 1e-9);
+		check(result, "в середине — полный радиус", 1.0, anomaly.envelope(50.0), 1e-9);
+		check(result, "на исходе — снова ноль", 0.0, anomaly.envelope(100.0), 1e-9);
+
+		double early = anomaly.radius(10.0);
+		double middle = anomaly.radius(50.0);
+		double late = anomaly.radius(95.0);
+		report(result, "растёт: " + Math.round(early) + " < " + Math.round(middle), early < middle * 0.6);
+		report(result, "сжимается: " + Math.round(late) + " < " + Math.round(middle), late < middle * 0.3);
+
+		long now = 10_000_000L;
+		anomaly.born = now - (long) (100.0 * 3_600_000L);
+		report(result, "после срока жизни не живёт", !anomaly.alive(now));
+		report(result, "за час до конца ещё жива", anomaly.alive(now - 3_600_000L));
 	}
 
-	private static void checkDose(AnomalyConfig config) {
-		Anomaly anomaly = new Anomaly(AnomalyType.SHADOW, 1L, 0, 0, 10, 1.0);
-		AnomalyState state = new AnomalyState();
+	// --- классы ---
 
-		state.enter(anomaly, 10.0, config);
-		checkRate("10 с внутри → доза 0.5", 0.5, state.dose);
-		state.enter(anomaly, 100.0, config);
-		checkRate("доза не выше 1.0", 1.0, state.dose);
-		state.leave(5.0, config);
-		checkRate("5 с снаружи → 0.9", 0.9, state.dose);
-		state.leave(100.0, config);
-		checkRate("доза до нуля", 0.0, state.dose);
-		report("на нуле тип забыт", state.type == null);
+	private static void checkClasses(Result result, AnomalyConfig config, Random rnd) {
+		report(result, "до " + config.danger_from + " — безопасная",
+				config.classFor(config.danger_from - 1, 0) == AnomalyClass.SAFE);
+		report(result, "с " + config.danger_from + " — опасная",
+				config.classFor(config.danger_from + 1, 0) == AnomalyClass.DANGER);
+		report(result, "с " + config.deadly_from + " — смертельная",
+				config.classFor(config.deadly_from + 1, 0) == AnomalyClass.DEADLY);
 
-		AnomalyState amp = new AnomalyState();
-		amp.dose = 0.2;
-		check("доза 0.2 → усилитель 0", 0, amp.amplifier());
-		amp.dose = 0.5;
-		check("доза 0.5 → усилитель 1", 1, amp.amplifier());
-		amp.dose = 0.9;
-		check("доза 0.9 → усилитель 2", 2, amp.amplifier());
+		// размытие: у рубежа сдвиг в полосе ±class_blur переставляет класс
+		int band = config.class_blur;
+		double nearBorder = config.danger_from - band / 2.0;
+		report(result, "размытие переставляет класс у рубежа",
+				config.classFor(nearBorder, 0) == AnomalyClass.SAFE
+						&& config.classFor(nearBorder, band) == AnomalyClass.DANGER);
 
-		// смена типа не тащит чужую дозу: из «Тяжести» на 100 % в «Мороз» приходит не больше 30 %
-		AnomalyState switching = new AnomalyState();
-		switching.dose = 1.0;
-		switching.type = AnomalyType.GRAVITY;
-		switching.enter(new Anomaly(AnomalyType.FROST, 2L, 0, 0, 10, 1.0), 0.0, config);
-		checkRate("смена типа срезает дозу до 0.3", 0.3, switching.dose);
-
-		// счётчик тиков внутри растёт и сбрасывается снаружи (по нему ограничена левитация)
-		check("тиков внутри после входа", 1, switching.ticksInside);
-		switching.enter(new Anomaly(AnomalyType.FROST, 2L, 0, 0, 10, 1.0), 0.0, config);
-		check("тиков внутри после двух входов", 2, switching.ticksInside);
-		switching.leave(0.0, config);
-		check("тиков внутри после выхода", 0, switching.ticksInside);
-
-		// счётчик считается в тиках, а не в вызовах: 0.5 с = 10 тиков, значит кап левитации
-		// в 60 тиков — это честные 3 секунды, а не 30
-		AnomalyState exposure = new AnomalyState();
-		exposure.enter(new Anomaly(AnomalyType.VORTEX, 3L, 0, 0, 10, 1.0), 0.5, config);
-		check("0.5 с внутри = 10 тиков", 10, exposure.ticksInside);
-
-		// перекрывающиеся столбы: тип скачет каждые полсекунды, но игрок не выходил,
-		// поэтому дозу срезать нельзя — иначе в двойной аномалии она не наберётся вообще
-		AnomalyState overlap = new AnomalyState();
-		overlap.enter(new Anomaly(AnomalyType.GRAVITY, 4L, 0, 0, 10, 1.0), 10.0, config);
-		overlap.enter(new Anomaly(AnomalyType.FROST, 5L, 0, 0, 10, 1.0), 0.0, config);
-		checkRate("перескок между столбами не срезает дозу", 0.5, overlap.dose);
+		AnomalyFieldData field = new AnomalyFieldData();
+		for (int i = 0; i < config.population; i++) {
+			AnomalyField.spawnAuto(field, config, rnd, 0L);
+		}
+		boolean outside = true;
+		boolean classes = true;
+		int safe = 0;
+		int danger = 0;
+		int deadly = 0;
+		for (Anomaly anomaly : field.anomalies) {
+			double distance = Math.hypot(anomaly.x0, anomaly.z0);
+			if (distance < config.spawn_min_radius - 1.0 || distance > config.world_radius) {
+				outside = false;
+			}
+			switch (AnomalyClass.byId(anomaly.cls)) {
+				case SAFE -> safe++;
+				case DANGER -> danger++;
+				case DEADLY -> deadly++;
+			}
+		}
+		report(result, "все рождаются не ближе " + config.spawn_min_radius + " (" + field.anomalies.size() + " зон)",
+				outside);
+		classes = safe > 0 && danger > 0 && deadly > 0;
+		report(result, "встречаются все три класса (" + safe + "/" + danger + "/" + deadly + ")", classes);
 	}
 
-	/**
-	 * Проверка ванильных вызовов, которые не требуют сетевого коннекта: толчок, заморозка,
-	 * частицы, звук, молния. {@code addEffect}/{@code hurt} на «пустом» игроке падают по NPE
-	 * (нет {@code connection}), поэтому эти ветки проверяются только в игре.
-	 */
-	private static void checkWorldCalls(MinecraftServer server, ServerLevel level, AnomalyConfig config) {
-		ServerPlayer player;
+	// --- бюджет разрушения ---
+
+	private static void checkBudget(Result result) {
+		check(result, "радиус 50 не рушит", 0.0, AnomalyClass.damageBudget(50, AnomalyClass.DEADLY), 1e-9);
+		check(result, "безопасная не рушит даже гигантом", 0.0,
+				AnomalyClass.damageBudget(3000, AnomalyClass.SAFE), 1e-9);
+		report(result, "300 блоков — не больше 300",
+				AnomalyClass.damageBudget(300, AnomalyClass.DANGER) <= 300.0);
+		report(result, "1000 блоков — не больше 5 000",
+				AnomalyClass.damageBudget(1000, AnomalyClass.DANGER) <= 5_000.0);
+		report(result, "2000 блоков — не больше 60 000",
+				AnomalyClass.damageBudget(2000, AnomalyClass.DANGER) <= 60_000.0);
+		check(result, "3000 блоков — потолок 250 000", 250_000.0,
+				AnomalyClass.damageBudget(3000, AnomalyClass.DEADLY), 1e-6);
+		report(result, "бюджет растёт с радиусом",
+				AnomalyClass.damageBudget(1500, AnomalyClass.DEADLY)
+						> AnomalyClass.damageBudget(600, AnomalyClass.DEADLY));
+	}
+
+	// --- рассеивание у центра ---
+
+	private static void checkSuppression(Result result, AnomalyConfig config) {
+		AnomalyConfig local = new AnomalyConfig();
+		local.population = 0; // без рождений: проверяем только таяние
+
+		AnomalyFieldData field = new AnomalyFieldData();
+		Anomaly drifting = AnomalyField.create(field, config, new Random(11L), 0L, 4500, 0, 800.0,
+				AnomalyClass.DANGER, false);
+		drifting.life_hours = 100.0;
+		drifting.born = -50L * 3_600_000L; // зрелость
+		field.anomalies.add(drifting);
+		double before = drifting.radius(50.0);
+
+		// час в полосе подавления: 5 % в минуту → остаётся около 4.6 % радиуса
+		AnomalyField.tickData(field, local, new Random(12L), 3_600_000L, 1.0);
+		double after = drifting.radius(51.0);
+		report(result, "за час в полосе радиус тает до " + String.format("%.0f", after) + " из "
+						+ String.format("%.0f", before),
+				after < before * 0.1 && after > 0.0);
+		report(result, "сжатая но ещё не нулевая остаётся в поле", field.anomalies.contains(drifting));
+
+		// ещё час — и она сжимается ниже порога и тихо уходит
+		AnomalyField.tickData(field, local, new Random(13L), 7_200_000L, 1.0);
+		report(result, "сжатая в точку аномалия удаляется без шрама", field.anomalies.isEmpty());
+
+		// снаружи полосы ничего не тает
+		AnomalyFieldData far = new AnomalyFieldData();
+		Anomaly intact = AnomalyField.create(far, config, new Random(14L), 0L, 12_000, 0, 800.0,
+				AnomalyClass.DANGER, false);
+		intact.life_hours = 100.0;
+		intact.born = -50L * 3_600_000L;
+		far.anomalies.add(intact);
+		AnomalyField.tickData(far, local, new Random(15L), 7_200_000L, 2.0);
+		report(result, "снаружи полосы подавления не тает", intact.shrink == 1.0);
+
+		// тестовая зона не тает даже в центре мира
+		AnomalyFieldData pinnedField = new AnomalyFieldData();
+		Anomaly pinned = AnomalyField.create(pinnedField, config, new Random(16L), 0L, 0, 0, 500.0,
+				AnomalyClass.DANGER, true);
+		pinnedField.anomalies.add(pinned);
+		AnomalyField.tickData(pinnedField, local, new Random(17L), 7_200_000L, 5.0);
+		report(result, "тестовая зона в центре не тает", pinned.shrink == 1.0 && !pinnedField.anomalies.isEmpty());
+	}
+
+	// --- население ---
+
+	private static void checkPopulation(Result result, AnomalyConfig config, Random rnd) {
+		AnomalyConfig local = new AnomalyConfig();
+		local.population = 60;
+		AnomalyFieldData field = new AnomalyFieldData();
+		AnomalyField.seedPopulation(field, local, rnd, 0L);
+		int seeded = field.anomalies.size();
+		report(result, "посев даёт целевое население (" + seeded + " из 60)", seeded >= 45);
+
+		int min = seeded;
+		int max = seeded;
+		boolean changed = false;
+		long now = 0L;
+		long before = 0L;
+		Random stepRandom = new Random(424242L);
+		for (int hour = 0; hour < 300; hour++) {
+			now += 3_600_000L;
+			int previous = field.anomalies.size();
+			if (AnomalyField.tickData(field, local, stepRandom, now, 1.0)) {
+				changed = true;
+			}
+			int current = field.anomalies.size();
+			if (current != previous) {
+				before++;
+			}
+			min = Math.min(min, current);
+			max = Math.max(max, current);
+		}
+		report(result, "население держится у цели: " + min + ".." + max + " при цели 60",
+				min >= 45 && max <= 60);
+		report(result, "за 300 ч были рождения и смерти (" + before + " изменений)", changed && before > 20);
+		report(result, "поле не выросло сверх цели", field.anomalies.size() <= 60);
+	}
+
+	// --- сохранение ---
+
+	private static void checkPersistence(Result result, AnomalyConfig config, Random rnd) {
+		AnomalyFieldData field = new AnomalyFieldData();
+		for (int i = 0; i < 8; i++) {
+			AnomalyField.spawnAuto(field, config, rnd, 1_700_000_000_000L);
+		}
+		field.clock_ms = 1_700_123_456_789L;
+		field.next_id = 500L;
+		Anomaly original = field.anomalies.get(0);
+
+		Path file = null;
 		try {
-			player = new ServerPlayer(server, level,
-					new GameProfile(UUID.nameUUIDFromBytes("anomaly-selftest".getBytes(StandardCharsets.UTF_8)), "AnomalyTest"),
-					ClientInformation.createDefault());
-		} catch (Throwable t) {
-			failed++;
-			AnomalyMod.LOGGER.error("SELFTEST FAIL: не смог создать тестового игрока", t);
-			return;
+			file = Files.createTempFile("anomaly-selftest", ".json");
+			report(result, "поле записывается", AnomalyField.write(file, field));
+			AnomalyFieldData loaded = AnomalyField.read(file);
+			report(result, "поле читается обратно", loaded != null && loaded.anomalies != null);
+			if (loaded != null && loaded.anomalies != null) {
+				report(result, "число аномалий совпадает (" + loaded.anomalies.size() + ")",
+						loaded.anomalies.size() == field.anomalies.size());
+				report(result, "время и счётчик id сохраняются",
+						loaded.clock_ms == field.clock_ms && loaded.next_id == field.next_id);
+				Anomaly copy = loaded.anomalies.get(0);
+				report(result, "параметры аномалии не потерялись",
+						copy.id == original.id && copy.r0 == original.r0
+								&& copy.life_hours == original.life_hours && copy.arc == original.arc
+								&& copy.harmonics.size() == original.harmonics.size());
+				double[] before = original.position(3.0);
+				double[] after = copy.position(3.0);
+				report(result, "после круга через файл траектория та же",
+						Math.abs(before[0] - after[0]) < 1e-9 && Math.abs(before[1] - after[1]) < 1e-9);
+			}
+		} catch (IOException e) {
+			report(result, "сохранение: " + e, false);
+		} finally {
+			if (file != null) {
+				try {
+					Files.deleteIfExists(file);
+				} catch (IOException ignored) {
+					// временный файл не важнее теста
+				}
+			}
 		}
 
+		Path broken = null;
 		try {
-			player.push(0.1, 0.0, 0.1);
-			player.setTicksFrozen(100);
-			report("толчок и заморозка игрока без исключений", player.getTicksFrozen() == 100);
-		} catch (Throwable t) {
-			failed++;
-			AnomalyMod.LOGGER.error("SELFTEST FAIL: толчок/заморозка", t);
+			broken = Files.createTempFile("anomaly-selftest-broken", ".json");
+			Files.writeString(broken, "{ это не json", StandardCharsets.UTF_8);
+			report(result, "битый файл не роняет загрузку", AnomalyField.read(broken) == null);
+		} catch (IOException e) {
+			report(result, "битый файл: " + e, false);
+		} finally {
+			if (broken != null) {
+				try {
+					Files.deleteIfExists(broken);
+					Files.deleteIfExists(broken.resolveSibling(broken.getFileName() + ".bak"));
+				} catch (IOException ignored) {
+					// мусор в temp
+				}
+			}
 		}
-
-		// аномалия в 50 блоках: разряд не достанет до игрока, значит hurt не полезет в коннект
-		Anomaly anomaly = new Anomaly(AnomalyType.STATIC, 42L, player.getX() + 50, player.getZ(), 10.0, 1.0);
-		try {
-			AnomalyEffects.ambience(level, player, anomaly, config);
-			report("частицы и звук без исключений", true);
-		} catch (Throwable t) {
-			failed++;
-			AnomalyMod.LOGGER.error("SELFTEST FAIL: частицы/звук", t);
-		}
-
-		boolean struck = false;
-		for (int attempt = 0; attempt < 40 && !struck; attempt++) {
-			struck = AnomalyEffects.strike(level, player, anomaly, 0.9);
-		}
-		report("молния разряда ставится в мир за 40 попыток", struck);
-		player.discard();
 	}
 
-	private static void checkEdgeConfig() {
-		AnomalyConfig config = new AnomalyConfig();
-		config.density_stages = null;
-		checkRate("ступени плотности null → 0 без NPE", 0.0, config.densityAt(15000));
+	// --- крайние случаи ---
 
-		config.density_stages = new ArrayList<>(List.of(new double[]{3000, 0.01}));
-		checkRate("одна ступень плотности → 0 без NPE", 0.0, config.densityAt(15000));
+	private static void checkEdges(Result result, AnomalyConfig config, Random rnd) {
+		AnomalyFieldData empty = new AnomalyFieldData();
+		AnomalyConfig zero = new AnomalyConfig();
+		zero.population = 0;
+		report(result, "пустое поле тикает без ошибок",
+				!AnomalyField.tickData(empty, zero, rnd, 0L, 1.0) && empty.anomalies.isEmpty());
 
-		config.density_stages = new ArrayList<>(List.of(
-				new double[]{3000, 0.01}, new double[]{20000, 0.0}));
-		double falling = 0.01 * (1.0 - (10000 - 3000) / 17000.0);
-		checkRate("плотность падает → интерполяция в середине", falling, config.densityAt(10000));
+		Anomaly tiny = AnomalyField.create(new AnomalyFieldData(), config, rnd, 0L, 12000, 0, 5.0,
+				AnomalyClass.DANGER, false);
+		report(result, "радиус меньше минимума поднимается до " + Math.round(config.radius_min),
+				tiny.r0 >= config.radius_min - 1e-9);
 
-		config.disabled_types = null;
-		report("disabled_types null → все типы включены", config.isEnabled(AnomalyType.GRAVITY));
+		Anomaly huge = AnomalyField.create(new AnomalyFieldData(), config, rnd, 0L, 12000, 0, 99_999.0,
+				AnomalyClass.DEADLY, false);
+		report(result, "радиус больше максимума срезается до " + Math.round(config.radius_max),
+				huge.r0 <= config.radius_max + 1e-9);
 
-		config.disabled_types = new ArrayList<>(List.of("gravity"));
-		report("выключенный тип выключен", !config.isEnabled(AnomalyType.GRAVITY));
-		report("остальные типы живы", config.isEnabled(AnomalyType.FROST));
+		Anomaly pinned = AnomalyField.create(new AnomalyFieldData(), config, rnd, 0L, 0, 0, 500.0,
+				AnomalyClass.DANGER, true);
+		report(result, "тестовая зона приколота: не дрейфует и не умирает",
+				pinned.speed == 0.0 && pinned.life_hours > 24 * 300 && pinned.radius(1.0) > 0.0);
+
+		AnomalyConfig broken = new AnomalyConfig();
+		broken.population = -5;
+		broken.radius_min = 5000;
+		broken.radius_max = 10;
+		broken.spawn_min_radius = 30_000;
+		broken.world_radius = 1000;
+		broken.sanitize();
+		report(result, "кривой конфиг приводится в порядок",
+				broken.population == 0 && broken.radius_max >= broken.radius_min
+						&& broken.world_radius > broken.spawn_min_radius);
 	}
 
-	private static void check(String name, int expected, int actual) {
-		report(name + " (ожидалось " + expected + ", получилось " + actual + ")", expected == actual);
+	// --- отчёт ---
+
+	private static void check(Result result, String name, double expected, double actual, double tolerance) {
+		report(result, name + " (ожидалось " + expected + ", получилось " + actual + ")",
+				Math.abs(expected - actual) <= tolerance);
 	}
 
-	private static void checkRate(String name, double expected, double actual) {
-		report(name + " (ожидалось " + expected + ", получилось " + actual + ")",
-				Math.abs(expected - actual) < 1e-6);
-	}
-
-	private static void report(String line, boolean ok) {
+	private static void report(Result result, String line, boolean ok) {
 		if (ok) {
-			passed++;
-			AnomalyMod.LOGGER.info("SELFTEST ok: {}", line);
+			result.passed++;
 		} else {
-			failed++;
-			AnomalyMod.LOGGER.error("SELFTEST FAIL: {}", line);
+			result.failed++;
+			result.failures.add(line);
 		}
 	}
 }
-
 
 

@@ -19,15 +19,15 @@ public final class AnomalyState {
 	public int damageTicks;
 
 	/** Шаг внутрь аномалии: прирост пропорционален силе аномалии и времени. */
-	public void enter(Anomaly anomaly, double seconds, AnomalyConfig config) {
-		if (type != anomaly.type() && ticksInside == 0) {
+	public void enter(Zone zone, double seconds, AnomalyConfig config) {
+		if (type != zone.type() && ticksInside == 0) {
 			// первый вход с улицы: чужую дозу с собой не тащим, иначе шаг из «Тяжести»
 			// в «Мороз» сразу бьёт на полную
 			dose = Math.min(dose, SWITCH_CARRY);
 		}
-		// перескок между перекрывающимися столбами (штатно дальше stack_from) дозу не срезает
-		dose = Math.min(FULL, dose + config.dose_gain_per_second * anomaly.strength() * seconds);
-		type = anomaly.type();
+		// перескок между перекрывающимися зонами дозу не срезает
+		dose = Math.min(FULL, dose + config.dose_gain_per_second * zone.strength() * seconds);
+		type = zone.type();
 		ticksInside += stepTicks(seconds);
 	}
 

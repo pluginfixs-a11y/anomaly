@@ -36,5 +36,15 @@ public enum AnomalyType {
 		this.pitch = pitch;
 	}
 
+	public static AnomalyType byId(String id) {
+		if (id != null) {
+			for (AnomalyType type : values()) {
+				if (type.id.equals(id)) {
+					return type;
+				}
+			}
+		}
+		return SHADOW;
+	}
 }
 

@@ -1,6 +1,7 @@
 package anomaly;
 
 import net.fabricmc.api.ModInitializer;
+import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
 import net.minecraft.server.MinecraftServer;
@@ -16,14 +17,14 @@ import java.util.Map;
 import java.util.UUID;
 
 /**
- * Аномальные зоны: чем дальше от центра мира, тем чаще они встречаются и тем сильнее.
+ * Аномальные поля: чем дальше от центра мира, тем крупнее и злее области.
  * <p>
  * Мод серверный: клиенту ставить нечего, всё показывается ванильными каналами — эффекты,
- * частицы, звуки, строка над хотбаром, толчок скорости.
+ * частицы, звуки, толчок скорости.
  * <p>
- * Механика: аномалия — вертикальный столб с радиусом 6–14 блоков. Пока игрок внутри, копится
- * доза (0..1); она задаёт силу эффекта и спадает не мгновенно, поэтому «хвост» держится ещё
- * несколько десятков секунд после выхода.
+ * Поле живёт в {@code world/data/anomaly_field.json} и обновляется раз в секунду: рождения,
+ * смерти, сжатие у центра. Форма и позиция каждой аномалии — замкнутые функции возраста,
+ * поэтому тик не интегрирует движение и не копит ошибку.
  */
 public class AnomalyMod implements ModInitializer {
 	public static final String MOD_ID = "anomaly";
@@ -36,40 +37,43 @@ public class AnomalyMod implements ModInitializer {
 	@Override
 	public void onInitialize() {
 		config = AnomalyConfig.load();
-		LOGGER.info("Anomaly: зон нет ближе {} блоков, дальше плотность {}..{} на чанк; доза +{}/с, спад {}/с; типы: {}",
-				config.safe_radius,
-				String.format("%.3f", config.densityAt(config.safe_radius)),
-				String.format("%.3f", config.densityAt(20000)),
-				config.dose_gain_per_second, config.dose_decay_per_second,
-				AnomalyField.enabledTypes(config));
+		LOGGER.info("Anomaly: население {}, рождение с {} блоков, мир до {}, радиус {}-{}, жизнь до {} ч",
+				config.population, config.spawn_min_radius, config.world_radius,
+				config.radius_min, config.radius_max, config.lifetime_max_hours);
 
+		ServerLifecycleEvents.SERVER_STARTED.register(AnomalyField::load);
+		ServerLifecycleEvents.SERVER_STOPPING.register(server -> AnomalyField.save());
 		ServerTickEvents.END_SERVER_TICK.register(AnomalyMod::tick);
 		ServerPlayConnectionEvents.DISCONNECT.register((handler, server) -> STATES.remove(handler.player.getUUID()));
 		AnomalyCommand.register();
 
-		if (System.getProperty("anomaly.selftest") != null) {
+		if (System.getProperty("anomaly.selftest") != null || System.getenv("ANOMALY_SELFTEST") != null) {
 			ServerTickEvents.START_SERVER_TICK.register(SelfTest::onTick);
-			LOGGER.info("Anomaly: включена самопроверка (-Danomaly.selftest)");
+			LOGGER.info("Anomaly: включена самопроверка (ANOMALY_SELFTEST)");
 		}
 	}
 
 	public static void tick(MinecraftServer server) {
-		if (!config.enabled) {
+		if (config == null || !config.enabled) {
 			return;
 		}
-		int period = Math.max(1, config.tick_period);
-		if (server.getTickCount() % period != 0) {
-			return;
+		int tick = server.getTickCount();
+		// поле — раз в секунду: этого хватает для дрейфа в единицы блоков в минуту
+		if (tick % 20 == 0) {
+			AnomalyField.tick(server);
 		}
-		double seconds = period / 20.0;
-		for (ServerPlayer player : server.getPlayerList().getPlayers()) {
-			try {
-				tickPlayer(player, seconds);
-			} catch (RuntimeException e) {
-				// одна кривая аномалия не должна ронять цикл остальным игрокам
-				LOGGER.error("Anomaly: ошибка на игроке {}", player.getName().getString(), e);
+		if (tick % Math.max(1, config.tick_period) == 0) {
+			double seconds = Math.max(1, config.tick_period) / 20.0;
+			for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+				try {
+					tickPlayer(player, seconds);
+				} catch (RuntimeException e) {
+					// одна кривая аномалия не должна ронять цикл остальным игрокам
+					LOGGER.error("Anomaly: ошибка на игроке {}", player.getName().getString(), e);
+				}
 			}
 		}
+		AnomalyDebug.tick(server);
 	}
 
 	private static void tickPlayer(ServerPlayer player, double seconds) {
@@ -82,14 +86,14 @@ public class AnomalyMod implements ModInitializer {
 			return;
 		}
 
-		List<Anomaly> near = AnomalyField.near(level, player.getX(), player.getZ(), config.view_range, config);
+		List<Zone> near = AnomalyField.near(level, player.getX(), player.getZ(), config.view_range);
 
-		Anomaly inside = null;
-		for (Anomaly anomaly : near) {
-			AnomalyEffects.ambience(level, player, anomaly, config);
-			if (anomaly.contains(player.getX(), player.getZ())
-					&& (inside == null || anomaly.strength() > inside.strength())) {
-				inside = anomaly;
+		Zone inside = null;
+		for (Zone zone : near) {
+			AnomalyEffects.ambience(level, player, zone, config);
+			if (zone.contains(player.getX(), player.getZ())
+					&& (inside == null || zone.strength() > inside.strength())) {
+				inside = zone;
 			}
 		}
 
@@ -113,4 +117,3 @@ public class AnomalyMod implements ModInitializer {
 		return STATES.get(playerId);
 	}
 }
-

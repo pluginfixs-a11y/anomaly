@@ -1,5 +1,8 @@
 package anomaly;
 
+import com.mojang.brigadier.arguments.DoubleArgumentType;
+import com.mojang.brigadier.arguments.IntegerArgumentType;
+import com.mojang.brigadier.arguments.StringArgumentType;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import net.minecraft.ChatFormatting;
 import net.minecraft.commands.CommandSourceStack;
@@ -7,13 +10,17 @@ import net.minecraft.commands.Commands;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.util.Mth;
+import net.minecraft.world.level.levelgen.Heightmap;
 
-import java.util.Comparator;
 import java.util.List;
 
 /**
- * {@code /anomaly} — только для операторов: посмотреть настройки, свою дозу и что рядом.
- * Нужна владельцу, чтобы проверить мод без клиентских модов и без полёта на 20к.
+ * {@code /anomaly} — инструменты проверки прямо в игре, без клиентских модов и без полёта наугад.
+ * <p>
+ * Всё, что нужно, чтобы увидеть поле своими глазами: список живых зон, тестовая зона под ногами,
+ * телепорт на край, светящийся контур из частиц и ускорение времени, чтобы жизненный цикл
+ * прошёл за минуты, а не за неделю.
  */
 public final class AnomalyCommand {
 	private AnomalyCommand() {
@@ -24,58 +31,327 @@ public final class AnomalyCommand {
 				dispatcher.register(Commands.literal("anomaly")
 						.requires(source -> Commands.LEVEL_GAMEMASTERS.check(source.permissions()))
 						.executes(context -> status(context.getSource()))
-						.then(Commands.literal("dose").executes(context -> dose(context.getSource())))
-						.then(Commands.literal("near").executes(context -> near(context.getSource())))));
+						.then(Commands.literal("field")
+								.executes(context -> field(context.getSource(), 6))
+								.then(Commands.argument("count", IntegerArgumentType.integer(1, 40))
+										.executes(context -> field(context.getSource(),
+												IntegerArgumentType.getInteger(context, "count")))))
+						.then(Commands.literal("here").executes(context -> here(context.getSource())))
+						.then(Commands.literal("stats").executes(context -> stats(context.getSource())))
+						.then(Commands.literal("spawn")
+								.executes(context -> spawn(context.getSource(), null, null))
+								.then(Commands.argument("radius", DoubleArgumentType.doubleArg(10.0, 5000.0))
+										.executes(context -> spawn(context.getSource(),
+												DoubleArgumentType.getDouble(context, "radius"), null))
+										.then(Commands.argument("class", StringArgumentType.word())
+												.executes(context -> spawn(context.getSource(),
+														DoubleArgumentType.getDouble(context, "radius"),
+														StringArgumentType.getString(context, "class"))))))
+						.then(Commands.literal("kill")
+								.then(Commands.argument("target", StringArgumentType.word())
+										.executes(context -> kill(context.getSource(),
+												StringArgumentType.getString(context, "target")))))
+						.then(Commands.literal("tp")
+								.then(Commands.argument("target", StringArgumentType.word())
+										.executes(context -> teleport(context.getSource(),
+												StringArgumentType.getString(context, "target"), false))))
+						.then(Commands.literal("edge")
+								.then(Commands.argument("target", StringArgumentType.word())
+										.executes(context -> teleport(context.getSource(),
+												StringArgumentType.getString(context, "target"), true))))
+						.then(Commands.literal("show").executes(context -> show(context.getSource())))
+						.then(Commands.literal("timescale")
+								.executes(context -> timescale(context.getSource(), null))
+								.then(Commands.argument("scale", DoubleArgumentType.doubleArg(0.0, 100000.0))
+										.executes(context -> timescale(context.getSource(),
+												DoubleArgumentType.getDouble(context, "scale")))))
+						.then(Commands.literal("selftest").executes(context -> selftest(context.getSource())))
+						.then(Commands.literal("save").executes(context -> save(context.getSource())))));
 	}
+
+	// --- сводка ---
 
 	private static int status(CommandSourceStack source) {
 		AnomalyConfig config = AnomalyMod.config;
+		AnomalyField.Stats stats = AnomalyField.stats();
 		reply(source, "Аномалии: " + (config.enabled ? "включены" : "выключены")
-				+ (config.overworld_only ? ", только Верхний мир" : ", все измерения"));
-		reply(source, "Ближе " + config.safe_radius + " блоков зон нет; плотность: "
-				+ String.format("%.3f", config.densityAt(config.safe_radius)) + " на 3к → "
-				+ String.format("%.3f", config.densityAt(20000)) + " на 20к (на чанк)");
-		reply(source, "Радиус " + config.radius_min + ".." + config.radius_max
-				+ ", стопки с " + config.stack_from
-				+ ", доза +" + config.dose_gain_per_second + "/с, спад " + config.dose_decay_per_second + "/с");
-		reply(source, "Типы: " + AnomalyField.enabledTypes(config));
+				+ ", зон " + stats.total() + " (цель " + config.population + ")");
+		reply(source, "Рождение с " + config.spawn_min_radius + " блоков, мир до " + config.world_radius
+				+ ", радиус " + Math.round(config.radius_min) + "–" + Math.round(config.radius_max)
+				+ ", жизнь до " + Math.round(config.lifetime_max_hours) + " ч");
+		reply(source, "Классы: до " + config.danger_from + " безопасные, до " + config.deadly_from
+				+ " опасные, дальше смертельные (размытие ±" + config.class_blur + ")");
+		reply(source, "Рассеивание: внутри " + config.dissipate_radius + ", подавление до " + config.suppress_until
+				+ "; время поля ×" + trim(AnomalyClock.scale()) + " (" + timeHint() + ")");
+		reply(source, "Проверка: /anomaly field · here · spawn · edge · show · timescale · selftest");
 		return 1;
 	}
 
-	private static int dose(CommandSourceStack source) throws com.mojang.brigadier.exceptions.CommandSyntaxException {
-		ServerPlayer player = source.getPlayerOrException();
-		AnomalyState state = AnomalyMod.stateOf(player.getUUID());
-		if (state == null || state.type == null) {
-			reply(source, "Доза 0 % (в аномалии не был)");
+	private static int stats(CommandSourceStack source) {
+		AnomalyField.Stats stats = AnomalyField.stats();
+		reply(source, "Зон " + stats.total() + ": безопасных " + stats.safe()
+				+ ", опасных " + stats.danger() + ", смертельных " + stats.deadly()
+				+ (stats.pinned() > 0 ? ", тестовых " + stats.pinned() : ""));
+		reply(source, String.format("Покрыто %.1f %% площади мира, суммарный бюджет разрушения %s блоков",
+				stats.coveragePercent(), thousands(stats.budget())));
+		reply(source, "Время поля " + String.format("%.1f", AnomalyClock.fieldMs() / 3_600_000.0)
+				+ " ч, множитель ×" + trim(AnomalyClock.scale()));
+		return 1;
+	}
+
+	private static int field(CommandSourceStack source, int count) {
+		ServerPlayer player = source.getPlayer();
+		double px = player != null ? player.getX() : source.getPosition().x;
+		double pz = player != null ? player.getZ() : source.getPosition().z;
+		List<Anomaly> list = AnomalyField.sortedByDistance(px, pz);
+		if (list.isEmpty()) {
+			reply(source, "Поле пустое: ни одной аномалии. /anomaly spawn — сделать тестовую");
 			return 1;
 		}
-		reply(source, state.type.title + " · доза " + state.percent() + " % · усилитель " + state.amplifier());
-		return 1;
-	}
-
-	private static int near(CommandSourceStack source) throws com.mojang.brigadier.exceptions.CommandSyntaxException {
-		ServerPlayer player = source.getPlayerOrException();
-		ServerLevel level = player.level();
+		long now = AnomalyClock.now();
 		AnomalyConfig config = AnomalyMod.config;
-		List<Anomaly> found = AnomalyField.near(level, player.getX(), player.getZ(), config.view_range, config);
-		if (found.isEmpty()) {
-			reply(source, "В " + config.view_range + " блоках аномалий нет");
-			return 1;
-		}
-		found.sort(Comparator.comparingDouble(anomaly -> anomaly.distanceTo(player.getX(), player.getZ())));
 		int shown = 0;
-		for (Anomaly anomaly : found) {
-			if (shown++ >= 6) {
+		for (Anomaly anomaly : list) {
+			if (shown++ >= count) {
 				break;
 			}
-			reply(source, anomaly.type().title + " · радиус " + Math.round(anomaly.radius())
-					+ " · " + Math.round(anomaly.distanceTo(player.getX(), player.getZ())) + " блоков"
-					+ (anomaly.contains(player.getX(), player.getZ()) ? " · вы внутри" : ""));
+			Zone zone = anomaly.zone(now);
+			double distance = Math.hypot(zone.x() - px, zone.z() - pz);
+			reply(source, "#" + anomaly.id
+					+ (anomaly.pinned ? " [тест]" : "")
+					+ " " + classTag(zone.cls()) + " r " + Math.round(anomaly.r0)
+					+ " · " + String.format("%.1f", zone.ageHours()) + "/" + String.format("%.1f", anomaly.life_hours) + " ч"
+					+ " · дрейф " + Math.round(anomaly.speed) + " бл/ч"
+					+ " · дуга " + String.format("%.1f", zone.turnDegrees()) + "°"
+					+ " · " + blocks(distance) + " от точки");
 		}
 		return 1;
+	}
+
+	private static int here(CommandSourceStack source) {
+		ServerPlayer player = source.getPlayer();
+		double px = player != null ? player.getX() : source.getPosition().x;
+		double pz = player != null ? player.getZ() : source.getPosition().z;
+		Anomaly anomaly = AnomalyField.nearest(px, pz);
+		if (anomaly == null) {
+			reply(source, "Аномалий нет вообще");
+			return 1;
+		}
+		Zone zone = anomaly.zone(AnomalyClock.now());
+		double signed = zone.signedDistance(px, pz);
+		double drift = Math.hypot(zone.x() - anomaly.x0, zone.z() - anomaly.z0);
+
+		reply(source, "#" + anomaly.id + (anomaly.pinned ? " [тест]" : "") + " " + classTag(zone.cls())
+				+ " · " + (signed <= 0 ? "точка ВНУТРИ" : "снаружи") + " · до края " + blocks(Math.abs(signed)));
+		reply(source, "Радиус " + Math.round(zone.radius()) + " из " + Math.round(anomaly.r0)
+				+ " (жизнь " + String.format("%.1f", zone.ageHours()) + "/" + String.format("%.1f", anomaly.life_hours)
+				+ " ч, фаза " + phase(anomaly, zone.ageHours()) + ")");
+		reply(source, "Центр " + coord(zone.x(), zone.z()) + " · от центра мира " + blocks(Math.hypot(zone.x(), zone.z()))
+				+ " · ядро " + blocks(Math.hypot(zone.coreX() - zone.x(), zone.coreZ() - zone.z())) + " от центра");
+		reply(source, "Дрейф " + Math.round(anomaly.speed) + " бл/ч, дуга " + String.format("%.1f", zone.turnDegrees())
+				+ "°, прошла " + blocks(drift) + " от рождения; тип " + zone.type().title.toLowerCase());
+		reply(source, "Бюджет разрушения " + thousands(zone.budget()) + " блоков"
+				+ (zone.cls().damages() ? "" : " (безопасная не рушит)"));
+		return 1;
+	}
+
+	// --- создание и удаление ---
+
+	private static int spawn(CommandSourceStack source, Double radius, String classArg)
+			throws com.mojang.brigadier.exceptions.CommandSyntaxException {
+		AnomalyClass cls = null;
+		if (classArg != null) {
+			cls = parseClass(classArg);
+			if (cls == null) {
+				reply(source, "Класс бывает safe, danger или deadly", ChatFormatting.RED);
+				return 0;
+			}
+		}
+		ServerPlayer player = source.getPlayerOrException();
+		Anomaly anomaly = AnomalyField.spawnTest(player.getX(), player.getZ(), radius, cls);
+		Zone zone = anomaly.zone(AnomalyClock.now());
+		reply(source, "Тестовая аномалия #" + anomaly.id + " " + classTag(zone.cls())
+				+ " r " + Math.round(anomaly.r0) + " под ногами. Приколота: не дрейфует, не гаснет, не умирает.");
+		reply(source, "/anomaly show — контур частицами, /anomaly edge #" + anomaly.id
+				+ " — встать у края, /anomaly timescale 600 — ускорить форму");
+		return 1;
+	}
+
+	private static int kill(CommandSourceStack source, String target)
+			throws com.mojang.brigadier.exceptions.CommandSyntaxException {
+		ServerPlayer player = source.getPlayerOrException();
+		Anomaly anomaly = AnomalyField.find(target, player.getX(), player.getZ());
+		if (anomaly == null) {
+			reply(source, "Не нашёл аномалию «" + target + "»", ChatFormatting.RED);
+			return 0;
+		}
+		AnomalyField.remove(anomaly.id);
+		reply(source, "Аномалия #" + anomaly.id + " убрана из поля");
+		return 1;
+	}
+
+	// --- перемещение ---
+
+	private static int teleport(CommandSourceStack source, String target, boolean edge)
+			throws com.mojang.brigadier.exceptions.CommandSyntaxException {
+		ServerPlayer player = source.getPlayerOrException();
+		Anomaly anomaly = AnomalyField.find(target, player.getX(), player.getZ());
+		if (anomaly == null) {
+			reply(source, "Не нашёл аномалию «" + target + "»", ChatFormatting.RED);
+			return 0;
+		}
+		ServerLevel level = player.level();
+		Zone zone = anomaly.zone(AnomalyClock.now());
+		double x;
+		double z;
+		if (edge) {
+			double angle = Math.atan2(player.getZ() - zone.z(), player.getX() - zone.x());
+			double[] point = anomaly.boundaryPoint(angle, zone.ageHours(), zone.radius());
+			// на два блока наружу: стоим у края и смотрим внутрь
+			x = point[0] + Math.cos(angle) * 2.0;
+			z = point[1] + Math.sin(angle) * 2.0;
+		} else {
+			x = zone.coreX();
+			z = zone.coreZ();
+		}
+		int y = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, Mth.floor(x), Mth.floor(z));
+		player.teleportTo(x + 0.5, y + 0.2, z + 0.5);
+		reply(source, (edge ? "Вы у края " : "Вы в ядре ") + "#" + anomaly.id + " " + classTag(zone.cls())
+				+ ", радиус " + Math.round(zone.radius()) + ". /anomaly show — включить контур");
+		return 1;
+	}
+
+	// --- отладка ---
+
+	private static int show(CommandSourceStack source) throws com.mojang.brigadier.exceptions.CommandSyntaxException {
+		ServerPlayer player = source.getPlayerOrException();
+		boolean on = AnomalyDebug.toggle(player.getUUID());
+		if (!on) {
+			reply(source, "Контур выключен");
+			return 1;
+		}
+		Anomaly nearest = AnomalyField.nearest(player.getX(), player.getZ());
+		if (nearest == null) {
+			reply(source, "Контур включён, но аномалий нет: /anomaly spawn", ChatFormatting.YELLOW);
+			return 1;
+		}
+		Zone zone = nearest.zone(AnomalyClock.now());
+		double signed = zone.signedDistance(player.getX(), player.getZ());
+		reply(source, "Контур включён: ближайшая #" + nearest.id + " " + classTag(zone.cls())
+				+ ", до края " + blocks(Math.abs(signed)));
+		if (Math.abs(signed) > 120) {
+			reply(source, "Край дальше 120 блоков — частицы не долетят. /anomaly edge #" + nearest.id,
+					ChatFormatting.YELLOW);
+		}
+		return 1;
+	}
+
+	private static int timescale(CommandSourceStack source, Double scale) {
+		if (scale == null) {
+			reply(source, "Время поля ×" + trim(AnomalyClock.scale()) + " (" + timeHint() + ")");
+			return 1;
+		}
+		AnomalyClock.setScale(scale);
+		reply(source, "Время поля ×" + trim(scale) + " (" + timeHint() + ")");
+		if (scale > 60) {
+			reply(source, "Аномалии будут рождаться и умирать на глазах; вернуть — /anomaly timescale 1",
+					ChatFormatting.YELLOW);
+		}
+		return 1;
+	}
+
+	private static int selftest(CommandSourceStack source) {
+		SelfTest.Result result = SelfTest.run(source.getServer());
+		reply(source, "Самопроверка: " + result.passed + " из " + (result.passed + result.failed)
+				+ (result.failed == 0 ? " — всё в порядке" : " — есть ошибки"),
+				result.failed == 0 ? ChatFormatting.GREEN : ChatFormatting.RED);
+		int shown = 0;
+		for (String failure : result.failures) {
+			if (shown++ >= 8) {
+				reply(source, "…и ещё " + (result.failures.size() - 8) + " (полностью — в логе)");
+				break;
+			}
+			reply(source, "FAIL: " + failure, ChatFormatting.RED);
+		}
+		return result.failed == 0 ? 1 : 0;
+	}
+
+	private static int save(CommandSourceStack source) {
+		boolean saved = AnomalyField.save();
+		reply(source, saved ? "Поле записано: " + AnomalyField.path() : "Не настроен путь сохранения",
+				saved ? ChatFormatting.GREEN : ChatFormatting.RED);
+		return saved ? 1 : 0;
+	}
+
+	// --- текст ---
+
+	private static AnomalyClass parseClass(String value) {
+		for (AnomalyClass cls : AnomalyClass.values()) {
+			if (cls.id.equalsIgnoreCase(value)) {
+				return cls;
+			}
+		}
+		return null;
+	}
+
+	private static String classTag(AnomalyClass cls) {
+		return switch (cls) {
+			case SAFE -> "безопасная";
+			case DANGER -> "опасная";
+			case DEADLY -> "смертельная";
+		};
+	}
+
+	private static String phase(Anomaly anomaly, double ageHours) {
+		double frac = ageHours / Math.max(0.001, anomaly.life_hours);
+		if (frac < Anomaly.GROW_UNTIL) {
+			return "рост";
+		}
+		return frac > Anomaly.DECAY_FROM ? "распад" : "зрелость";
+	}
+
+	private static String coord(double x, double z) {
+		return Math.round(x) + ", " + Math.round(z);
+	}
+
+	private static String blocks(double value) {
+		if (value >= 1000.0) {
+			return String.format("%.1fк", value / 1000.0);
+		}
+		return String.valueOf(Math.round(value));
+	}
+
+	private static String thousands(double value) {
+		return String.format(java.util.Locale.ROOT, "%,.0f", value).replace(',', ' ');
+	}
+
+	private static String trim(double value) {
+		if (value == Math.rint(value)) {
+			return String.valueOf((long) value);
+		}
+		return String.format("%.1f", value);
+	}
+
+	private static String timeHint() {
+		double scale = AnomalyClock.scale();
+		if (scale <= 0) {
+			return "время стоит";
+		}
+		if (scale == 1) {
+			return "как в жизни";
+		}
+		double realSecondsPerHour = 3600.0 / scale;
+		if (realSecondsPerHour >= 60) {
+			return "час поля за " + trim(realSecondsPerHour / 60.0) + " мин";
+		}
+		return "час поля за " + trim(realSecondsPerHour) + " с";
 	}
 
 	private static void reply(CommandSourceStack source, String text) {
-		source.sendSuccess(() -> Component.literal(text).withStyle(ChatFormatting.AQUA), false);
+		reply(source, text, ChatFormatting.AQUA);
+	}
+
+	private static void reply(CommandSourceStack source, String text, ChatFormatting format) {
+		source.sendSuccess(() -> Component.literal(text).withStyle(format), false);
 	}
 }
