@@ -1,0 +1,23 @@
+{
+	"schemaVersion": 1,
+	"id": "anomaly",
+	"version": "${version}",
+	"name": "Anomaly Fields",
+	"description": "Аномальные зоны по расстоянию от центра мира: тянут, отталкивают, морозят, гасят свет и бьют разрядом. Доза копится, пока стоишь внутри, и спадает медленно — эффект держится ещё долго после выхода.",
+	"authors": [
+		"deaefer"
+	],
+	"license": "CC0-1.0",
+	"environment": "server",
+	"entrypoints": {
+		"main": [
+			"anomaly.AnomalyMod"
+		]
+	},
+	"depends": {
+		"fabricloader": ">=0.20.1",
+		"minecraft": "${minecraft_dep}",
+		"java": ">=25",
+		"fabric-api": "*"
+	}
+}
