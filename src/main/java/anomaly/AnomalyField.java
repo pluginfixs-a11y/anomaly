@@ -39,6 +39,7 @@ public final class AnomalyField {
 	private static Random random = new Random(1L);
 	private static long lastSaveMs;
 	private static long lastTickFieldMs;
+	private static boolean dirty;
 	private AnomalyField() {
 	}
 
@@ -60,15 +61,20 @@ public final class AnomalyField {
 			data.next_id = Math.max(data.next_id, anomaly.id + 1L);
 		}
 		if (data.clock_ms <= 0L) {
-			data.clock_ms = data.anomalies.isEmpty() ? 0L : newestBorn() + 1L;
+			// без сохранённых часов продолжаем от самой поздней аномалии; отрицательный сдвиг
+			// сделал бы всех моложе, чем они есть
+			data.clock_ms = Math.max(0L, newestBorn() + 1L);
 		}
 		AnomalyClock.setFieldMs(data.clock_ms);
+		// множитель времени — отладочный, он не должен переезжать из мира в мир этого JVM
+		AnomalyClock.resetScale();
 		lastTickFieldMs = data.clock_ms;
 		lastSaveMs = System.currentTimeMillis();
 		random = new Random(server.overworld().getSeed() ^ 0x9E3779B97F4A7C15L ^ System.nanoTime());
 
 		AnomalyConfig config = AnomalyMod.config;
-		if (config != null && (fresh || data.anomalies.isEmpty())) {
+		// выключенный мод не должен ни сеять население, ни писать файл в мир
+		if (config != null && config.enabled && (fresh || data.anomalies.isEmpty())) {
 			seedPopulation(data, config, random, AnomalyClock.now());
 			saveNow();
 		}
@@ -98,10 +104,14 @@ public final class AnomalyField {
 		lastTickFieldMs = now;
 
 		boolean changed = tickData(data, config, random, now, hours);
+		if (changed) {
+			dirty = true;
+		}
 		long real = System.currentTimeMillis();
-		// изменения (рождение/смерть/сжатие) пишем сразу, а часы — раз в пять минут:
-		// файл на 250 зон это ~400 КБ, и раз в минуту его гонять на диск незачем
-		if (changed || real - lastSaveMs > 5 * 60_000L) {
+		// файл на 250 зон — ~400 КБ, поэтому не чаще раза в 30 с на изменения и раз в пять
+		// минут для часов; на остановке сервера пишем всегда
+		boolean due = real - lastSaveMs > 30_000L;
+		if ((dirty && due) || real - lastSaveMs > 5 * 60_000L) {
 			saveNow();
 		}
 	}
@@ -115,25 +125,35 @@ public final class AnomalyField {
 		Iterator<Anomaly> iterator = field.anomalies.iterator();
 		while (iterator.hasNext()) {
 			Anomaly anomaly = iterator.next();
+			// тестовая зона приколота: не стареет, не тает и не снимается сама
+			if (anomaly.pinned) {
+				continue;
+			}
 			if (!anomaly.alive(now)) {
 				iterator.remove();
 				changed = true;
 				continue;
 			}
-			if (anomaly.pinned) {
-				continue;
-			}
 			double ageHours = anomaly.ageHours(now);
 			double[] pos = anomaly.position(ageHours);
+			if (!Double.isFinite(pos[0]) || !Double.isFinite(pos[1])) {
+				// битая запись (например dir=NaN из ручного JSON) не должна навсегда занимать слот
+				iterator.remove();
+				changed = true;
+				continue;
+			}
 			double distance = Math.hypot(pos[0], pos[1]);
 			if (distance > config.world_radius + 500.0) {
 				iterator.remove();
 				changed = true;
 				continue;
 			}
-			// в полосе подавления аномалия активно рассасывается: 5 % радиуса в минуту
+			// в полосе подавления аномалия активно рассасывается, и тем быстрее, чем ближе к центру:
+			// 25 % скорости на 6к, полная — на 3к
 			if (distance < config.suppress_until) {
-				double perMinute = 1.0 - config.dissipate_rate_per_min / 100.0;
+				double span = Math.max(1.0, config.suppress_until - config.dissipate_radius);
+				double closeness = Math.max(0.0, Math.min(1.0, (config.suppress_until - distance) / span));
+				double perMinute = 1.0 - config.dissipate_rate_per_min * (0.25 + 0.75 * closeness) / 100.0;
 				anomaly.shrink *= Math.pow(perMinute, hours * 60.0);
 			}
 			// сжалась в точку — тихо уходит из поля, без шрама
@@ -255,6 +275,9 @@ public final class AnomalyField {
 			return nearest(px, pz);
 		}
 		String value = token.trim().toLowerCase(java.util.Locale.ROOT);
+		if (value.startsWith("#")) {
+			value = value.substring(1);
+		}
 		switch (value) {
 			case "nearest", "ближ", "ближайшая" -> {
 				return nearest(px, pz);
@@ -343,7 +366,8 @@ public final class AnomalyField {
 			if (anomaly.pinned) {
 				pinned++;
 			}
-			area += Math.PI * zone.radius() * zone.radius();
+			// площадь эллипса, а не круга: вытянутость до 2.25 заметно меняет покрытие
+			area += Math.PI * zone.radius() * zone.radius() * Math.max(1.0, anomaly.stretch);
 			budget += zone.budget();
 		}
 		double worldArea = Math.PI * (config == null ? 20000.0 : config.world_radius) * (config == null ? 20000.0 : config.world_radius);
@@ -353,17 +377,15 @@ public final class AnomalyField {
 
 	// --- сохранение ---
 
-	static void saveNow() {
+	static boolean saveNow() {
 		data.clock_ms = AnomalyClock.now();
 		lastSaveMs = System.currentTimeMillis();
-		if (path != null) {
-			write(path, data);
-		}
+		dirty = false;
+		return path != null && write(path, data);
 	}
 
 	public static boolean save() {
-		saveNow();
-		return path != null;
+		return saveNow();
 	}
 
 	static boolean write(Path file, AnomalyFieldData field) {

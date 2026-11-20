@@ -75,7 +75,8 @@ public final class Anomaly {
 	}
 
 	public boolean alive(long now) {
-		return ageHours(now) < life_hours;
+		// тестовая зона не стареет: она живёт, пока её не уберут руками
+		return pinned || ageHours(now) < life_hours;
 	}
 
 	public double leftHours(long now) {
@@ -166,7 +167,9 @@ public final class Anomaly {
 
 	/** Радиус с учётом фазы жизни и уже случившегося сжатия у центра. */
 	public double radius(double ageHours) {
-		return Math.max(0.0, r0 * envelope(ageHours) * shrink);
+		// тестовая зона сразу полноразмерная: иначе её не видно первые часы после /anomaly spawn
+		double full = r0 * (pinned ? 1.0 : envelope(ageHours));
+		return Math.max(0.0, full * shrink);
 	}
 
 	/**
@@ -199,9 +202,11 @@ public final class Anomaly {
 	public double[] boundaryPoint(double worldAngle, double ageHours, double radius) {
 		double[] pos = position(ageHours);
 		double local = worldAngle - rotation;
-		double theta = Math.atan2(Math.sin(local) * Math.max(0.2, stretch), Math.cos(local));
+		// то же ограничение вытянутости, что и в signedDistance: иначе точка уезжает с границы
+		double stretchValue = Math.max(0.2, stretch);
+		double theta = Math.atan2(Math.sin(local) * stretchValue, Math.cos(local));
 		double edge = shapeFactor(theta, ageHours) * radius;
-		double lx = Math.cos(theta) * edge * stretch;
+		double lx = Math.cos(theta) * edge * stretchValue;
 		double lz = Math.sin(theta) * edge;
 		double cos = Math.cos(rotation);
 		double sin = Math.sin(rotation);
@@ -222,7 +227,8 @@ public final class Anomaly {
 		if (!(Double.isFinite(arc) && Double.isFinite(stretch) && stretch > 0.01)) {
 			return false;
 		}
-		if (!(Double.isFinite(rotation) && Double.isFinite(breath) && Double.isFinite(breath_speed))) {
+		if (!(Double.isFinite(dir) && Double.isFinite(rotation) && Double.isFinite(breath)
+				&& Double.isFinite(breath_speed))) {
 			return false;
 		}
 		if (!(Double.isFinite(core_offset) && Double.isFinite(core_angle) && Double.isFinite(core_spin))) {
@@ -232,7 +238,7 @@ public final class Anomaly {
 			harmonics = new ArrayList<>();
 		}
 		harmonics.removeIf(h -> h == null || !h.valid());
-		if (!(Double.isFinite(shrink) && shrink > 0.0)) {
+		if (!(Double.isFinite(shrink) && shrink > 0.0 && shrink <= 4.0)) {
 			shrink = 1.0;
 		}
 		return true;

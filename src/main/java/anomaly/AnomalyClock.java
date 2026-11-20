@@ -61,6 +61,12 @@ public final class AnomalyClock {
 		scale = Math.max(0.0, Math.min(100_000.0, value));
 	}
 
+	/** Сброс на реальное время: новое поле не должно наследовать отладку другого мира. */
+	public static void resetScale() {
+		commit();
+		scale = 1.0;
+	}
+
 	/** Сдвинуть поле во времени вручную (отладка). */
 	public static void advance(long deltaMs) {
 		commit();

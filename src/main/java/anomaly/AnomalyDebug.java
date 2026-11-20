@@ -41,6 +41,11 @@ public final class AnomalyDebug {
 		return SHOWING.contains(player);
 	}
 
+	/** Погасить контур при выходе: иначе множество UUID растёт без границы и показ сам включается после реконнекта. */
+	public static void hide(UUID player) {
+		SHOWING.remove(player);
+	}
+
 	public static void tick(MinecraftServer server) {
 		if (SHOWING.isEmpty() || ++ticker % TICK_PERIOD != 0) {
 			return;
@@ -77,12 +82,17 @@ public final class AnomalyDebug {
 		DustParticleOptions edge = new DustParticleOptions(zone.cls().color, 1.3f);
 		DustParticleOptions core = new DustParticleOptions(lighter(zone.cls().color), 1.8f);
 		double y = player.getY() + 0.6;
+		// клиент видит частицы максимум в ~512 блоках: точки дальше — впустую посчитанные пакеты
+		double visible = 480.0;
 
 		// контур: плотность точек не зависит от размера — на гиганте они просто реже
 		int points = (int) Math.max(24, Math.min(120, Math.round(radius / 4.0) + 24));
 		for (int i = 0; i < points; i++) {
 			double angle = i * (Math.PI * 2.0) / points;
 			double[] point = zone.anomaly().boundaryPoint(angle, zone.ageHours(), radius);
+			if (Math.hypot(point[0] - player.getX(), point[1] - player.getZ()) > visible) {
+				continue;
+			}
 			level.sendParticles(edge, true, true, point[0], y, point[1], 1, 0.0, 0.0, 0.0, 0.0);
 			if ((i & 7) == 0) {
 				// редкие точки выше — чтобы край читался как стена, а не как линия на земле
@@ -90,18 +100,22 @@ public final class AnomalyDebug {
 			}
 		}
 
-		// ядро: смещено от центра и ползёт внутри области
-		for (int i = 0; i < 4; i++) {
-			level.sendParticles(core, true, true, zone.coreX(), y + i, zone.coreZ(), 1, 0.0, 0.0, 0.0, 0.0);
+		// ядро: смещено от центра и ползёт внутри области; рисуем, только если оно рядом
+		if (Math.hypot(zone.coreX() - player.getX(), zone.coreZ() - player.getZ()) <= visible) {
+			for (int i = 0; i < 4; i++) {
+				level.sendParticles(core, true, true, zone.coreX(), y + i, zone.coreZ(), 1, 0.0, 0.0, 0.0, 0.0);
+			}
 		}
 
 		// направление дрейфа — короткая стрелка из центра
-		double heading = zone.anomaly().heading(zone.ageHours());
-		for (int i = 1; i <= 4; i++) {
-			double length = i * 5.0;
-			level.sendParticles(edge, true, true,
-					zone.x() + Math.cos(heading) * length, y, zone.z() + Math.sin(heading) * length,
-					1, 0.0, 0.0, 0.0, 0.0);
+		if (Math.hypot(zone.x() - player.getX(), zone.z() - player.getZ()) <= visible) {
+			double heading = zone.anomaly().heading(zone.ageHours());
+			for (int i = 1; i <= 4; i++) {
+				double length = i * 5.0;
+				level.sendParticles(edge, true, true,
+						zone.x() + Math.cos(heading) * length, y, zone.z() + Math.sin(heading) * length,
+						1, 0.0, 0.0, 0.0, 0.0);
+			}
 		}
 	}
 

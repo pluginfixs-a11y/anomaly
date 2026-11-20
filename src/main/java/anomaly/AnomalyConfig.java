@@ -104,6 +104,20 @@ public class AnomalyConfig {
 		if (disabled_types == null) {
 			disabled_types = new ArrayList<>();
 		}
+		// NaN и бесконечность проходят мимо сравнений вида «x <= 0», поэтому сначала чиним их
+		radius_min = finite(radius_min, 100.0);
+		radius_max = finite(radius_max, 3000.0);
+		lifetime_max_hours = finite(lifetime_max_hours, 168.0);
+		drift_min_per_minute = finite(drift_min_per_minute, 0.5);
+		drift_max_per_minute = finite(drift_max_per_minute, 3.0);
+		dissipate_rate_per_min = finite(dissipate_rate_per_min, 5.0);
+		dissipate_min_radius = finite(dissipate_min_radius, 20.0);
+		dose_gain_per_second = finite(dose_gain_per_second, 0.05);
+		dose_decay_per_second = finite(dose_decay_per_second, 0.02);
+		lingering_floor = finite(lingering_floor, 0.1);
+		if (!Double.isFinite(radius_max) || radius_max < radius_min) {
+			radius_max = radius_min;
+		}
 		population = Math.max(0, Math.min(5000, population));
 		if (radius_min <= 0) {
 			radius_min = 1.0;
@@ -113,6 +127,7 @@ public class AnomalyConfig {
 		}
 		spawn_min_radius = Math.max(0, spawn_min_radius);
 		world_radius = Math.max(spawn_min_radius + 1000, world_radius);
+		suppress_until = Math.max(0, Math.min(suppress_until, world_radius - 1000));
 		if (lifetime_max_hours <= 0.01) {
 			lifetime_max_hours = 168.0;
 		}
@@ -182,6 +197,10 @@ public class AnomalyConfig {
 
 	public boolean isEnabled(AnomalyType type) {
 		return disabled_types == null || !disabled_types.contains(type.id);
+	}
+
+	private static double finite(double value, double fallback) {
+		return Double.isFinite(value) ? value : fallback;
 	}
 
 	private static void backupBroken() {

@@ -7,10 +7,12 @@ import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import net.minecraft.ChatFormatting;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
+import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.util.Mth;
+import net.minecraft.world.level.Level;
 import net.minecraft.world.level.levelgen.Heightmap;
 
 import java.util.List;
@@ -177,16 +179,17 @@ public final class AnomalyCommand {
 		return 1;
 	}
 
-	private static int kill(CommandSourceStack source, String target)
-			throws com.mojang.brigadier.exceptions.CommandSyntaxException {
-		ServerPlayer player = source.getPlayerOrException();
-		Anomaly anomaly = AnomalyField.find(target, player.getX(), player.getZ());
+	private static int kill(CommandSourceStack source, String target) {
+		ServerPlayer player = source.getPlayer();
+		double px = player != null ? player.getX() : source.getPosition().x;
+		double pz = player != null ? player.getZ() : source.getPosition().z;
+		Anomaly anomaly = AnomalyField.find(target, px, pz);
 		if (anomaly == null) {
 			reply(source, "Не нашёл аномалию «" + target + "»", ChatFormatting.RED);
 			return 0;
 		}
 		AnomalyField.remove(anomaly.id);
-		reply(source, "Аномалия #" + anomaly.id + " убрана из поля");
+		reply(source, "Аномалия #" + anomaly.id + " убрана из поля (население доберётся само)");
 		return 1;
 	}
 
@@ -201,6 +204,11 @@ public final class AnomalyCommand {
 			return 0;
 		}
 		ServerLevel level = player.level();
+		if (level.dimension() != Level.OVERWORLD) {
+			reply(source, "Аномалии живут в Верхнем мире — из этого измерения телепорт не работает",
+					ChatFormatting.RED);
+			return 0;
+		}
 		Zone zone = anomaly.zone(AnomalyClock.now());
 		double x;
 		double z;
@@ -214,11 +222,34 @@ public final class AnomalyCommand {
 			x = zone.coreX();
 			z = zone.coreZ();
 		}
-		int y = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, Mth.floor(x), Mth.floor(z));
-		player.teleportTo(x + 0.5, y + 0.2, z + 0.5);
+		int blockX = Mth.floor(x);
+		int blockZ = Mth.floor(z);
+		int y = safeY(level, blockX, blockZ);
+		player.teleportTo(blockX + 0.5, y + 0.1, blockZ + 0.5);
 		reply(source, (edge ? "Вы у края " : "Вы в ядре ") + "#" + anomaly.id + " " + classTag(zone.cls())
 				+ ", радиус " + Math.round(zone.radius()) + ". /anomaly show — включить контур");
 		return 1;
+	}
+
+	/**
+	 * Высота, на которую можно ставить игрока. {@code Level.getHeight} на незагруженном чанке отдаёт
+	 * минимум мира (там игрок окажется под бедроком), поэтому чанк сначала грузим. И поднимаемся,
+	 * пока под ногами жидкость: садиться в лаву или океан «по карте высот» — плохая идея.
+	 */
+	private static int safeY(ServerLevel level, int x, int z) {
+		level.getChunk(x >> 4, z >> 4);
+		int y = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, x, z);
+		BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
+		int limit = level.getMaxY() - 2;
+		for (int i = 0; i < 24 && y < limit; i++) {
+			boolean dryFloor = level.getBlockState(pos.set(x, y - 1, z)).getFluidState().isEmpty();
+			boolean dryFeet = level.getBlockState(pos.set(x, y, z)).getFluidState().isEmpty();
+			if (dryFloor && dryFeet) {
+				break;
+			}
+			y++;
+		}
+		return y;
 	}
 
 	// --- отладка ---
@@ -239,8 +270,8 @@ public final class AnomalyCommand {
 		double signed = zone.signedDistance(player.getX(), player.getZ());
 		reply(source, "Контур включён: ближайшая #" + nearest.id + " " + classTag(zone.cls())
 				+ ", до края " + blocks(Math.abs(signed)));
-		if (Math.abs(signed) > 120) {
-			reply(source, "Край дальше 120 блоков — частицы не долетят. /anomaly edge #" + nearest.id,
+		if (Math.abs(signed) > 400) {
+			reply(source, "Край дальше 400 блоков — частицы не долетят. /anomaly edge #" + nearest.id,
 					ChatFormatting.YELLOW);
 		}
 		return 1;

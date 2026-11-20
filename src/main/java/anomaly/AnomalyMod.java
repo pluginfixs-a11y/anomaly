@@ -44,7 +44,10 @@ public class AnomalyMod implements ModInitializer {
 		ServerLifecycleEvents.SERVER_STARTED.register(AnomalyField::load);
 		ServerLifecycleEvents.SERVER_STOPPING.register(server -> AnomalyField.save());
 		ServerTickEvents.END_SERVER_TICK.register(AnomalyMod::tick);
-		ServerPlayConnectionEvents.DISCONNECT.register((handler, server) -> STATES.remove(handler.player.getUUID()));
+		ServerPlayConnectionEvents.DISCONNECT.register((handler, server) -> {
+			STATES.remove(handler.player.getUUID());
+			AnomalyDebug.hide(handler.player.getUUID());
+		});
 		AnomalyCommand.register();
 
 		if (System.getProperty("anomaly.selftest") != null || System.getenv("ANOMALY_SELFTEST") != null) {

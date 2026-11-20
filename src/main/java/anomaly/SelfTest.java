@@ -285,19 +285,20 @@ public final class SelfTest {
 		local.population = 0; // без рождений: проверяем только таяние
 
 		AnomalyFieldData field = new AnomalyFieldData();
-		Anomaly drifting = AnomalyField.create(field, config, new Random(11L), 0L, 4500, 0, 800.0,
+		Anomaly drifting = AnomalyField.create(field, config, new Random(11L), 0L, 3500, 0, 800.0,
 				AnomalyClass.DANGER, false);
 		drifting.life_hours = 100.0;
 		drifting.born = -50L * 3_600_000L; // зрелость
+		drifting.speed = 0.0;              // не дрейфует: тест про таяние, а не про удачу с курсом
 		field.anomalies.add(drifting);
 		double before = drifting.radius(50.0);
 
-		// час в полосе подавления: 5 % в минуту → остаётся около 4.6 % радиуса
+		// час в полосе подавления: на 3.5к скорость ~4.4 % в минуту → остаётся около 7 %
 		AnomalyField.tickData(field, local, new Random(12L), 3_600_000L, 1.0);
 		double after = drifting.radius(51.0);
 		report(result, "за час в полосе радиус тает до " + String.format("%.0f", after) + " из "
 						+ String.format("%.0f", before),
-				after < before * 0.1 && after > 0.0);
+				after < before * 0.15 && after > 0.0);
 		report(result, "сжатая но ещё не нулевая остаётся в поле", field.anomalies.contains(drifting));
 
 		// ещё час — и она сжимается ниже порога и тихо уходит
@@ -442,8 +443,8 @@ public final class SelfTest {
 
 		Anomaly pinned = AnomalyField.create(new AnomalyFieldData(), config, rnd, 0L, 0, 0, 500.0,
 				AnomalyClass.DANGER, true);
-		report(result, "тестовая зона приколота: не дрейфует и не умирает",
-				pinned.speed == 0.0 && pinned.life_hours > 24 * 300 && pinned.radius(1.0) > 0.0);
+		report(result, "тестовая зона приколота: не дрейфует, не стареет и сразу полноразмерная",
+				pinned.speed == 0.0 && pinned.alive(0L) && pinned.radius(1.0) > pinned.r0 * 0.5);
 
 		AnomalyConfig broken = new AnomalyConfig();
 		broken.population = -5;
@@ -455,6 +456,25 @@ public final class SelfTest {
 		report(result, "кривой конфиг приводится в порядок",
 				broken.population == 0 && broken.radius_max >= broken.radius_min
 						&& broken.world_radius > broken.spawn_min_radius);
+
+		// NaN из ручного JSON не должен превращать поле в невидимые зоны, занимающие слоты
+		Anomaly nan = new Anomaly();
+		nan.r0 = 500;
+		nan.life_hours = 10;
+		nan.dir = Double.NaN;
+		report(result, "запись с dir=NaN отбраковывается", !nan.valid());
+
+		Anomaly dead = new Anomaly();
+		dead.r0 = 500;
+		dead.life_hours = 0;
+		report(result, "нулевая жизнь не считается живой", !dead.alive(0L));
+
+		AnomalyConfig nanConfig = new AnomalyConfig();
+		nanConfig.radius_min = Double.NaN;
+		nanConfig.suppress_until = 999_999;
+		nanConfig.sanitize();
+		report(result, "NaN в конфиге не проходит",
+				Double.isFinite(nanConfig.radius_min) && nanConfig.suppress_until < nanConfig.world_radius);
 	}
 
 	// --- отчёт ---
