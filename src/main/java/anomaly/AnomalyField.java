@@ -89,8 +89,10 @@ public final class AnomalyField {
 					}
 				}
 			}
-			if (AnomalyComponent.allowed(AnomalyClass.DANGER, config).isEmpty()) {
-				AnomalyMod.LOGGER.warn("Anomaly: все компоненты выключены в конфиге — зоны будут без набора");
+			if (AnomalyComponent.allowed(AnomalyClass.DANGER, config).isEmpty()
+					|| AnomalyComponent.allowed(AnomalyClass.DANGER, config).stream()
+							.noneMatch(AnomalyComponent::isVisible)) {
+				AnomalyMod.LOGGER.warn("Anomaly: все видимые компоненты выключены — зоны будут невидимыми");
 			}
 		}
 		// выключенный мод не должен ни сеять население, ни писать файл в мир

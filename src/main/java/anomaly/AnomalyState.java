@@ -18,6 +18,8 @@ public final class AnomalyState {
 	public int ticksInside;
 	/** Счётчик эффектных тиков: по нему идут «раз в 2 с» и «раз в 20 с», а не по мировому времени. */
 	public int pulseTicks;
+	/** Длина последнего шага в тиках: по ней период срабатывает при любом tick_period. */
+	public int lastStep = 10;
 	/** Накопитель для урона давлением: бьёт раз в 20 с, а не раз в вызов. */
 	public int damageTicks;
 
@@ -53,6 +55,7 @@ public final class AnomalyState {
 	/** Счётчик эффектных тиков: по нему идут периодические эффекты, а не по мировому времени. */
 	public void pulse(int ticks) {
 		pulseTicks += ticks;
+		lastStep = ticks;
 	}
 
 	public int percent() {

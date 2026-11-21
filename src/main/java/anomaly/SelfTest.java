@@ -285,9 +285,7 @@ public final class SelfTest {
 						|| set.size() > AnomalyComponent.maxCount(cls) + bonus) {
 					counts = false;
 				}
-				int cost = 0;
 				for (AnomalyComponent component : set) {
-					cost += component.cost;
 					if (!component.allows(cls)) {
 						allowed = false;
 					}
@@ -295,8 +293,9 @@ public final class SelfTest {
 						safeNoDamage = false;
 					}
 				}
-				// полная цена учитывает и надбавку за синергии, а не только базовые стоимости
-				if (AnomalyComponent.totalCost(set) > AnomalyComponent.budgetCap(cls) + 2) {
+				// полная цена учитывает и надбавку за синергии; у гигантов бюджет выше на 2
+				int cap = AnomalyComponent.budgetCap(cls) + (radius >= 1800.0 ? 2 : 0);
+				if (AnomalyComponent.totalCost(set) > cap) {
 					budgets = false;
 				}
 				if (!groupsOk(set, cls)) {
