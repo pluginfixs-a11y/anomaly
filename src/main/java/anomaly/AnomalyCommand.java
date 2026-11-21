@@ -383,10 +383,17 @@ public final class AnomalyCommand {
 		if (online != null) {
 			return online.getUUID();
 		}
-		java.util.Optional<net.minecraft.server.players.NameAndId> found =
-				source.getServer().services().nameToIdCache().get(name);
-		if (found.isPresent()) {
-			return found.get().id();
+		try {
+			java.util.Optional<net.minecraft.server.players.NameAndId> found =
+					source.getServer().services().nameToIdCache().get(name);
+			if (found.isPresent()) {
+				return found.get().id();
+			}
+		} catch (RuntimeException e) {
+			// кэш имён умеет ходить в сеть: без интернета это таймаут, а не повод ронять команду
+			reply(source, "Кэш имён не ответил (" + e.getClass().getSimpleName()
+					+ ") — без сети офлайнового игрока не найти", ChatFormatting.RED);
+			return null;
 		}
 		reply(source, "Не знаю игрока «" + name + "»: он ни разу не заходил на сервер", ChatFormatting.RED);
 		return null;
