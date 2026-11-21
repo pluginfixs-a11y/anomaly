@@ -535,7 +535,7 @@ public final class AnomalyScars {
 					continue;
 				}
 				int surface = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, x0, z0);
-				if (surface <= level.getMinY() + 3 || surface >= level.getMaxY() - 2
+				if (surface <= level.getMinY() + 1 || surface >= level.getMaxY() - 2
 						|| surface > nearY + 4.0) {
 					continue;
 				}
@@ -547,7 +547,7 @@ public final class AnomalyScars {
 				clearPlant(level, x0, surface, z0);
 				for (int i = 0; i < depth; i++) {
 					int y = surface - 1 - i;
-					if (y <= level.getMinY() + 2) {
+					if (y <= level.getMinY()) {
 						break;
 					}
 					BlockState state = level.getBlockState(pos.set(x0, y, z0));
@@ -591,7 +591,7 @@ public final class AnomalyScars {
 					continue;
 				}
 				int surface = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, x0, z0);
-				if (surface <= level.getMinY() + 3 || surface >= level.getMaxY() - 2
+				if (surface <= level.getMinY() + 1 || surface >= level.getMaxY() - 2
 						|| surface > nearY + 4.0) {
 					continue;
 				}
@@ -626,7 +626,7 @@ public final class AnomalyScars {
 					continue;
 				}
 				int surface = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, x0, z0);
-				if (surface <= level.getMinY() + 3 || surface >= level.getMaxY() - 2
+				if (surface <= level.getMinY() + 1 || surface >= level.getMaxY() - 2
 						|| surface > nearY + 4.0) {
 					continue;
 				}

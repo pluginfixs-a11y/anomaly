@@ -52,6 +52,42 @@ public final class AnomalyCommand {
 												.executes(context -> probe(context.getSource(),
 														IntegerArgumentType.getInteger(context, "x"),
 														IntegerArgumentType.getInteger(context, "z"))))))
+						.then(Commands.literal("event")
+								.executes(context -> eventList(context.getSource()))
+								.then(Commands.literal("list").executes(context -> eventList(context.getSource())))
+								.then(Commands.literal("crater")
+										.executes(context -> event(context.getSource(), "crater", 1.0, 1))
+										.then(Commands.argument("radius", DoubleArgumentType.doubleArg(0.4, 8.0))
+												.executes(context -> event(context.getSource(), "crater",
+														DoubleArgumentType.getDouble(context, "radius"), 1))
+												.then(Commands.argument("depth", IntegerArgumentType.integer(1, 6))
+														.executes(context -> event(context.getSource(), "crater",
+																DoubleArgumentType.getDouble(context, "radius"),
+																IntegerArgumentType.getInteger(context, "depth"))))))
+								.then(Commands.literal("scorch")
+										.executes(context -> event(context.getSource(), "scorch", 2.0, 1))
+										.then(Commands.argument("radius", DoubleArgumentType.doubleArg(0.4, 10.0))
+												.executes(context -> event(context.getSource(), "scorch",
+														DoubleArgumentType.getDouble(context, "radius"), 1))))
+								.then(Commands.literal("frost")
+										.executes(context -> event(context.getSource(), "frost", 2.5, 1))
+										.then(Commands.argument("radius", DoubleArgumentType.doubleArg(0.4, 10.0))
+												.executes(context -> event(context.getSource(), "frost",
+														DoubleArgumentType.getDouble(context, "radius"), 1))))
+								.then(Commands.literal("burst")
+										.executes(context -> event(context.getSource(), "burst", 1.2, 1))
+										.then(Commands.argument("radius", DoubleArgumentType.doubleArg(0.4, 8.0))
+												.executes(context -> event(context.getSource(), "burst",
+														DoubleArgumentType.getDouble(context, "radius"), 1))
+												.then(Commands.argument("depth", IntegerArgumentType.integer(1, 6))
+														.executes(context -> event(context.getSource(), "burst",
+																DoubleArgumentType.getDouble(context, "radius"),
+																IntegerArgumentType.getInteger(context, "depth"))))))
+								.then(Commands.literal("bolt")
+										.executes(context -> event(context.getSource(), "bolt", 2.0, 1))
+										.then(Commands.argument("radius", DoubleArgumentType.doubleArg(0.4, 10.0))
+												.executes(context -> event(context.getSource(), "bolt",
+														DoubleArgumentType.getDouble(context, "radius"), 1)))))
 						.then(Commands.literal("spawn")
 								.executes(context -> spawn(context.getSource(), null, null))
 								.then(Commands.argument("radius", DoubleArgumentType.doubleArg(10.0, 5000.0))
@@ -97,7 +133,7 @@ public final class AnomalyCommand {
 				+ " опасные, дальше смертельные (размытие ±" + config.class_blur + ")");
 		reply(source, "Рассеивание: внутри " + config.dissipate_radius + ", подавление до " + config.suppress_until
 				+ "; время поля ×" + trim(AnomalyClock.scale()) + " (" + timeHint() + ")");
-		reply(source, "Проверка: /anomaly field · here · spawn · edge · show · timescale · selftest");
+		reply(source, "Проверка: /anomaly field · here · spawn · edge · show · timescale · event · selftest");
 		return 1;
 	}
 
@@ -155,6 +191,76 @@ public final class AnomalyCommand {
 		if (nearest != null) {
 			Zone zone = nearest.zone(AnomalyClock.now());
 			reply(source, "Ближайшая #" + nearest.id + ", до края " + blocks(Math.abs(zone.signedDistance(x, z))));
+		}
+		return 1;
+	}
+
+	// --- микрособытия ---
+
+	private static int eventList(CommandSourceStack source) {
+		reply(source, "Микрособытия (по умолчанию): crater 1.0×1 · scorch 2.0 · frost 2.5 · burst 1.2×1 · bolt 2.0");
+		reply(source, "Цель — блок, на который смотришь (до 32 блоков), иначе точка под ногами.");
+		reply(source, "Пример: /anomaly event crater 3 2 · /anomaly event bolt · /anomaly event frost 4");
+		return 1;
+	}
+
+	private static int event(CommandSourceStack source, String type, double radius, int depth) {
+		ServerLevel level = source.getLevel();
+		ServerPlayer player = source.getPlayer();
+		double x;
+		double z;
+		if (player != null) {
+			var hit = player.pick(32.0, 0.0f, false);
+			if (hit.getType() == net.minecraft.world.phys.HitResult.Type.MISS) {
+				x = player.getX();
+				z = player.getZ();
+			} else {
+				x = hit.getLocation().x;
+				z = hit.getLocation().z;
+			}
+		} else {
+			x = source.getPosition().x;
+			z = source.getPosition().z;
+		}
+		int bx = Mth.floor(x);
+		int bz = Mth.floor(z);
+		// команда — отладка: грузим все чанки вокруг точки, иначе колонки за границей чанка
+		// молча пропустятся (hasChunk), и половина воронки не появится
+		int reach = (int) Math.ceil(radius) + 1;
+		for (int cx = (bx - reach) >> 4; cx <= (bx + reach) >> 4; cx++) {
+			for (int cz = (bz - reach) >> 4; cz <= (bz + reach) >> 4; cz++) {
+				level.getChunk(cx, cz);
+			}
+		}
+		int surface = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, bx, bz);
+		int changed = switch (type) {
+			case "crater" -> AnomalyScars.microCrater(level, x, z, radius, depth, surface);
+			case "scorch" -> AnomalyScars.scorch(level, x, z, radius, surface);
+			case "frost" -> AnomalyScars.frost(level, x, z, radius, surface);
+			case "burst" -> {
+				double y = surface + 1.0;
+				if (player != null) {
+					level.sendParticles(player, net.minecraft.core.particles.ParticleTypes.EXPLOSION,
+							true, true, x, y, z, 1, 0.0, 0.0, 0.0, 0.0);
+				}
+				level.playSound(null, x, y, z, net.minecraft.sounds.SoundEvents.GENERIC_EXPLODE.value(),
+						net.minecraft.sounds.SoundSource.AMBIENT, 1.6f, 1.6f);
+				yield AnomalyScars.microCrater(level, x, z, radius, depth, surface);
+			}
+			case "bolt" -> {
+				AnomalyEffects.visualBolt(level, x, surface, z);
+				int n = AnomalyScars.scorch(level, x, z, radius, surface);
+				n += AnomalyScars.microCrater(level, x, z, 0.7, depth, surface);
+				yield n;
+			}
+			default -> 0;
+		};
+		reply(source, "Событие «" + type + "»: изменено " + changed + " блоков в " + bx + ", " + bz
+				+ " (радиус " + trim(radius)
+				+ (type.equals("crater") || type.equals("burst") || type.equals("bolt") ? ", глубина " + depth : "")
+				+ ")");
+		if (!AnomalyMod.config.scar_enabled) {
+			reply(source, "Разрушения в конфиге выключены — команда всё равно сработала (это отладка)");
 		}
 		return 1;
 	}

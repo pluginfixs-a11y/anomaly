@@ -708,6 +708,12 @@ r(θ) = R · stretch(θ) · (1 + a₂·sin(2θ+φ₂) + a₃·sin(3θ+φ₃) + �
 | `/anomaly components` | каталог: id, вид, минимальный класс, стоимость |
 | `/anomaly scar <id\|biggest>` | план следов зоны: что именно и где, сколько уже сделано |
 | `/anomaly probe <x> <z>` | что сейчас в колонке (поверхность, блок под ней) — проверка следов |
+| `/anomaly event` | список микрособытий с параметрами по умолчанию |
+| `/anomaly event crater [radius] [depth]` | воронка перед игроком (по блоку, на который смотришь) |
+| `/anomaly event scorch [radius]` | пятно мёртвой земли, как от молнии |
+| `/anomaly event frost [radius]` | наледь на земле |
+| `/anomaly event burst [radius] [depth]` | полный хлопок: взрыв, звук, воронка |
+| `/anomaly event bolt [radius]` | молния: вспышка, гарь, воронка |
 | `/anomaly spawn [r] [class]` | **тестовая зона** под ногами: приколота, не дрейфует, не тает, не умирает |
 | `/anomaly kill <id\|nearest>` | убрать зону |
 | `/anomaly tp <id\|nearest\|biggest\|oldest>` | телепорт в ядро (только в Верхнем мире) |
