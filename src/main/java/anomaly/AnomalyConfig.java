@@ -35,7 +35,7 @@ public class AnomalyConfig {
 
 	// --- где и сколько ---
 	/** Сколько живых аномалий держать в мире (цель). Поле само добивает население. */
-	public int population = 800;
+	public int population = 600;
 	/** Ближе этого от центра аномалии не рождаются. */
 	public int spawn_min_radius = 6000;
 	/** Край мира: дальше аномалии не рождаются и не ходят. */
@@ -179,7 +179,7 @@ public class AnomalyConfig {
 		// v3 → v4: 250 зон на мир 40 000 блоков — это одна на 2 500 блоков, в поле зрения пусто.
 		// Поднимаем только старое дефолтное значение, выставленное руками не трогаем.
 		if (config_version < 4 && population == 250) {
-			population = 800;
+			population = 600;
 		}
 		sanitize();
 		config_version = VERSION;

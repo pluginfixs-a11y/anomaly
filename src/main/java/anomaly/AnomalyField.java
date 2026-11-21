@@ -97,7 +97,7 @@ public final class AnomalyField {
 					double[] center = anomaly.position(anomaly.ageHours(AnomalyClock.now()));
 					List<ScarOp> planned = AnomalyScars.planAt(center[0], center[1], anomaly.r0,
 							AnomalyClass.byId(anomaly.cls), new Random(anomaly.id * 0x2545F4914F6CDD1DL),
-							false);
+							false, anomaly.components);
 					if (!planned.isEmpty()) {
 						anomaly.scars = planned;
 						migrated = true;
@@ -235,6 +235,13 @@ public final class AnomalyField {
 		long now = AnomalyClock.now();
 		List<Zone> out = new ArrayList<>();
 		for (Anomaly anomaly : data.anomalies) {
+			// грубый отсев по нынешнему центру: иначе 800 зон на каждого игрока дважды в секунду
+			// считают полный signedDistance с суммой синусов
+			double[] center = anomaly.position(anomaly.ageHours(now));
+			if (Math.hypot(px - center[0], pz - center[1])
+					> anomaly.maxRadius() * anomaly.shrink + range) {
+				continue;
+			}
 			Zone zone = anomaly.zone(now);
 			if (zone.radius() <= 0.0) {
 				continue;
@@ -544,13 +551,13 @@ public final class AnomalyField {
 		anomaly.stretch = 0.45 + rnd.nextDouble() * 2.15;
 		anomaly.rotation = rnd.nextDouble() * Math.PI * 2.0;
 
-		// низкие гармоники задают лепестки и вытянутость, высокие — рваный край.
-		// Раньше суммарная амплитуда была ~0.5 при трёх-пяти гармониках, и зона читалась как круг;
-		// теперь лепестки глубже, а сверху ещё 1–2 мелких зубца, чтобы контур не был гладким.
-		int count = 3 + rnd.nextInt(3);
+		// Гармоники с длиной волны в блоках, а не с фиксированным k: у зоны R=2000 лепесток
+		// k=3 растянут на 4000 блоков, и в кадре он выглядит прямой стеной. Низкие гармоники
+		// задают общий характер, «зубцы» считаются так, чтобы волна была ~110 блоков, а
+		// отклонение — 12–42 блока независимо от радиуса.
+		int count = 3 + rnd.nextInt(2);
 		for (int i = 0; i < count; i++) {
-			int k = 2 + i;
-			anomaly.harmonics.add(new Harmonic(k,
+			anomaly.harmonics.add(new Harmonic(2 + i,
 					0.08 + rnd.nextDouble() * 0.22,
 					rnd.nextDouble() * Math.PI * 2.0,
 					(rnd.nextDouble() * 2.0 - 1.0) * 0.009,
@@ -560,9 +567,10 @@ public final class AnomalyField {
 		}
 		int teeth = 1 + rnd.nextInt(2);
 		for (int i = 0; i < teeth; i++) {
-			int k = 8 + rnd.nextInt(6);
-			anomaly.harmonics.add(new Harmonic(k,
-					0.03 + rnd.nextDouble() * 0.06,
+			int k = (int) Math.round(2.0 * Math.PI * anomaly.r0 / 110.0) + i;
+			k = Math.max(4, Math.min(120, k));
+			double amp = (12.0 + rnd.nextDouble() * 30.0) / anomaly.r0;
+			anomaly.harmonics.add(new Harmonic(k, amp,
 					rnd.nextDouble() * Math.PI * 2.0,
 					(rnd.nextDouble() * 2.0 - 1.0) * 0.02,
 					0.20 + rnd.nextDouble() * 0.30,
@@ -591,11 +599,13 @@ public final class AnomalyField {
 	private static double pickRadius(AnomalyConfig config, AnomalyFieldData field, Random rnd) {
 		double roll = rnd.nextDouble();
 		double radius;
-		if (roll < 0.81) {
+		// 81 % рождений приходилось на 100–300 блоков: поле из мелких пятен, которые не запоминаются.
+		// Теперь крупных заметно больше, а мелкие остаются как «рябь» между ними.
+		if (roll < 0.75) {
 			radius = 100.0 + rnd.nextDouble() * 200.0;
-		} else if (roll < 0.98) {
+		} else if (roll < 0.94) {
 			radius = 300.0 + rnd.nextDouble() * 500.0;
-		} else if (roll < 0.999) {
+		} else if (roll < 0.99) {
 			radius = 800.0 + rnd.nextDouble() * 1200.0;
 		} else {
 			radius = 2000.0 + rnd.nextDouble() * 1000.0;

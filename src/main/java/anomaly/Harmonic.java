@@ -42,9 +42,10 @@ public final class Harmonic {
 	}
 
 	public boolean valid() {
-		return k >= 2 && k <= 16
+		return k >= 2 && k <= 160
 				&& Double.isFinite(amp) && Math.abs(amp) <= 1.0
 				&& Double.isFinite(phase) && Double.isFinite(spin)
-				&& Double.isFinite(wob) && Double.isFinite(wob_speed) && Double.isFinite(wob_phase);
+				&& Double.isFinite(wob) && Math.abs(wob) <= 0.5
+				&& Double.isFinite(wob_speed) && Double.isFinite(wob_phase);
 	}
 }

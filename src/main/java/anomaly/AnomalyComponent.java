@@ -446,6 +446,32 @@ public enum AnomalyComponent {
 					}
 				}
 			}
+			case HUNGER_DRAIN -> {
+				// невидимый пассив должен хотя бы звучать: желудок урчит, когда еда утекает
+				if (rnd.nextInt(200) == 0) {
+					level.playSound(null, player.getX(), player.getY(), player.getZ(),
+							SoundEvents.GENERIC_EAT.value(), SoundSource.PLAYERS, 0.6f, 0.9f);
+				}
+			}
+			case SATURATION_BURN -> {
+				if (rnd.nextInt(200) == 0) {
+					level.playSound(null, player.getX(), player.getY(), player.getZ(),
+							SoundEvents.GENERIC_DRINK.value(), SoundSource.PLAYERS, 0.6f, 0.9f);
+				}
+			}
+			case XP_LEAK -> {
+				if (rnd.nextInt(100) == 0) {
+					level.playSound(null, player.getX(), player.getY(), player.getZ(),
+							SoundEvents.EXPERIENCE_ORB_PICKUP, SoundSource.AMBIENT, 0.5f, 1.4f);
+				}
+			}
+			case AIR_DRAIN -> {
+				if (rnd.nextInt(20) == 0) {
+					level.playSound(null, player.getX(), player.getY() + 1.2, player.getZ(),
+							SoundEvents.GENERIC_SPLASH, SoundSource.AMBIENT, 0.4f, 1.2f);
+				}
+			}
+			case TRACTION, REPULSION -> dustTowardsCore(level, player, zone, rnd);
 			case PRESSURE -> {
 				// 1/8 при 2 Гц — раз в 4 с; 2 искры раз в 10 с на глаз не читались
 				if (rnd.nextInt(8) == 0) {
@@ -470,6 +496,26 @@ public enum AnomalyComponent {
 	private static boolean canMark(ServerLevel level) {
 		return AnomalyMod.config.scar_enabled
 				&& level.getServer().getAverageTickTimeNanos() / 1_000_000.0 <= AnomalyMod.config.mspt_limit;
+	}
+
+	/** Пыль между игроком и ядром: тяга и отторжение перестают быть невидимыми. */
+	private static void dustTowardsCore(ServerLevel level, ServerPlayer player, Zone zone,
+			net.minecraft.util.RandomSource rnd) {
+		if (rnd.nextInt(4) != 0) {
+			return;
+		}
+		double dx = zone.coreX() - player.getX();
+		double dz = zone.coreZ() - player.getZ();
+		if (Math.hypot(dx, dz) < 2.0) {
+			return;
+		}
+		double t = 0.15 + rnd.nextDouble() * 0.35;
+		var color = new net.minecraft.core.particles.DustParticleOptions(zone.edgeColor(), 1.2f);
+		level.sendParticles(player, color, true, true,
+				player.getX() + dx * t,
+				player.getY() + 1.0 + rnd.nextDouble(),
+				player.getZ() + dz * t,
+				2, 0.15, 0.25, 0.15, 0.02);
 	}
 
 	/** Высота рельефа для точки или запасное значение, если чанк не загружен. */

@@ -41,12 +41,12 @@ public final class AnomalyScars {
 	// --- планирование ---
 
 	public static List<ScarOp> plan(Anomaly anomaly, AnomalyClass cls, Random rnd) {
-		return planAt(anomaly.x0, anomaly.z0, anomaly.r0, cls, rnd, anomaly.pinned);
+		return planAt(anomaly.x0, anomaly.z0, anomaly.r0, cls, rnd, anomaly.pinned, anomaly.components);
 	}
 
 	/** План вокруг точки: при миграции старой зоны это её нынешнее место, а не точка рождения. */
 	public static List<ScarOp> planAt(double x, double z, double r0, AnomalyClass cls, Random rnd,
-			boolean pinned) {
+			boolean pinned, List<String> components) {
 		List<ScarOp> ops = new ArrayList<>();
 		double budget = AnomalyClass.damageBudget(r0, cls);
 		if (budget < 20.0 || pinned) {
@@ -56,7 +56,7 @@ public final class AnomalyScars {
 		double used = 0.0;
 		int guard = 0;
 		while (used < target && guard++ < 40) {
-			ScarOp op = pick(x, z, r0, cls, rnd, target - used);
+			ScarOp op = pick(x, z, r0, cls, rnd, target - used, components);
 			if (op == null) {
 				break;
 			}
@@ -66,27 +66,32 @@ public final class AnomalyScars {
 		return ops;
 	}
 
-	private static ScarOp pick(double cx, double cz, double r0, AnomalyClass cls, Random rnd, double remaining) {
+	private static ScarOp pick(double cx, double cz, double r0, AnomalyClass cls, Random rnd, double remaining,
+			List<String> components) {
 		boolean deadly = cls == AnomalyClass.DEADLY;
 		boolean dangerous = cls != AnomalyClass.SAFE;
+		// Геология — от компонентов, а не только от класса: иначе все смертельные зоны
+		// получают одни и те же пики и лаву, и пейзаж у них одинаковый.
+		boolean storms = has(components, "storm_core");
+		boolean pushes = storms || has(components, "pressure") || has(components, "night_toll");
 		double roll = rnd.nextDouble();
 		double[] spot = spot(cx, cz, r0, rnd);
 
-		if (deadly && remaining > 6000.0 && roll < 0.40) {
+		if (deadly && pushes && remaining > 6000.0 && roll < 0.40) {
 			ScarOp op = ScarOp.spike(spot[0], spot[1], 4.0 + rnd.nextDouble() * 10.0,
 					40 + rnd.nextInt(80), rnd.nextLong());
 			if (op.blocks <= remaining) {
 				return op;
 			}
 		}
-		if (deadly && remaining > 1200.0 && roll < 0.60) {
+		if (deadly && storms && remaining > 1200.0 && roll < 0.60) {
 			ScarOp op = ScarOp.line("lava_fault", spot[0], spot[1], rnd.nextDouble() * TAU,
 					40 + rnd.nextInt(100), 2, 4 + rnd.nextInt(3), rnd.nextLong());
 			if (op.blocks <= remaining) {
 				return op;
 			}
 		}
-		if (dangerous && remaining > 900.0 && roll < 0.78) {
+		if (dangerous && pushes && remaining > 900.0 && roll < 0.78) {
 			ScarOp op = ScarOp.spike(spot[0], spot[1], 3.0 + rnd.nextDouble() * 4.0,
 					15 + rnd.nextInt(30), rnd.nextLong());
 			if (op.blocks <= remaining) {
@@ -110,6 +115,11 @@ public final class AnomalyScars {
 		ScarOp crack = ScarOp.line("crack", spot[0], spot[1], rnd.nextDouble() * TAU,
 				12 + rnd.nextInt(maxLength - 11), 1 + rnd.nextInt(2), 2 + rnd.nextInt(2), rnd.nextLong());
 		return crack.blocks <= remaining ? crack : null;
+	}
+
+	/** Есть ли такой компонент в наборе. */
+	private static boolean has(List<String> components, String id) {
+		return components != null && components.contains(id);
 	}
 
 	/** Точка в ядре: 35 % радиуса от центра. Туда же попадает почти всё разрушение. */

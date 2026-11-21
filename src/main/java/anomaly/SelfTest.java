@@ -113,7 +113,12 @@ public final class SelfTest {
 		double previousX = 0;
 		double previousZ = 0;
 		double maxStep = 0;
+		// шаг выборки должен быть мелким относительно самой высокой гармоники, иначе тест
+		// меряет алиасинг рваного края, а не разрыв контура
 		int points = 360;
+		for (Harmonic harmonic : anomaly.harmonics) {
+			points = Math.max(points, harmonic.k * 16);
+		}
 		for (int i = 0; i <= points; i++) {
 			double angle = i * Math.PI * 2.0 / points;
 			double[] point = anomaly.boundaryPoint(angle, zone.ageHours(), radius);
@@ -151,7 +156,7 @@ public final class SelfTest {
 		}
 		report(result, "множитель формы в 0.35..4", factorSane);
 
-		boolean harmonicsOk = anomaly.harmonics.size() >= 2 && anomaly.harmonics.size() <= 5;
+		boolean harmonicsOk = anomaly.harmonics.size() >= 2 && anomaly.harmonics.size() <= 6;
 		for (Harmonic harmonic : anomaly.harmonics) {
 			harmonicsOk &= harmonic.valid();
 		}
@@ -398,6 +403,8 @@ public final class SelfTest {
 				AnomalyClass.DANGER, new Random(1L)).isEmpty());
 
 		Anomaly deadly = AnomalyField.create(field, config, rnd, 0L, 16000, 0, 1800.0, AnomalyClass.DEADLY, false);
+		// геология теперь зависит от компонентов: пики — давление/гроза, лава — только гроза
+		deadly.components = List.of("pressure", "storm_core");
 		List<ScarOp> plan = AnomalyScars.plan(deadly, AnomalyClass.DEADLY, new Random(2L));
 		report(result, "у большой смертельной есть следы", !plan.isEmpty());
 		int total = 0;
@@ -429,6 +436,15 @@ public final class SelfTest {
 			noSpikes &= !"spike".equals(op.type) && !"lava_fault".equals(op.type);
 		}
 		report(result, "безопасная не получает пиков и лавы", noSpikes);
+
+		// геология идёт за компонентами: без «давящих» и грозы смертельная зона не ставит пики и лаву
+		Anomaly bare = AnomalyField.create(field, config, rnd, 0L, 16000, 0, 1800.0, AnomalyClass.DEADLY, false);
+		bare.components = List.of();
+		boolean geologyFollowsComponents = true;
+		for (ScarOp op : AnomalyScars.plan(bare, AnomalyClass.DEADLY, new Random(5L))) {
+			geologyFollowsComponents &= !"spike".equals(op.type) && !"lava_fault".equals(op.type);
+		}
+		report(result, "без pressure и грозы нет пиков и лавы", geologyFollowsComponents);
 
 		List<ScarOp> first = AnomalyScars.plan(deadly, AnomalyClass.DEADLY, new Random(2L));
 		List<ScarOp> second = AnomalyScars.plan(deadly, AnomalyClass.DEADLY, new Random(2L));

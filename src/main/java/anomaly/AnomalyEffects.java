@@ -31,6 +31,11 @@ public final class AnomalyEffects {
 			return;
 		}
 		double intensity = AnomalyComponent.intensity(components);
+		// глубже — сильнее: 30 % у края, 100 % в ядре. Без градиента не было разницы,
+		// где стоять внутри зоны, и «идти к центру» не имело смысла.
+		double depth = Math.min(1.0, Math.max(0.0,
+				-zone.signedDistance(player.getX(), player.getZ()) / Math.max(1.0, zone.radius())));
+		intensity *= 0.3 + 0.7 * depth;
 		if (components.contains(AnomalyComponent.NIGHT_TOLL) && isNight(level)) {
 			intensity *= 2.0;
 		}
@@ -47,9 +52,15 @@ public final class AnomalyEffects {
 		if (zone.signedDistance(player.getX(), player.getZ()) > config.view_range) {
 			return;
 		}
-		// light_wall не рисует вторую дугу поверх первой: он просто делает ту же стену выше и ярче
+		// light_wall не рисует вторую дугу поверх первой: он делает стену выше и добавляет
+		// внутренний контур, чтобы большая зона читалась как область, а не как забор
 		boolean wall = zone.components().contains(AnomalyComponent.LIGHT_WALL);
-		edgeBand(level, player, zone, config.view_range, wall ? 2.6f : 2.0f, wall ? 6 : 3, wall ? 4.0 : 1.5);
+		edgeBand(level, player, zone, config.view_range, wall ? 2.6f : 2.0f, wall ? 6 : 3,
+				wall ? 4.0 : 1.5, 1.0);
+		if (wall) {
+			edgeBand(level, player, zone, config.view_range, 2.0f, 3, 1.5, 0.82);
+		}
+		coreBeacon(level, player, zone);
 		mood(level, player, zone);
 		for (AnomalyComponent component : zone.components()) {
 			component.pulse(level, player, zone, config, state);
@@ -59,6 +70,7 @@ public final class AnomalyEffects {
 	/**
 	 * Низкий фон внутри зоны: без него большая область ощущается только по эффектам. Играем у самого
 	 * игрока — звук с расстояния 16 блоков до него не доходит (радиус слышимости = max(16, 16·vol)).
+	 * Набор компонентов задаёт характер: холод — души, гроза — базальт, голод — багровый лес.
 	 */
 	private static void mood(ServerLevel level, ServerPlayer player, Zone zone) {
 		if (zone.signedDistance(player.getX(), player.getZ()) > 0.0) {
@@ -67,8 +79,48 @@ public final class AnomalyEffects {
 		if (player.getRandom().nextInt(32) != 0) {
 			return;
 		}
-		level.playSound(null, player.getX(), player.getY(), player.getZ(), SoundEvents.AMBIENT_CAVE.value(),
-				SoundSource.AMBIENT, 0.9f, 0.7f + player.getRandom().nextFloat() * 0.3f);
+		net.minecraft.sounds.SoundEvent sound = SoundEvents.AMBIENT_CAVE.value();
+		for (AnomalyComponent component : zone.components()) {
+			if (component == AnomalyComponent.COLD_CREEP) {
+				sound = SoundEvents.AMBIENT_SOUL_SAND_VALLEY_MOOD.value();
+				break;
+			}
+			if (component == AnomalyComponent.STORM_CORE) {
+				sound = SoundEvents.AMBIENT_BASALT_DELTAS_MOOD.value();
+				break;
+			}
+			if (component == AnomalyComponent.HUNGER_DRAIN || component == AnomalyComponent.SATURATION_BURN) {
+				sound = SoundEvents.AMBIENT_CRIMSON_FOREST_MOOD.value();
+				break;
+			}
+		}
+		float pitch = 0.7f + (zone.id() % 4) * 0.12f;
+		level.playSound(null, player.getX(), player.getY(), player.getZ(), sound,
+				SoundSource.AMBIENT, 0.9f, pitch);
+	}
+
+	/**
+	 * Маяк ядра: столб end rod от земли. Издалека видно, куда тянет зона, и что у неё есть центр,
+	 * а не только край. Раз в 2 секунды и только если ядро в пределах 320 блоков.
+	 */
+	private static void coreBeacon(ServerLevel level, ServerPlayer player, Zone zone) {
+		if (player.tickCount % 40 != 0) {
+			return;
+		}
+		double dist = Math.hypot(zone.coreX() - player.getX(), zone.coreZ() - player.getZ());
+		if (dist > 320.0) {
+			return;
+		}
+		int bx = (int) Math.floor(zone.coreX());
+		int bz = (int) Math.floor(zone.coreZ());
+		if (!level.getChunkSource().hasChunk(bx >> 4, bz >> 4)) {
+			return;
+		}
+		double base = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, bx, bz);
+		for (int i = 2; i <= 26; i += 6) {
+			level.sendParticles(player, net.minecraft.core.particles.ParticleTypes.END_ROD,
+					true, true, zone.coreX(), base + i, zone.coreZ(), 1, 0.0, 0.0, 0.0, 0.0);
+		}
 	}
 
 	/**
@@ -79,10 +131,11 @@ public final class AnomalyEffects {
 	 * частицы по вертикали, получается полоса стены. Пакет адресован одному игроку: общая рассылка
 	 * уходила бы всем в измерении, а `overrideLimiter` ещё и на 512 блоков. Chunk-и не грузим:
 	 * в незагруженном чанке {@code getHeight} отдаёт дно мира, а косметика не стоит генерации.
+	 * {@code radiusFactor} — второй контур внутри зоны (для light_wall).
 	 */
 	static void edgeBand(ServerLevel level, ServerPlayer player, Zone zone, double reach, float scale,
-			int count, double spread) {
-		double radius = zone.radius();
+			int count, double spread, double radiusFactor) {
+		double radius = zone.radius() * radiusFactor;
 		if (radius < 1.0) {
 			return;
 		}
