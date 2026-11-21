@@ -46,8 +46,30 @@ public final class AnomalyEffects {
 		if (zone.signedDistance(player.getX(), player.getZ()) > config.view_range) {
 			return;
 		}
+		// край видно у любой зоны: слабая пыль цвета зоны; light_wall потом делает её плотной
+		edgeBand(level, player, zone, 10, 96.0, 0.85f);
 		for (AnomalyComponent component : zone.components()) {
 			component.pulse(level, player, zone, config, state);
+		}
+	}
+
+	/** Дуга пыли по краю вблизи игрока: цвет — зоны, не класса. */
+	static void edgeBand(ServerLevel level, ServerPlayer player, Zone zone, int points, double reach, float scale) {
+		double radius = zone.radius();
+		if (radius < 1.0) {
+			return;
+		}
+		double toPlayer = Math.atan2(player.getZ() - zone.z(), player.getX() - zone.x());
+		double half = radius <= reach ? Math.PI : Math.asin(Math.min(1.0, reach / radius));
+		var color = new net.minecraft.core.particles.DustParticleOptions(zone.edgeColor(), scale);
+		var rnd = player.getRandom();
+		for (int i = 0; i < points; i++) {
+			double angle = toPlayer - half + 2.0 * half * (i + rnd.nextDouble()) / points;
+			double[] point = zone.anomaly().boundaryPoint(angle, zone.ageHours(), radius);
+			if (Math.hypot(point[0] - player.getX(), point[1] - player.getZ()) > reach) {
+				continue;
+			}
+			level.sendParticles(color, true, false, point[0], player.getY() + 1.0, point[1], 1, 0.0, 0.0, 0.0, 0.0);
 		}
 	}
 

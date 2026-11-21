@@ -429,24 +429,10 @@ public enum AnomalyComponent {
 		}
 	}
 
-	/** Стена по краю вблизи игрока: дуга из пыли цвета зоны, а не класса. */
-	private static void lightWall(ServerLevel level, ServerPlayer player, Zone zone, net.minecraft.util.RandomSource rnd) {
-		double radius = zone.radius();
-		if (radius < 1.0) {
-			return;
-		}
-		double toPlayer = Math.atan2(player.getZ() - zone.z(), player.getX() - zone.x());
-		double half = radius <= 120.0 ? Math.PI : Math.asin(Math.min(1.0, 120.0 / radius));
-		var color = new net.minecraft.core.particles.DustParticleOptions(zone.edgeColor(), 1.1f);
-		int points = 28;
-		for (int i = 0; i < points; i++) {
-			double angle = toPlayer - half + 2.0 * half * (i + rnd.nextDouble()) / points;
-			double[] point = zone.anomaly().boundaryPoint(angle, zone.ageHours(), radius);
-			if (Math.hypot(point[0] - player.getX(), point[1] - player.getZ()) > 120.0) {
-				continue;
-			}
-			level.sendParticles(color, true, false, point[0], player.getY() + 1.0, point[1], 1, 0.0, 0.0, 0.0, 0.0);
-		}
+	/** Стена по краю: плотная дуга из пыли цвета зоны (базовая есть у всех, эта — ярче и гуще). */
+	private static void lightWall(ServerLevel level, ServerPlayer player, Zone zone,
+			net.minecraft.util.RandomSource rnd) {
+		AnomalyEffects.edgeBand(level, player, zone, 28, 120.0, 1.1f);
 	}
 
 	private static List<LivingEntity> nearby(ServerLevel level, ServerPlayer player, double range) {
