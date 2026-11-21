@@ -284,7 +284,8 @@ public final class AnomalyCommand {
 		AnomalyField.Stats stats = AnomalyField.stats();
 		reply(source, "Зон " + stats.total() + ": безопасных " + stats.safe()
 				+ ", опасных " + stats.danger() + ", смертельных " + stats.deadly()
-				+ (stats.pinned() > 0 ? ", тестовых " + stats.pinned() : ""));
+				+ (stats.pinned() > 0 ? ", тестовых " + stats.pinned() : "")
+				+ (stats.remnants() > 0 ? ", осколков " + stats.remnants() : ""));
 		reply(source, String.format(java.util.Locale.ROOT, "Покрыто %.1f %% площади мира, суммарный бюджет разрушения %s блоков",
 				stats.coveragePercent(), thousands(stats.budget())));
 		int pending = 0;

@@ -1,6 +1,7 @@
 package anomaly;
 
 import net.minecraft.core.particles.ParticleTypes;
+import net.minecraft.resources.Identifier;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.sounds.SoundEvents;
@@ -8,8 +9,10 @@ import net.minecraft.sounds.SoundSource;
 import net.minecraft.world.effect.MobEffectInstance;
 import net.minecraft.world.effect.MobEffects;
 import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.entity.Mob;
 import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.food.FoodData;
+import net.minecraft.world.level.levelgen.Heightmap;
 import net.minecraft.world.phys.AABB;
 
 import java.util.ArrayList;
@@ -43,6 +46,10 @@ public enum AnomalyComponent {
 	TRACTION("traction", "тяга", Kind.PASSIVE, AnomalyClass.DANGER, 2, "motion", 0x9AA0A6),
 	/** Отталкивает от ядра: выйти можно, но не по прямой. */
 	REPULSION("repulsion", "отторжение", Kind.PASSIVE, AnomalyClass.DANGER, 2, "motion", 0xB0A6C0),
+	/** В зоне не заснуть: сон прерывается, как только игрок ложится. */
+	BAD_SLEEP("bad_sleep", "дурной сон", Kind.PASSIVE, AnomalyClass.SAFE, 1, null, 0x4A3F55),
+	/** Мобы слышат дальше: подходят раньше, чем их видно. */
+	MOB_EARS("mob_ears", "чуткие мобы", Kind.PASSIVE, AnomalyClass.SAFE, 1, null, 0x8C7F6A),
 
 	// --- видимые ---
 	LIGHT_WALL("light_wall", "световая стена", Kind.VISIBLE, AnomalyClass.SAFE, 1, "show", 0),
@@ -50,7 +57,9 @@ public enum AnomalyComponent {
 	ECHO_BURSTS("echo_bursts", "хлопки", Kind.VISIBLE, AnomalyClass.SAFE, 1, "show", 0xC8C0B0),
 	STORM_CORE("storm_core", "грозовое ядро", Kind.VISIBLE, AnomalyClass.DANGER, 2, "show", 0xFFF07A),
 	GLOW_ALL("glow_all", "подсветка", Kind.VISIBLE, AnomalyClass.DANGER, 2, null, 0xA8E6CF),
-	FLOAT_ALL("float_all", "невесомость", Kind.VISIBLE, AnomalyClass.DANGER, 3, null, 0xD8C8FF);
+	FLOAT_ALL("float_all", "невесомость", Kind.VISIBLE, AnomalyClass.DANGER, 3, null, 0xD8C8FF),
+	/** Чёрная фигура вдалеке: стоит и смотрит, исчезает, когда подходишь. */
+	SHADES("shades", "силуэты", Kind.VISIBLE, AnomalyClass.SAFE, 1, "show", 0x2A2A33);
 
 	public enum Kind {
 		PASSIVE, VISIBLE
@@ -61,6 +70,9 @@ public enum AnomalyComponent {
 			{"cold_creep", "ash_fall"},
 			{"storm_core", "float_all"}
 	};
+
+	/** Модификатор «чуткие мобы»: transient, чтобы не копился при повторных пульсах. */
+	private static final Identifier EARS_ID = Identifier.fromNamespaceAndPath("anomaly", "ears");
 
 	public final String id;
 	public final String title;
@@ -311,6 +323,14 @@ public enum AnomalyComponent {
 					player.giveExperiencePoints(-1);
 				}
 			}
+			case BAD_SLEEP -> {
+				// сон не берёт: ложишься — просыпаешься
+				if (player.isSleeping()) {
+					player.stopSleeping();
+					level.playSound(null, player.getX(), player.getY(), player.getZ(),
+							SoundEvents.AMBIENT_CAVE.value(), SoundSource.AMBIENT, 0.7f, 0.55f);
+				}
+			}
 			// ваниль снимает 2 за тик, то есть 20 за 0.5 с; +30 за шаг даёт нетто +10 и реальный набор инея
 			case COLD_CREEP -> {
 				if (!player.isCreative()) {
@@ -480,6 +500,8 @@ public enum AnomalyComponent {
 				}
 			}
 			case TRACTION, REPULSION -> dustTowardsCore(level, player, zone, rnd, this == REPULSION);
+			case MOB_EARS -> grantEars(level, player, rnd);
+			case SHADES -> shades(level, player, rnd);
 			case PRESSURE -> {
 				// 1/8 при 2 Гц — раз в 4 с; 2 искры раз в 10 с на глаз не читались
 				if (rnd.nextInt(8) == 0) {
@@ -530,6 +552,51 @@ public enum AnomalyComponent {
 				player.getY() + 1.0 + rnd.nextDouble(),
 				player.getZ() + dz * t,
 				2, 0.15, 0.25, 0.15, 0.02);
+	}
+
+	/** Мобы слышат дальше: follow range +8, чтобы подходили раньше, чем их видно. */
+	private static void grantEars(ServerLevel level, ServerPlayer player, net.minecraft.util.RandomSource rnd) {
+		if (rnd.nextInt(4) != 0) {
+			return;
+		}
+		AABB box = new AABB(player.getX() - 32.0, player.getY() - 16.0, player.getZ() - 32.0,
+				player.getX() + 32.0, player.getY() + 16.0, player.getZ() + 32.0);
+		for (Mob mob : level.getEntitiesOfClass(Mob.class, box)) {
+			var range = mob.getAttribute(net.minecraft.world.entity.ai.attributes.Attributes.FOLLOW_RANGE);
+			if (range != null && !range.hasModifier(EARS_ID)) {
+				range.addTransientModifier(new net.minecraft.world.entity.ai.attributes.AttributeModifier(
+						EARS_ID, 8.0,
+						net.minecraft.world.entity.ai.attributes.AttributeModifier.Operation.ADD_VALUE));
+			}
+		}
+	}
+
+	/**
+	 * Чёрная фигура вдалеке: 9 точек пыли складываются в силуэт на земле в 24–40 блоках.
+	 * Частицы, а не сущность: армор-стенд пришлось бы убирать, а игрок уходит — и он остаётся.
+	 */
+	private static void shades(ServerLevel level, ServerPlayer player, net.minecraft.util.RandomSource rnd) {
+		if (rnd.nextInt(20) != 0) {
+			return;
+		}
+		double angle = rnd.nextDouble() * Math.PI * 2.0;
+		double dist = 24.0 + rnd.nextDouble() * 16.0;
+		double sx = player.getX() + Math.cos(angle) * dist;
+		double sz = player.getZ() + Math.sin(angle) * dist;
+		int bx = (int) Math.floor(sx);
+		int bz = (int) Math.floor(sz);
+		if (!level.getChunkSource().hasChunk(bx >> 4, bz >> 4)) {
+			return;
+		}
+		int base = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, bx, bz);
+		if (base <= level.getMinY() + 2) {
+			return;
+		}
+		var ink = new net.minecraft.core.particles.DustParticleOptions(0x0C0C12, 1.8f);
+		level.sendParticles(player, ink, true, true, sx, base + 1.75, sz, 1, 0.0, 0.0, 0.0, 0.0);
+		level.sendParticles(player, ink, true, true, sx, base + 1.25, sz, 3, 0.16, 0.3, 0.16, 0.0);
+		level.sendParticles(player, ink, true, true, sx, base + 0.55, sz, 3, 0.22, 0.2, 0.22, 0.0);
+		level.sendParticles(player, ink, true, true, sx, base + 0.15, sz, 2, 0.3, 0.1, 0.3, 0.0);
 	}
 
 	/** Высота рельефа для точки или запасное значение, если чанк не загружен. */

@@ -55,11 +55,12 @@ public final class AnomalyEffects {
 		// light_wall не рисует вторую дугу поверх первой: он делает стену выше и добавляет
 		// внутренний контур, чтобы большая зона читалась как область, а не как забор
 		boolean wall = zone.components().contains(AnomalyComponent.LIGHT_WALL);
-		edgeBand(level, player, zone, config.view_range, wall ? 2.6f : 2.0f, wall ? 6 : 3,
-				wall ? 4.0 : 1.5, 1.0);
+		edgeBand(level, player, zone, config.view_range, wall ? 2.6f : 2.0f, wall ? 8 : 5,
+				wall ? 5.0 : 3.0, 1.0);
 		if (wall) {
-			edgeBand(level, player, zone, config.view_range, 2.0f, 3, 1.5, 0.82);
+			edgeBand(level, player, zone, config.view_range, 2.0f, 4, 3.0, 0.82);
 		}
+		anchors(level, player, zone);
 		coreBeacon(level, player, zone);
 		mood(level, player, zone);
 		for (AnomalyComponent component : zone.components()) {
@@ -101,10 +102,11 @@ public final class AnomalyEffects {
 
 	/**
 	 * Маяк ядра: столб end rod от земли. Издалека видно, куда тянет зона, и что у неё есть центр,
-	 * а не только край. Раз в 2 секунды и только если ядро в пределах 320 блоков.
+	 * а не только край. Раз в секунду, если ядро в пределах 320 блоков; в незагруженном чанке
+	 * высота берётся от игрока — маяк всё равно виден, а генерация ради косметики не нужна.
 	 */
 	private static void coreBeacon(ServerLevel level, ServerPlayer player, Zone zone) {
-		if (player.tickCount % 40 != 0) {
+		if (player.tickCount % 20 != 0) {
 			return;
 		}
 		double dist = Math.hypot(zone.coreX() - player.getX(), zone.coreZ() - player.getZ());
@@ -113,14 +115,47 @@ public final class AnomalyEffects {
 		}
 		int bx = (int) Math.floor(zone.coreX());
 		int bz = (int) Math.floor(zone.coreZ());
-		if (!level.getChunkSource().hasChunk(bx >> 4, bz >> 4)) {
-			return;
+		double base = player.getY();
+		if (level.getChunkSource().hasChunk(bx >> 4, bz >> 4)) {
+			base = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, bx, bz);
 		}
-		double base = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, bx, bz);
-		for (int i = 2; i <= 26; i += 6) {
+		for (int i = 2; i <= 40; i += 4) {
 			level.sendParticles(player, net.minecraft.core.particles.ParticleTypes.END_ROD,
-					true, true, zone.coreX(), base + i, zone.coreZ(), 1, 0.0, 0.0, 0.0, 0.0);
+					true, true, zone.coreX(), base + i, zone.coreZ(), 2, 0.15, 0.15, 0.15, 0.0);
 		}
+	}
+
+	/**
+	 * Неподвижные «якоря» зоны: 2–3 точки внутри, где всё время висит пыль. Без них внутри
+	 * аномалии не на что смотреть — все частицы привязаны к игроку и уезжают вместе с ним.
+	 */
+	private static void anchors(ServerLevel level, ServerPlayer player, Zone zone) {
+		var color = new net.minecraft.core.particles.DustParticleOptions(zone.edgeColor(), 1.6f);
+		for (int i = 0; i < 3; i++) {
+			double angle = noise01(zone.id() * 31L + i * 7919L) * Math.PI * 2.0;
+			double dist = zone.radius() * (0.25 + noise01(zone.id() * 17L + i * 104729L) * 0.35);
+			double ax = zone.x() + Math.cos(angle) * dist;
+			double az = zone.z() + Math.sin(angle) * dist;
+			if (Math.hypot(ax - player.getX(), az - player.getZ()) > 96.0) {
+				continue;
+			}
+			int bx = (int) Math.floor(ax);
+			int bz = (int) Math.floor(az);
+			if (!level.getChunkSource().hasChunk(bx >> 4, bz >> 4)) {
+				continue;
+			}
+			double y = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, bx, bz);
+			level.sendParticles(player, color, true, true, ax, y + 0.5, az,
+					4, 0.3, 1.8, 0.3, 0.01);
+		}
+	}
+
+	private static double noise01(long seed) {
+		long x = seed * 0x9E3779B97F4A7C15L;
+		x ^= x >>> 30;
+		x *= 0xBF58476D1CE4E5B9L;
+		x ^= x >>> 27;
+		return (x >>> 11) / (double) (1L << 53);
 	}
 
 	/**
@@ -141,8 +176,11 @@ public final class AnomalyEffects {
 		}
 		double toPlayer = Math.atan2(player.getZ() - zone.z(), player.getX() - zone.x());
 		double half = radius <= reach ? Math.PI : Math.asin(Math.min(1.0, reach / radius));
+		// рисуем не больше ~256 блоков дуги вокруг направления на игрока: у мелкой зоны полный круг
+		// при шаге 4 блока — это 10–30 блоков между точками и «пунктир», а лишние пакеты не видны
+		half = Math.min(half, 128.0 / radius);
 		double arc = 2.0 * half * radius;
-		int points = Math.max(24, Math.min(64, (int) (arc / 4.0)));
+		int points = Math.max(16, Math.min(96, (int) (arc / 3.0)));
 		var color = new net.minecraft.core.particles.DustParticleOptions(zone.edgeColor(), scale);
 		var rnd = player.getRandom();
 		for (int i = 0; i < points; i++) {

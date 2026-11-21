@@ -27,6 +27,10 @@ public record Zone(Anomaly anomaly, long now, double x, double z, double radius,
 		return anomaly.pinned;
 	}
 
+	public boolean remnant() {
+		return anomaly.remnant;
+	}
+
 	/** Отрицательное внутри, положительное снаружи. */
 	public double signedDistance(double px, double pz) {
 		return anomaly.signedDistance(px, pz, ageHours, radius);

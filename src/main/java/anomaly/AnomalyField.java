@@ -172,8 +172,14 @@ public final class AnomalyField {
 				continue;
 			}
 			if (!anomaly.alive(now)) {
-				iterator.remove();
-				changed = true;
+				// умерла — на 1–6 часов остаётся осколок: то же место и форма, но без урона
+				if (!anomaly.remnant && anomaly.r0 >= 120.0) {
+					makeRemnant(anomaly, now, rnd);
+					changed = true;
+				} else {
+					iterator.remove();
+					changed = true;
+				}
 				continue;
 			}
 			double ageHours = anomaly.ageHours(now);
@@ -209,7 +215,7 @@ public final class AnomalyField {
 		// попытка оценить смертность по сумме 1/жизнь врёт на сдвинутой возрастной структуре
 		// (поле то выгорает, то раздувается). Разрыв восполняется за ~два часа, а на ускоренном
 		// времени — за один тик, и выше цели поле не растёт.
-		int deficit = config.population - field.anomalies.size();
+		int deficit = config.population - liveCount(field);
 		if (deficit > 0 && hours > 0.0) {
 			int births = Math.min(deficit, Math.max(1, (int) Math.ceil(deficit * 0.5 * hours)));
 			for (int i = 0; i < births; i++) {
@@ -219,6 +225,45 @@ public final class AnomalyField {
 			}
 		}
 		return changed;
+	}
+
+	/** Сколько живых зон, не считая осколков умерших: иначе они на часы занимают слоты. */
+	private static int liveCount(AnomalyFieldData field) {
+		int count = 0;
+		for (Anomaly anomaly : field.anomalies) {
+			if (!anomaly.remnant) {
+				count++;
+			}
+		}
+		return count;
+	}
+
+	/**
+	 * Осколок умершей зоны: та же точка и форма, но меньше, без дрейфа, без урона и без новых следов.
+	 * Компоненты остаются только видимые и безвредные — по ним видно, что здесь было.
+	 */
+	private static void makeRemnant(Anomaly anomaly, long now, Random rnd) {
+		anomaly.remnant = true;
+		anomaly.r0 = Math.max(60.0, anomaly.r0 * (0.25 + rnd.nextDouble() * 0.15));
+		anomaly.born = now;
+		anomaly.life_hours = 1.0 + rnd.nextDouble() * 5.0;
+		anomaly.speed = 0.0;
+		anomaly.arc = 0.0;
+		anomaly.shrink = 1.0;
+		anomaly.scars = new ArrayList<>();
+		anomaly.scar_next = 0;
+		anomaly.scar_cursor = 0;
+		List<String> keep = new ArrayList<>();
+		for (String id : anomaly.components) {
+			AnomalyComponent component = AnomalyComponent.byId(id);
+			if (component != null && component.isVisible() && component != AnomalyComponent.ECHO_BURSTS
+					&& component != AnomalyComponent.STORM_CORE && component != AnomalyComponent.FLOAT_ALL) {
+				keep.add(id);
+			}
+		}
+		anomaly.components = keep;
+		anomaly.invalidateComponents();
+		// население считает только живые зоны, поэтому id не трогаем и класс оставляем ради цвета
 	}
 
 	// --- запросы ---
@@ -391,8 +436,8 @@ public final class AnomalyField {
 		return data.anomalies.size();
 	}
 
-	public record Stats(int total, int safe, int danger, int deadly, int pinned, double coveragePercent,
-			double budget) {
+	public record Stats(int total, int safe, int danger, int deadly, int pinned, int remnants,
+			double coveragePercent, double budget) {
 	}
 
 	public static Stats stats() {
@@ -402,6 +447,7 @@ public final class AnomalyField {
 		int danger = 0;
 		int deadly = 0;
 		int pinned = 0;
+		int remnants = 0;
 		double area = 0.0;
 		double budget = 0.0;
 		for (Anomaly anomaly : data.anomalies) {
@@ -415,12 +461,15 @@ public final class AnomalyField {
 			if (anomaly.pinned) {
 				pinned++;
 			}
-			// площадь эллипса, а не круга: вытянутость 0.55..2.25 заметно меняет покрытие
+			if (anomaly.remnant) {
+				remnants++;
+			}
+			// площадь эллипса, а не круга: вытянутость 0.45..2.6 заметно меняет покрытие
 			area += Math.PI * zone.radius() * zone.radius() * Math.max(0.2, anomaly.stretch);
 			budget += zone.budget();
 		}
 		double worldArea = Math.PI * (config == null ? 20000.0 : config.world_radius) * (config == null ? 20000.0 : config.world_radius);
-		return new Stats(data.anomalies.size(), safe, danger, deadly, pinned,
+		return new Stats(data.anomalies.size(), safe, danger, deadly, pinned, remnants,
 				worldArea <= 0 ? 0.0 : area / worldArea * 100.0, budget);
 	}
 
@@ -625,7 +674,8 @@ public final class AnomalyField {
 	private static int countAtLeast(AnomalyFieldData field, double radius) {
 		int count = 0;
 		for (Anomaly anomaly : field.anomalies) {
-			if (!anomaly.pinned && anomaly.r0 >= radius) {
+			// осколки умерших не считаются: иначе они держали бы потолок крупных зон
+			if (!anomaly.pinned && !anomaly.remnant && anomaly.r0 >= radius) {
 				count++;
 			}
 		}

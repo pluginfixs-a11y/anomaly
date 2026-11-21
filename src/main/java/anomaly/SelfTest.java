@@ -69,6 +69,7 @@ public final class SelfTest {
 		runGroup(result, "классы", () -> checkClasses(result, config, rnd));
 		runGroup(result, "бюджет", () -> checkBudget(result));
 		runGroup(result, "рассеивание", () -> checkSuppression(result, config));
+		runGroup(result, "осколки", () -> checkRemnants(result, config, rnd));
 		runGroup(result, "население", () -> checkPopulation(result, config, rnd));
 		runGroup(result, "сохранение", () -> checkPersistence(result, config, rnd));
 		runGroup(result, "края", () -> checkEdges(result, config, rnd));
@@ -814,6 +815,28 @@ public final class SelfTest {
 						> AnomalyClass.damageBudget(600, AnomalyClass.DEADLY));
 	}
 
+	// --- осколки умерших зон ---
+
+	private static void checkRemnants(Result result, AnomalyConfig config, Random rnd) {
+		AnomalyFieldData field = new AnomalyFieldData();
+		AnomalyConfig local = new AnomalyConfig();
+		local.population = 0;
+		Anomaly anomaly = AnomalyField.create(field, local, rnd, 0L, 12000, 0, 900.0, AnomalyClass.DEADLY, false);
+		anomaly.born = -7_200_000L;
+		anomaly.life_hours = 0.5;
+		anomaly.components = List.of("storm_core", "ash_fall", "hunger_drain");
+		field.anomalies.add(anomaly);
+		AnomalyField.tickData(field, local, rnd, 0L, 1.0);
+		Anomaly first = field.anomalies.isEmpty() ? null : field.anomalies.get(0);
+		report(result, "умершая зона оставляет осколок", first != null && first.remnant);
+		report(result, "осколок меньше и без следов",
+				first != null && first.r0 < 450.0 && first.scars.isEmpty());
+		report(result, "осколок без урона в компонентах", first != null
+				&& first.components.contains("ash_fall")
+				&& !first.components.contains("storm_core")
+				&& !first.components.contains("hunger_drain"));
+	}
+
 	// --- рассеивание у центра ---
 
 	private static void checkSuppression(Result result, AnomalyConfig config) {
@@ -867,7 +890,7 @@ public final class SelfTest {
 		local.population = 60;
 		AnomalyFieldData field = new AnomalyFieldData();
 		AnomalyField.seedPopulation(field, local, rnd, 0L);
-		int seeded = field.anomalies.size();
+		int seeded = live(field);
 		report(result, "посев даёт целевое население (" + seeded + " из 60)", seeded >= 45);
 
 		int min = seeded;
@@ -878,11 +901,11 @@ public final class SelfTest {
 		Random stepRandom = new Random(424242L);
 		for (int hour = 0; hour < 300; hour++) {
 			now += 3_600_000L;
-			int previous = field.anomalies.size();
+			int previous = live(field);
 			if (AnomalyField.tickData(field, local, stepRandom, now, 1.0)) {
 				changed = true;
 			}
-			int current = field.anomalies.size();
+			int current = live(field);
 			if (current != previous) {
 				before++;
 			}
@@ -892,7 +915,20 @@ public final class SelfTest {
 		report(result, "население держится у цели: " + min + ".." + max + " при цели 60",
 				min >= 45 && max <= 60);
 		report(result, "за 300 ч были рождения и смерти (" + before + " изменений)", changed && before > 20);
-		report(result, "поле не выросло сверх цели", field.anomalies.size() <= 60);
+		report(result, "поле не выросло сверх цели", live(field) <= 60);
+		// осколки умерших живут часами, но не копятся бесконечно
+		report(result, "осколков не больше живых",
+				field.anomalies.size() - live(field) <= 60);
+	}
+
+	private static int live(AnomalyFieldData field) {
+		int count = 0;
+		for (Anomaly anomaly : field.anomalies) {
+			if (!anomaly.remnant) {
+				count++;
+			}
+		}
+		return count;
 	}
 
 	// --- сохранение ---

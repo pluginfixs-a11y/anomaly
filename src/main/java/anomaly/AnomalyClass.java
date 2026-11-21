@@ -54,6 +54,9 @@ public enum AnomalyClass {
 		if (cls == null || !cls.damages() || radius <= BUDGET[0][0]) {
 			return 0.0;
 		}
+		// у опасной/смертельной зоны от 150 блоков есть «подпись»: без пола бюджет в 3–20 блоков
+		// не оставлял вообще ничего, и половина поля выглядела нетронутой
+		double floor = radius >= 150.0 ? 120.0 : 0.0;
 		for (int i = 1; i < BUDGET.length; i++) {
 			if (radius <= BUDGET[i][0]) {
 				double r0 = BUDGET[i - 1][0];
@@ -61,9 +64,9 @@ public enum AnomalyClass {
 				double b0 = BUDGET[i - 1][1];
 				double b1 = BUDGET[i][1];
 				double k = (radius - r0) / (r1 - r0);
-				return b0 + (b1 - b0) * k * k;
+				return Math.max(floor, b0 + (b1 - b0) * k * k);
 			}
 		}
-		return BUDGET[BUDGET.length - 1][1];
+		return Math.max(floor, BUDGET[BUDGET.length - 1][1]);
 	}
 }
