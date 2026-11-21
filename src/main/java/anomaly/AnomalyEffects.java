@@ -168,22 +168,35 @@ public final class AnomalyEffects {
 	 */
 	private static void shove(ServerPlayer player, double dx, double dz, AnomalyState state) {
 		long now = System.currentTimeMillis();
-		double vx = 0.0;
-		double vy = 0.0;
-		double vz = 0.0;
-		if (state.hasLast) {
-			long elapsed = now - state.lastMoveMs;
-			// от 1 до 20 тиков: минутный разрыв не должен превращаться в реактивный старт
-			double ticks = Math.max(1.0, Math.min(20.0, elapsed / 50.0));
-			vx = (player.getX() - state.lastX) / ticks;
-			vy = (player.getY() - state.lastY) / ticks;
-			vz = (player.getZ() - state.lastZ) / ticks;
+		double vx;
+		double vy;
+		double vz;
+		// два толчка в одном тике (перекрывающиеся зоны) не должны мерить нулевое смещение
+		if (state.hasLast && now - state.lastMoveMs < 40L) {
+			vx = state.velX;
+			vy = state.velY;
+			vz = state.velZ;
+		} else {
+			vx = 0.0;
+			vy = 0.0;
+			vz = 0.0;
+			if (state.hasLast) {
+				long elapsed = now - state.lastMoveMs;
+				// от 1 до 20 тиков: минутный разрыв не должен превращаться в реактивный старт
+				double ticks = Math.max(1.0, Math.min(20.0, elapsed / 50.0));
+				vx = (player.getX() - state.lastX) / ticks;
+				vy = (player.getY() - state.lastY) / ticks;
+				vz = (player.getZ() - state.lastZ) / ticks;
+			}
+			state.lastX = player.getX();
+			state.lastY = player.getY();
+			state.lastZ = player.getZ();
+			state.lastMoveMs = now;
+			state.velX = vx;
+			state.velY = vy;
+			state.velZ = vz;
+			state.hasLast = true;
 		}
-		state.lastX = player.getX();
-		state.lastY = player.getY();
-		state.lastZ = player.getZ();
-		state.lastMoveMs = now;
-		state.hasLast = true;
 
 		double nx = vx + dx;
 		double nz = vz + dz;

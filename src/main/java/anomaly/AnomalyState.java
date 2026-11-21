@@ -27,6 +27,10 @@ public final class AnomalyState {
 	public double lastY;
 	public double lastZ;
 	public long lastMoveMs;
+	/** Измеренная скорость с прошлого замера: два толчка в одном тике не должны обнулять её. */
+	public double velX;
+	public double velY;
+	public double velZ;
 	public boolean hasLast;
 
 	/** Шаг внутрь аномалии: прирост пропорционален силе аномалии и времени. */
