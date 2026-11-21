@@ -213,9 +213,20 @@ public final class Anomaly {
 		return new double[]{pos[0] + lx * cos - lz * sin, pos[1] + lx * sin + lz * cos};
 	}
 
+	/** Разобранный набор компонентов; кэш на время жизни записи (Gson его не пишет). */
+	private transient java.util.List<AnomalyComponent> parsedComponents;
+
 	/** Разобранный набор компонентов; пустой у старых файлов до миграции. */
 	public java.util.List<AnomalyComponent> componentList() {
-		return AnomalyComponent.parse(components);
+		if (parsedComponents == null) {
+			parsedComponents = AnomalyComponent.parse(components);
+		}
+		return parsedComponents;
+	}
+
+	/** Сбросить кэш разобранного набора: звать после замены {@code components}. */
+	public void invalidateComponents() {
+		parsedComponents = null;
 	}
 
 	/** Пригодность записи из файла: битые строки выбрасываются, а не роняют поле. */

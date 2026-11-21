@@ -85,6 +85,7 @@ public final class AnomalyField {
 					// пустой пул (всё выключено) не должен переписывать файл на каждом старте
 					if (!rolled.isEmpty()) {
 						anomaly.components = AnomalyComponent.ids(rolled);
+						anomaly.invalidateComponents();
 						migrated = true;
 					}
 				}
