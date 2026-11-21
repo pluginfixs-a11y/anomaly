@@ -24,7 +24,7 @@ public class AnomalyConfig {
 	private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
 	private static final Path PATH = FabricLoader.getInstance().getConfigDir().resolve("anomaly.json");
 	/** Текущая версия формата конфига. */
-	public static final int VERSION = 5;
+	public static final int VERSION = 6;
 
 	public int config_version = 0;
 
@@ -77,6 +77,14 @@ public class AnomalyConfig {
 	public double dose_decay_per_second = 0.02;
 	public double lingering_floor = 0.1;
 
+	// --- остаток ---
+	/** «Остаток» — долгие последствия на игрока, отдельная шкала в файле мира по UUID. */
+	public boolean residue_enabled = true;
+	/** Потолок остатка: наказание не бывает вечным. */
+	public double residue_cap_hours = 24.0;
+	/** Базовый спад, часов остатка за реальный час. Сон и компания ускоряют его отдельно. */
+	public double residue_decay_per_hour = 0.8;
+
 	public int view_range = 128;
 	/** Период серверного тика эффектов (10 = 0.5 с). Поле тикает раз в секунду отдельно. */
 	public int tick_period = 10;
@@ -123,6 +131,13 @@ public class AnomalyConfig {
 		dose_gain_per_second = finite(dose_gain_per_second, 0.05);
 		dose_decay_per_second = finite(dose_decay_per_second, 0.02);
 		lingering_floor = finite(lingering_floor, 0.1);
+		residue_cap_hours = finite(residue_cap_hours, 24.0);
+		residue_decay_per_hour = finite(residue_decay_per_hour, 0.8);
+		if (residue_cap_hours < 1.0) {
+			residue_cap_hours = 1.0;
+		}
+		residue_cap_hours = Math.min(168.0, residue_cap_hours);
+		residue_decay_per_hour = Math.max(0.0, Math.min(24.0, residue_decay_per_hour));
 		if (!Double.isFinite(radius_max) || radius_max < radius_min) {
 			radius_max = radius_min;
 		}
@@ -185,6 +200,8 @@ public class AnomalyConfig {
 		if (config_version < 5 && population == 800) {
 			population = 600;
 		}
+		// v5 → v6: появился «остаток»; у старых файлов его ключей нет, Gson ставит умолчания,
+		// и это ровно то, что нужно. Пользовательские числа не трогаем.
 		sanitize();
 		config_version = VERSION;
 		if (existed) {

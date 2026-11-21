@@ -41,6 +41,30 @@ public final class AnomalyCommand {
 												IntegerArgumentType.getInteger(context, "count")))))
 						.then(Commands.literal("here").executes(context -> here(context.getSource())))
 						.then(Commands.literal("stats").executes(context -> stats(context.getSource())))
+						.then(Commands.literal("residue")
+								.executes(context -> residue(context.getSource(), null))
+								.then(Commands.literal("get")
+										.then(Commands.argument("player", StringArgumentType.word())
+												.executes(context -> residue(context.getSource(),
+														StringArgumentType.getString(context, "player")))))
+								.then(Commands.literal("set")
+										.then(Commands.argument("player", StringArgumentType.word())
+												.then(Commands.argument("hours", DoubleArgumentType.doubleArg(0.0, 168.0))
+														.executes(context -> residueSet(context.getSource(),
+																StringArgumentType.getString(context, "player"),
+																DoubleArgumentType.getDouble(context, "hours"),
+																false)))))
+								.then(Commands.literal("add")
+										.then(Commands.argument("player", StringArgumentType.word())
+												.then(Commands.argument("hours", DoubleArgumentType.doubleArg(-168.0, 168.0))
+														.executes(context -> residueSet(context.getSource(),
+																StringArgumentType.getString(context, "player"),
+																DoubleArgumentType.getDouble(context, "hours"),
+																true)))))
+								.then(Commands.literal("clear")
+										.then(Commands.argument("player", StringArgumentType.word())
+												.executes(context -> residueClear(context.getSource(),
+														StringArgumentType.getString(context, "player"))))))
 						.then(Commands.literal("components").executes(context -> components(context.getSource())))
 						.then(Commands.literal("scar")
 								.then(Commands.argument("target", StringArgumentType.greedyString())
@@ -146,6 +170,7 @@ public final class AnomalyCommand {
 				+ " опасные, дальше смертельные (размытие ±" + config.class_blur + ")");
 		reply(source, "Рассеивание: внутри " + config.dissipate_radius + ", подавление до " + config.suppress_until
 				+ "; время поля ×" + trim(AnomalyClock.scale()) + " (" + timeHint() + ")");
+		reply(source, "Остаток на игрока: /anomaly residue [ник] · set/add/clear — для проверки последствий");
 		reply(source, "Проверка: /anomaly field · here · spawn · edge · show · timescale · event · selftest");
 		return 1;
 	}
@@ -300,6 +325,66 @@ public final class AnomalyCommand {
 			reply(source, "Разрушения в конфиге выключены — команда всё равно сработала (это отладка)");
 		}
 		return 1;
+	}
+
+	private static int residue(CommandSourceStack source, String name) {
+		ServerPlayer player = residueTarget(source, name);
+		if (player == null) {
+			return 0;
+		}
+		double hours = AnomalyResidue.hours(player);
+		reply(source, "Остаток " + player.getName().getString() + ": " + trim(hours) + " ч — "
+				+ AnomalyResidue.state(hours));
+		reply(source, "Растёт в опасных и смертельных зонах, спадает сам и вдвое быстрее у центра;"
+				+ " сон снимает 1–2 ч. Потолок " + trim(AnomalyMod.config.residue_cap_hours) + " ч.");
+		return 1;
+	}
+
+	private static int residueSet(CommandSourceStack source, String name, double hours, boolean add) {
+		ServerPlayer player = residueTarget(source, name);
+		if (player == null) {
+			return 0;
+		}
+		if (add) {
+			AnomalyResidue.add(player.getUUID(), hours);
+			reply(source, "Остаток " + player.getName().getString() + " изменён на " + trim(hours)
+					+ " ч: теперь " + trim(AnomalyResidue.hours(player)) + " ч ("
+					+ AnomalyResidue.state(AnomalyResidue.hours(player)) + ")");
+		} else {
+			AnomalyResidue.set(player.getUUID(), hours);
+			reply(source, "Остаток " + player.getName().getString() + " = " + trim(hours) + " ч ("
+					+ AnomalyResidue.state(hours) + ")");
+		}
+		return 1;
+	}
+
+	private static int residueClear(CommandSourceStack source, String name) {
+		ServerPlayer player = residueTarget(source, name);
+		if (player == null) {
+			return 0;
+		}
+		AnomalyResidue.clear(player.getUUID());
+		reply(source, "Остаток " + player.getName().getString() + " сброшен");
+		return 1;
+	}
+
+	/** Игрок по имени в списке онлайна; без имени — тот, кто ввёл команду. */
+	private static ServerPlayer residueTarget(CommandSourceStack source, String name) {
+		if (name == null) {
+			ServerPlayer self = source.getPlayer();
+			if (self == null) {
+				reply(source, "Из консоли нужно имя игрока: /anomaly residue get <ник>", ChatFormatting.RED);
+				return null;
+			}
+			return self;
+		}
+		ServerPlayer player = source.getServer().getPlayerList().getPlayerByName(name);
+		if (player == null) {
+			reply(source, "Игрок «" + name + "» не в сети: остаток читается только у онлайна",
+					ChatFormatting.RED);
+			return null;
+		}
+		return player;
 	}
 
 	private static int stats(CommandSourceStack source) {

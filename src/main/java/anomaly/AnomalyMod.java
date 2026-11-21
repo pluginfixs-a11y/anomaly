@@ -41,13 +41,20 @@ public class AnomalyMod implements ModInitializer {
 				config.population, config.spawn_min_radius, config.world_radius,
 				config.radius_min, config.radius_max, config.lifetime_max_hours);
 
-		ServerLifecycleEvents.SERVER_STARTED.register(AnomalyField::load);
-		ServerLifecycleEvents.SERVER_STOPPING.register(server -> AnomalyField.save());
+		ServerLifecycleEvents.SERVER_STARTED.register(server -> {
+			AnomalyField.load(server);
+			AnomalyResidue.load(server);
+		});
+		ServerLifecycleEvents.SERVER_STOPPING.register(server -> {
+			AnomalyField.save();
+			AnomalyResidue.save();
+		});
 		ServerTickEvents.END_SERVER_TICK.register(AnomalyMod::tick);
 		ServerPlayConnectionEvents.DISCONNECT.register((handler, server) -> {
 			STATES.remove(handler.player.getUUID());
 			AnomalyDebug.hide(handler.player.getUUID());
 		});
+		AnomalyResidue.register();
 		AnomalyCommand.register();
 
 		if (System.getProperty("anomaly.selftest") != null || System.getenv("ANOMALY_SELFTEST") != null) {
@@ -64,6 +71,7 @@ public class AnomalyMod implements ModInitializer {
 		// поле — раз в секунду: этого хватает для дрейфа в единицы блоков в минуту
 		if (tick % 20 == 0) {
 			AnomalyField.tick(server);
+			AnomalyResidue.tick();
 		}
 		if (tick % Math.max(1, config.tick_period) == 0) {
 			double seconds = Math.max(1, config.tick_period) / 20.0;
@@ -93,9 +101,11 @@ public class AnomalyMod implements ModInitializer {
 			return;
 		}
 
-		// вне Верхнего мира и у наблюдателей доза просто спадает, а не замирает
+		// вне Верхнего мира и у наблюдателей доза просто спадает, а не замирает;
+		// остаток при этом продолжает таять — иначе Нижний стал бы бесплатной паузой
 		if ((config.overworld_only && level.dimension() != Level.OVERWORLD) || player.isSpectator()) {
 			state.leave(seconds, config);
+			AnomalyResidue.update(player, seconds, null, state.dose);
 			return;
 		}
 
@@ -103,12 +113,30 @@ public class AnomalyMod implements ModInitializer {
 
 		Zone inside = null;
 		for (Zone zone : near) {
-			AnomalyEffects.ambience(level, player, zone, config, state);
 			if (zone.contains(player.getX(), player.getZ())
 					&& (inside == null || zone.strength() > inside.strength())) {
 				inside = zone;
 			}
 		}
+		// рисуем не больше четырёх ближайших: в наложении зон это десятки пакетов на игрока,
+		// а увидеть всё равно можно только то, что ближе
+		int drawn = 0;
+		if (inside != null) {
+			AnomalyEffects.ambience(level, player, inside, config, state);
+			drawn++;
+		}
+		for (Zone zone : near) {
+			if (drawn >= 4) {
+				break;
+			}
+			if (inside != null && zone.id() == inside.id()) {
+				continue;
+			}
+			AnomalyEffects.ambience(level, player, zone, config, state);
+			drawn++;
+		}
+
+		AnomalyResidue.update(player, seconds, inside, state.dose);
 
 		if (inside != null) {
 			boolean fresh = state.zoneId != inside.id();

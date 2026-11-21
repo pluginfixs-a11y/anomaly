@@ -70,6 +70,7 @@ public final class SelfTest {
 		runGroup(result, "бюджет", () -> checkBudget(result));
 		runGroup(result, "рассеивание", () -> checkSuppression(result, config));
 		runGroup(result, "осколки", () -> checkRemnants(result, config, rnd));
+		runGroup(result, "остаток", () -> checkResidue(result, config));
 		runGroup(result, "население", () -> checkPopulation(result, config, rnd));
 		runGroup(result, "сохранение", () -> checkPersistence(result, config, rnd));
 		runGroup(result, "края", () -> checkEdges(result, config, rnd));
@@ -872,6 +873,80 @@ public final class SelfTest {
 		report(result, "осколок стоит там, где зона умерла",
 				scar != null && Math.hypot(scar.x0 - death[0], scar.z0 - death[1]) < 50.0);
 		report(result, "осколок не даёт дозы", scar != null && scar.zone(0L).strength() == 0.0);
+	}
+
+	// --- остаток ---
+
+	private static void checkResidue(Result result, AnomalyConfig config) {
+		double cap = config.residue_cap_hours;
+		check(result, "остаток растёт по часам", 1.2,
+				AnomalyResidue.nextHours(0.0, 2.0, 0.8, 1.0, false, false, cap), 1e-9);
+		check(result, "остаток не уходит в минус", 0.0,
+				AnomalyResidue.nextHours(0.1, 0.0, 0.8, 1.0, false, false, cap), 1e-9);
+		check(result, "потолок остатка держит", cap,
+				AnomalyResidue.nextHours(cap - 1.0, 50.0, 0.0, 1.0, false, false, cap), 1e-9);
+		// рядом с другим игроком −10 % от текущего за час
+		check(result, "рядом с другим −10 % в час", 9.0,
+				AnomalyResidue.nextHours(10.0, 0.0, 0.0, 1.0, true, false, cap), 1e-6);
+		// у центра мира спад вдвое быстрее: 10 − 2·0.8 = 8.4
+		check(result, "у центра спад вдвое быстрее", 8.4,
+				AnomalyResidue.nextHours(10.0, 0.0, 0.8, 1.0, false, true, cap), 1e-6);
+		check(result, "безопасная зона не даёт остатка", 0.0,
+				AnomalyResidue.growthPerHour(AnomalyClass.SAFE, 1.0, 1.0), 1e-9);
+		check(result, "смертельная в ядре — 8.5 ч/ч", 8.5,
+				AnomalyResidue.growthPerHour(AnomalyClass.DEADLY, 1.0, 1.0), 1e-9);
+		check(result, "смертельная у края вчетверо слабее ядра", 1.75,
+				AnomalyResidue.growthPerHour(AnomalyClass.DEADLY, 0.0, 0.0), 1e-9);
+		report(result, "состояния по порогам", AnomalyResidue.state(1.9).equals("след")
+				&& AnomalyResidue.state(2.0).equals("дрожь")
+				&& AnomalyResidue.state(5.0).equals("оскомина")
+				&& AnomalyResidue.state(8.0).equals("печать ада")
+				&& AnomalyResidue.state(12.0).equals("пелена")
+				&& AnomalyResidue.state(16.0).equals("голод глубины"));
+		// окна — чистая функция секунд: одинаковое у всех, без таймеров в памяти
+		report(result, "окна последствий периодичны",
+				AnomalyResidue.window(0L, 0L, 10, 2)
+						&& !AnomalyResidue.window(2L, 0L, 10, 2)
+						&& AnomalyResidue.window(10L, 0L, 10, 2)
+						&& !AnomalyResidue.window(0L, 3L, 10, 2)
+						&& !AnomalyResidue.window(5L, 0L, 0, 2));
+
+		// файл: у каждого игрока своя шкала по UUID, версия и часы сохраняются
+		AnomalyResidue.Data payload = new AnomalyResidue.Data();
+		AnomalyResidue.Entry entry = new AnomalyResidue.Entry();
+		entry.hours = 7.25;
+		entry.updated_ms = 1_234L;
+		payload.players.put("00000000-0000-0000-0000-000000000001", entry);
+		Path file = null;
+		Path broken = null;
+		try {
+			file = Files.createTempFile("anomaly-residue", ".json");
+			report(result, "остаток записывается", AnomalyResidue.write(file, payload));
+			AnomalyResidue.Data loaded = AnomalyResidue.read(file);
+			report(result, "остаток читается обратно", loaded != null && loaded.players != null);
+			if (loaded != null && loaded.players != null) {
+				AnomalyResidue.Entry copy = loaded.players.get("00000000-0000-0000-0000-000000000001");
+				report(result, "остаток игрока пережил файл",
+						copy != null && Math.abs(copy.hours - 7.25) < 1e-9 && copy.updated_ms == 1_234L);
+			}
+			broken = Files.createTempFile("anomaly-residue-broken", ".json");
+			Files.writeString(broken, "{ это не json", StandardCharsets.UTF_8);
+			report(result, "битый файл остатка не роняет загрузку", AnomalyResidue.read(broken) == null);
+		} catch (IOException e) {
+			report(result, "остаток: " + e, false);
+		} finally {
+			for (Path temp : new Path[]{file, broken}) {
+				if (temp == null) {
+					continue;
+				}
+				try {
+					Files.deleteIfExists(temp);
+					Files.deleteIfExists(temp.resolveSibling(temp.getFileName() + ".bak"));
+				} catch (IOException ignored) {
+					// мусор в temp
+				}
+			}
+		}
 	}
 
 	// --- рассеивание у центра ---
