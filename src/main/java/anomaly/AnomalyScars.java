@@ -98,6 +98,14 @@ public final class AnomalyScars {
 				return op;
 			}
 		}
+		// провал — отдельная геология: не пик и не пятно, а дыра в рельефе
+		if (dangerous && remaining > 2500.0 && roll < 0.88) {
+			ScarOp op = ScarOp.sinkhole(spot[0], spot[1], 3.0 + rnd.nextDouble() * 5.0,
+					3 + rnd.nextInt(6), rnd.nextLong());
+			if (op.blocks <= remaining) {
+				return op;
+			}
+		}
 		// площадные следы: мёртвая земля или обломки — под остаток бюджета
 		double soilBudget = Math.min(remaining * 0.7, deadly ? 3000.0 : 1500.0);
 		double soilRadius = Math.max(3.0, Math.min(24.0, Math.sqrt(soilBudget / Math.PI)));
@@ -236,6 +244,7 @@ public final class AnomalyScars {
 			case "crack" -> trench(level, x, surface, z, op.depth, false);
 			case "lava_fault" -> trench(level, x, surface, z, op.depth, true);
 			case "spike" -> spike(level, op, x, surface, z);
+			case "sinkhole" -> sinkhole(level, op, x, surface, z);
 			default -> 0;
 		};
 		// дерево сносим после следа и по исходной высоте: до правки ствол ещё на месте,
@@ -461,6 +470,28 @@ public final class AnomalyScars {
 			}
 		}
 		return false;
+	}
+
+	/** Провал: вынимаем колонку на depth блоков, стенки остаются как есть. */
+	private static int sinkhole(ServerLevel level, ScarOp op, int x, int surface, int z) {
+		clearPlant(level, x, surface, z);
+		BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
+		int changed = 0;
+		int depth = Math.max(1, Math.min(10, op.depth));
+		for (int i = 0; i < depth; i++) {
+			int y = surface - 1 - i;
+			if (y <= level.getMinY()) {
+				break;
+			}
+			BlockState state = level.getBlockState(pos.set(x, y, z));
+			if (protectedBlock(state) || builtBlock(state) || isFragileSurface(state)
+					|| !state.getFluidState().isEmpty()) {
+				break;
+			}
+			level.setBlock(pos, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
+			changed++;
+		}
+		return changed;
 	}
 
 	private static int spike(ServerLevel level, ScarOp op, int x, int surface, int z) {

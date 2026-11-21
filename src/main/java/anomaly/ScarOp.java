@@ -56,6 +56,14 @@ public final class ScarOp {
 		return op;
 	}
 
+	/** Провал: круг radius и глубина depth. Не воронка от хлопка, а настоящая дыра в рельефе. */
+	public static ScarOp sinkhole(double x, double z, double radius, int depth, long seed) {
+		ScarOp op = disk("sinkhole", x, z, radius, seed);
+		op.depth = Math.max(1, Math.min(10, depth));
+		op.blocks = (int) Math.round(Math.PI * radius * radius * op.depth);
+		return op;
+	}
+
 	public boolean isLine() {
 		return "crack".equals(type) || "lava_fault".equals(type);
 	}
@@ -102,6 +110,7 @@ public final class ScarOp {
 	public String describe() {
 		return switch (type) {
 			case "spike" -> "пик " + Math.round(height) + " (r " + Math.round(radius) + ")";
+			case "sinkhole" -> "провал r " + Math.round(radius) + " × " + depth;
 			case "crack", "lava_fault" -> (type.equals("lava_fault") ? "лавовый разлом " : "трещина ")
 					+ length + "×" + width;
 			default -> type + " r " + Math.round(radius);

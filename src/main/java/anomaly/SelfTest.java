@@ -464,6 +464,11 @@ public final class SelfTest {
 		}
 		report(result, "план следов детерминирован", same);
 
+		ScarOp hole = ScarOp.sinkhole(0.0, 0.0, 4.0, 5, 1L);
+		report(result, "провал оценивается по объёму",
+				hole.blocks == (int) Math.round(Math.PI * 16.0 * 5)
+						&& hole.describe().startsWith("провал"));
+
 		boolean columnsOk = true;
 		for (ScarOp op : first) {
 			int count = op.columnCount();
@@ -666,8 +671,7 @@ public final class SelfTest {
 					level.getBlockState(new BlockPos(fx, frostSurface, bz)).is(Blocks.SNOW));
 			restore(level, frostBefore);
 
-			int gx = bx + 208;
-			level.getChunk(gx >> 4, bz >> 4);
+			int gx = bx + 208;			level.getChunk(gx >> 4, bz >> 4);
 			int scorchSurface = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, gx, bz);
 			Map<BlockPos, BlockState> scorchBefore = snapshot(level, gx, bz, 3, scorchSurface - 2, scorchSurface + 14);
 			snapshots.add(scorchBefore);
@@ -676,6 +680,21 @@ public final class SelfTest {
 			report(result, "молния выжигает землю",
 					level.getBlockState(new BlockPos(gx, scorchSurface - 1, bz)).is(Blocks.COARSE_DIRT));
 			restore(level, scorchBefore);
+
+			// провал: колонка вынимается на несколько блоков
+			int hx = bx + 240;
+			level.getChunk(hx >> 4, bz >> 4);
+			int holeSurface = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, hx, bz);
+			Map<BlockPos, BlockState> holeBefore = snapshot(level, hx, bz, 2, holeSurface - 12, holeSurface + 2);
+			snapshots.add(holeBefore);
+			level.setBlock(new BlockPos(hx, holeSurface - 1, bz), Blocks.STONE.defaultBlockState(), Block.UPDATE_ALL);
+			level.setBlock(new BlockPos(hx, holeSurface - 2, bz), Blocks.STONE.defaultBlockState(), Block.UPDATE_ALL);
+			level.setBlock(new BlockPos(hx, holeSurface - 3, bz), Blocks.STONE.defaultBlockState(), Block.UPDATE_ALL);
+			AnomalyScars.applyColumn(level, ScarOp.sinkhole(hx, bz, 0.6, 3, 41L), hx, bz);
+			report(result, "провал вынимает три блока",
+					level.getBlockState(new BlockPos(hx, holeSurface - 1, bz)).isAir()
+							&& level.getBlockState(new BlockPos(hx, holeSurface - 3, bz)).isAir());
+			restore(level, holeBefore);
 		} finally {
 			// исключение внутри кейса не должно оставить тестовые блоки в мире
 			for (Map<BlockPos, BlockState> states : snapshots) {
