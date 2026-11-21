@@ -149,6 +149,9 @@ public final class AnomalyScars {
 	 * воде и камне {@code applyColumn} возвращает 0 — по одним изменённым блокам проход не
 	 * остановился бы никогда и за тик выгреб бы весь план зоны.
 	 */
+	/** С какой записи начинать следующий проход: строгий FIFO морил голодом всё поле за первой зоной. */
+	private static int rotate;
+
 	public static boolean tick(MinecraftServer server, ServerLevel level, AnomalyFieldData data,
 			AnomalyConfig config) {
 		if (!config.scar_enabled) {
@@ -164,7 +167,16 @@ public final class AnomalyScars {
 		int blocksThisTick = 0;
 		boolean progressed = false;
 
-		for (Anomaly anomaly : data.anomalies) {
+		int size = data.anomalies.size();
+		if (size == 0) {
+			return false;
+		}
+		if (rotate < 0 || rotate >= size) {
+			rotate = 0;
+		}
+		for (int step = 0; step < size; step++) {
+			int index = (rotate + step) % size;
+			Anomaly anomaly = data.anomalies.get(index);
 			if (anomaly.scars == null || anomaly.scars.isEmpty() || anomaly.scar_next >= anomaly.scars.size()) {
 				continue;
 			}
@@ -183,6 +195,12 @@ public final class AnomalyScars {
 					if (Math.hypot(column[0], column[1]) < config.suppress_until) {
 						anomaly.scar_cursor++;
 						continue;
+					}
+					// бюджет проверяем ДО загрузки чанка: getChunk — синхронная генерация
+					if (blocksThisTick >= config.blocks_per_tick || columnsThisTick >= COLUMNS_PER_PASS
+							|| System.nanoTime() > deadline) {
+						finished = false;
+						break;
 					}
 					int chunkX = column[0] >> 4;
 					int chunkZ = column[1] >> 4;
@@ -211,12 +229,14 @@ public final class AnomalyScars {
 					}
 				}
 				if (!finished) {
+					rotate = index;
 					return progressed;
 				}
 				anomaly.scar_next++;
 				anomaly.scar_cursor = 0;
 				if (blocksThisTick >= config.blocks_per_tick || chunksThisTick >= config.chunks_per_tick
 						|| columnsThisTick >= COLUMNS_PER_PASS) {
+					rotate = (index + 1) % size;
 					return progressed;
 				}
 			}
@@ -309,7 +329,11 @@ public final class AnomalyScars {
 				}
 				continue;
 			}
-			if (protectedBlock(plant) || plant.blocksMotion() || !plant.getFluidState().isEmpty()) {
+			if (protectedBlock(plant) || plant.blocksMotion() || !plant.getFluidState().isEmpty()
+					|| plant.is(BlockTags.RAILS) || plant.is(BlockTags.BUTTONS)
+					|| plant.is(BlockTags.PRESSURE_PLATES) || plant.is(BlockTags.ALL_SIGNS)
+					|| plant.is(Blocks.TORCH) || plant.is(Blocks.WALL_TORCH)
+					|| plant.is(Blocks.SOUL_TORCH) || plant.is(Blocks.SOUL_WALL_TORCH)) {
 				break;
 			}
 			level.setBlock(pos, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
@@ -332,8 +356,9 @@ public final class AnomalyScars {
 			return 0;
 		}
 		int changed = 0;
-		for (int dx = -2; dx <= 2; dx++) {
-			for (int dz = -2; dz <= 2; dz++) {
+		// крона дуба/тёмного дуба шире 5×5: с радиусом 2 оставались висящие кольца листвы
+		for (int dx = -4; dx <= 4; dx++) {
+			for (int dz = -4; dz <= 4; dz++) {
 				if (!level.getChunkSource().hasChunk((x + dx) >> 4, (z + dz) >> 4)) {
 					continue;
 				}
@@ -542,7 +567,9 @@ public final class AnomalyScars {
 				|| state.is(Blocks.TINTED_GLASS) || state.is(Blocks.SANDSTONE) || state.is(Blocks.SMOOTH_SANDSTONE)
 				|| state.is(Blocks.CUT_SANDSTONE) || state.is(Blocks.SMOOTH_STONE) || state.is(Blocks.MUD_BRICKS)
 				|| state.is(Blocks.DEEPSLATE_BRICKS) || state.is(Blocks.DEEPSLATE_TILES)
-				|| state.is(Blocks.POLISHED_DEEPSLATE);
+				|| state.is(Blocks.POLISHED_DEEPSLATE) || state.is(Blocks.COBBLESTONE)
+				|| state.is(Blocks.MOSSY_COBBLESTONE) || state.is(BlockTags.SLABS)
+				|| state.is(BlockTags.STAIRS);
 	}
 
 	static boolean protectedBlock(BlockState state) {

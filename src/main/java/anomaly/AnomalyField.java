@@ -30,7 +30,8 @@ import java.util.Random;
  * спросили (эффекты игрока, отладочный контур).
  */
 public final class AnomalyField {
-	private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
+	// без pretty: файл на 600 зон весит втрое меньше, а пишется он каждые 30 секунд
+	private static final Gson GSON = new GsonBuilder().create();
 	private static final String FILE_NAME = "anomaly_field.json";
 	private static final long HOUR_MS = 3_600_000L;
 

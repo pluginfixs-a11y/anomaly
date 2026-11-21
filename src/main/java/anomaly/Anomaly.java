@@ -257,6 +257,8 @@ public final class Anomaly {
 		if (!(Double.isFinite(arc) && Double.isFinite(stretch) && stretch > 0.01)) {
 			return false;
 		}
+		// stretch из ручного JSON в 1e6 делал зону невидимым диском на весь мир
+		stretch = Math.min(stretch, 10.0);
 		if (!(Double.isFinite(dir) && Double.isFinite(rotation) && Double.isFinite(breath)
 				&& Double.isFinite(breath_speed))) {
 			return false;
@@ -276,7 +278,7 @@ public final class Anomaly {
 		}
 		scars.removeIf(op -> op == null || op.blocks < 0 || !Double.isFinite(op.x) || !Double.isFinite(op.z)
 				|| !Double.isFinite(op.radius) || op.radius < 1.0 || op.length < 0 || op.width < 1
-				|| op.height < 0 || op.height > 400);
+				|| op.height < 0 || op.height > 400 || op.length > 512 || op.width > 8 || op.radius > 256);
 		scar_next = Math.max(0, Math.min(scar_next, scars.size()));
 		scar_cursor = Math.max(0, scar_cursor);
 		// битый курсор молча съедал бы след: подрезаем к длине текущего опа

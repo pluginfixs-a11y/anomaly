@@ -76,20 +76,24 @@ public final class AnomalyEffects {
 		// каждая зона берёт свою фазу кадра: иначе все соседние стены рисуются в один тик,
 		// и клиент получает залп из сотен пакетов вместо ровного потока
 		int phase = Math.floorMod((int) (zone.id() & 0xFFFFL), 20);
-		boolean frame = Math.floorMod(state.pulseTicks + phase, 20) < Math.max(1, state.lastStep);
+		// пыль 26.2 живёт всего 3–18 тиков при scale 0.35: у самого края рисуем вдвое чаще,
+		// иначе стена мигает и половину времени её просто нет
+		boolean close = sd < 48.0;
+		int period = close ? 10 : 20;
+		boolean frame = Math.floorMod(state.pulseTicks + phase, period) < Math.max(1, state.lastStep);
 		if (frame) {
 			boolean wall = zone.components().contains(AnomalyComponent.LIGHT_WALL);
 			// край — стена с переливом цвета, а не линия: пыль меняет оттенок к тёмному по жизни
 			edgeBand(level, player, zone, config.view_range, wall ? 0.45f : scaleFor(zone), wall ? 22 : 16,
 					wall ? 4.5 : spreadFor(zone), 1.0);
-			if (wall) {
-				// световая стена даёт второй контур внутри: большая область читается как область
+			// второй контур только если он реально попадает в кадр: при r>800 он уходит за reach
+			if (wall && zone.radius() * (1.0 - 0.84) <= config.view_range) {
 				edgeBand(level, player, zone, config.view_range, 0.3f, 12, 3.5, 0.84);
 			}
 			anchors(level, player, zone);
 		}
-		coreBeacon(level, player, zone);
-		interior(level, player, zone, sd);
+		coreBeacon(level, player, zone, state);
+		interior(level, player, zone, sd, state);
 	}
 
 	/** Толщина стены и высота разброса — по классу: смертельные видны издалека. */
@@ -153,8 +157,10 @@ public final class AnomalyEffects {
 	 * а не только край. Раз в секунду, если ядро в пределах 320 блоков; в незагруженном чанке
 	 * косметику не рисуем — генерация ради одного столба не стоит того.
 	 */
-	private static void coreBeacon(ServerLevel level, ServerPlayer player, Zone zone) {
-		if (player.tickCount % 20 != 0) {
+	private static void coreBeacon(ServerLevel level, ServerPlayer player, Zone zone, AnomalyState state) {
+		// не player.tickCount: его фаза относительно серверного тика эффектов может не совпасть
+		// с нулём никогда — маяка не было бы у 9 игроков из 10
+		if (state.pulseTicks % 20 >= Math.max(1, state.lastStep)) {
 			return;
 		}
 		double dist = Math.hypot(zone.coreX() - player.getX(), zone.coreZ() - player.getZ());
@@ -167,7 +173,7 @@ public final class AnomalyEffects {
 		if (!level.getChunkSource().hasChunk(bx >> 4, bz >> 4)) {
 			return;
 		}
-		double base = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, bx, bz);
+		double base = level.getHeight(Heightmap.Types.MOTION_BLOCKING, bx, bz);
 		// столб до 40 блоков над землёй, но не выше 64 и не ниже уровня глаз игрока в горах
 		int top = (int) Math.min(64.0, Math.max(40.0, player.getY() + 16.0 - base));
 		// один пакет на весь столб: разброс dy растягивает частицы по высоте, а не рисует 10 точек
@@ -195,7 +201,7 @@ public final class AnomalyEffects {
 			if (!level.getChunkSource().hasChunk(bx >> 4, bz >> 4)) {
 				continue;
 			}
-			double y = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, bx, bz);
+			double y = level.getHeight(Heightmap.Types.MOTION_BLOCKING, bx, bz);
 			level.sendParticles(player, dust, true, true, ax, y + 0.5, az,
 					6, 0.35, 2.2, 0.35, 0.01);
 		}
@@ -205,12 +211,13 @@ public final class AnomalyEffects {
 	 * Внутри зоны: редкая взвесь вокруг игрока, у каждого класса своя. Это не «полоса у края»,
 	 * а воздух, в котором стоишь: без него внутри большой зоны вообще нет картинки.
 	 */
-	private static void interior(ServerLevel level, ServerPlayer player, Zone zone, double sd) {
+	private static void interior(ServerLevel level, ServerPlayer player, Zone zone, double sd,
+			AnomalyState state) {
 		if (sd > 0.0) {
 			return;
 		}
-		// раз в полсекунды, независимо от периода тика эффектов
-		if (player.tickCount % 10 != 0) {
+		// каждый тик эффектов (0.5 с), без привязки к player.tickCount
+		if (state.pulseTicks % 10 >= Math.max(1, state.lastStep)) {
 			return;
 		}
 		var rnd = player.getRandom();
@@ -314,7 +321,7 @@ public final class AnomalyEffects {
 			if (!level.getChunkSource().hasChunk(bx >> 4, bz >> 4)) {
 				continue;
 			}
-			double y = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, bx, bz) + 0.6;
+			double y = level.getHeight(Heightmap.Types.MOTION_BLOCKING, bx, bz) + 0.6;
 			level.sendParticles(player, dust, true, true, point[0], y, point[1], count, 0.0, spread, 0.0, 0.0);
 			if (i % 4 == 0) {
 				// верхние клочья: стена выше и не обрывается ровной линией по грудь

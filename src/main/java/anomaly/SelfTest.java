@@ -421,6 +421,16 @@ public final class SelfTest {
 		deadly.components = List.of("pressure", "storm_core");
 		List<ScarOp> plan = AnomalyScars.plan(deadly, AnomalyClass.DEADLY, new Random(2L));
 		report(result, "у большой смертельной есть следы", !plan.isEmpty());
+
+		// мелкие опасные (100–149) раньше оставались без единого следа: бюджет 0 < порога плана
+		report(result, "у мелкой опасной есть подпись (40 блоков)",
+				AnomalyClass.damageBudget(120.0, AnomalyClass.DANGER) >= 40.0);
+		report(result, "у зоны r=120 есть план следов",
+				!AnomalyScars.plan(AnomalyField.create(new AnomalyFieldData(), config, rnd, 0L, 12000, 0,
+						120.0, AnomalyClass.DANGER, false), AnomalyClass.DANGER, new Random(9L)).isEmpty());
+		// трещина не должна резать пол базы из булыжника
+		report(result, "булыжник считается постройкой",
+				AnomalyScars.builtBlock(Blocks.COBBLESTONE.defaultBlockState()));
 		int total = 0;
 		boolean inBudget = true;
 		boolean insideZone = true;

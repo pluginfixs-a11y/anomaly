@@ -65,7 +65,7 @@ public class AnomalyConfig {
 
 	// --- разрушения ---
 	public boolean scar_enabled = true;
-	/** Чанков за тик: 2 — это 40 в секунду, но только когда mspt ниже порога. */
+	/** Чанков за проход: 2 — это 2 в секунду, проход один и только когда mspt ниже порога. */
 	public int chunks_per_tick = 2;
 	/** Блоков за тик: потолок работы разрушений, чтобы не вешать сервер. */
 	public int blocks_per_tick = 2000;

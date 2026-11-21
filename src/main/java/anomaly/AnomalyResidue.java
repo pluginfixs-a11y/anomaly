@@ -111,6 +111,10 @@ public final class AnomalyResidue {
 
 	/** Раз в секунду из общего тика: пишем не чаще раза в минуту, как и поле. */
 	public static void tick() {
+		// записи, которые дотаили до нуля, не копим: иначе файл растёт по числу всех заходивших
+		if (data.players.values().removeIf(entry -> entry.hours <= 0.0)) {
+			dirty = true;
+		}
 		long now = System.currentTimeMillis();
 		if (dirty && now - lastSaveMs > 60_000L) {
 			saveNow();
@@ -426,6 +430,10 @@ public final class AnomalyResidue {
 			}
 		});
 		EntitySleepEvents.STOP_SLEEPING.register((entity, pos) -> {
+			AnomalyConfig config = AnomalyMod.config;
+			if (config == null || !config.enabled || !config.residue_enabled) {
+				return;
+			}
 			if (!(entity instanceof ServerPlayer player)) {
 				return;
 			}
