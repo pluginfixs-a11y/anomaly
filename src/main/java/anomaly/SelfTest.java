@@ -1,13 +1,21 @@
 package anomaly;
 
+import net.minecraft.core.BlockPos;
 import net.minecraft.server.MinecraftServer;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.levelgen.Heightmap;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Random;
 
 /**
@@ -74,6 +82,10 @@ public final class SelfTest {
 				}
 				report(result, "у всех зон живого поля есть компоненты (" + live.size() + ")", withComponents);
 			});
+			// разрушения правят блоки: в чужом мире это делает только явно включённая самопроверка
+			if (System.getProperty("anomaly.selftest") != null || System.getenv("ANOMALY_SELFTEST") != null) {
+				runGroup(result, "следы вживую", () -> checkScarsLive(result, server));
+			}
 		}
 		return result;
 	}
@@ -447,6 +459,92 @@ public final class SelfTest {
 				AnomalyClass.DEADLY, true);
 		report(result, "тестовая зона не рушит мир", AnomalyScars.plan(pinned,
 				AnomalyClass.DEADLY, new Random(4L)).isEmpty());
+
+		report(result, "порталы и инфраструктура неприкосновенны",
+				AnomalyScars.protectedBlock(Blocks.NETHER_PORTAL.defaultBlockState())
+						&& AnomalyScars.protectedBlock(Blocks.END_PORTAL.defaultBlockState())
+						&& AnomalyScars.protectedBlock(Blocks.END_GATEWAY.defaultBlockState())
+						&& AnomalyScars.protectedBlock(Blocks.CHEST.defaultBlockState())
+						&& AnomalyScars.protectedBlock(Blocks.BEDROCK.defaultBlockState())
+						&& !AnomalyScars.protectedBlock(Blocks.STONE.defaultBlockState()));
+	}
+
+	// --- следы разрушения вживую (правит блоки, только при явно включённой самопроверке) ---
+
+	private static void checkScarsLive(Result result, MinecraftServer server) {
+		ServerLevel level = server.overworld();
+		int bx = 512;
+		int bz = 512;
+		level.getChunk(bx >> 4, bz >> 4);
+		level.getChunk((bx + 64) >> 4, bz >> 4);
+
+		// мёртвая земля: трава становится грубой, растение уходит
+		int surface = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, bx, bz);
+		Map<BlockPos, BlockState> before = snapshot(level, bx, bz, 1, surface - 2, surface + 2);
+		level.setBlock(new BlockPos(bx, surface - 1, bz), Blocks.GRASS_BLOCK.defaultBlockState(), Block.UPDATE_ALL);
+		level.setBlock(new BlockPos(bx, surface, bz), Blocks.SHORT_GRASS.defaultBlockState(), Block.UPDATE_ALL);
+		AnomalyScars.applyColumn(level, ScarOp.disk("dead_soil", bx, surface, bz, 7L), bx, bz);
+		report(result, "мёртвая земля: трава → грубая земля",
+				level.getBlockState(new BlockPos(bx, surface - 1, bz)).is(Blocks.COARSE_DIRT));
+		report(result, "мёртвая земля: растение снесено",
+				level.getBlockState(new BlockPos(bx, surface, bz)).isAir());
+		restore(level, before);
+
+		// пик поднимает колонку
+		int sx = bx + 32;
+		int spikeSurface = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, sx, bz);
+		Map<BlockPos, BlockState> spikeBefore = snapshot(level, sx, bz, 8, spikeSurface - 1, spikeSurface + 24);
+		level.setBlock(new BlockPos(sx, spikeSurface - 1, bz), Blocks.STONE.defaultBlockState(), Block.UPDATE_ALL);
+		AnomalyScars.applyColumn(level, ScarOp.spike(sx, bz, 3.0, 14, 11L), sx, bz);
+		int spikeAfter = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, sx, bz);
+		report(result, "пик поднимает колонку на " + (spikeAfter - spikeSurface) + " блоков",
+				spikeAfter >= spikeSurface + 4);
+		restore(level, spikeBefore);
+
+		// трещина выедает колонку
+		int cx = bx + 64;
+		int crackSurface = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, cx, bz);
+		Map<BlockPos, BlockState> crackBefore = snapshot(level, cx, bz, 2, crackSurface - 6, crackSurface + 2);
+		level.setBlock(new BlockPos(cx, crackSurface - 1, bz), Blocks.STONE.defaultBlockState(), Block.UPDATE_ALL);
+		AnomalyScars.applyColumn(level, ScarOp.line("crack", cx, bz, 0.0, 12, 1, 3, 13L), cx, bz);
+		report(result, "трещина выедает верхний блок",
+				level.getBlockState(new BlockPos(cx, crackSurface - 1, bz)).isAir());
+		restore(level, crackBefore);
+
+		// лёд не трогаем: шип на льдине холодного океана — уродство
+		int ix = bx + 80;
+		// та же ловушка, что и в боевом коде: getHeight на незагруженном чанке отдаёт дно мира
+		level.getChunk(ix >> 4, bz >> 4);
+		int iceSurface = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, ix, bz);
+		Map<BlockPos, BlockState> iceBefore = snapshot(level, ix, bz, 6, iceSurface - 2, iceSurface + 20);
+		level.setBlock(new BlockPos(ix, iceSurface - 1, bz), Blocks.ICE.defaultBlockState(), Block.UPDATE_ALL);
+		AnomalyScars.applyColumn(level, ScarOp.spike(ix, bz, 3.0, 14, 19L), ix, bz);
+		report(result, "лёд под шипом остаётся льдом (сейчас "
+						+ level.getBlockState(new BlockPos(ix, iceSurface - 1, bz)).getBlock().getName().getString()
+						+ ", высота " + level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, ix, bz)
+						+ " была " + iceSurface + ")",
+				level.getBlockState(new BlockPos(ix, iceSurface - 1, bz)).is(Blocks.ICE));
+		restore(level, iceBefore);
+	}
+
+	private static Map<BlockPos, BlockState> snapshot(ServerLevel level, int cx, int cz, int radius,
+			int fromY, int toY) {
+		Map<BlockPos, BlockState> states = new HashMap<>();
+		for (int x = cx - radius; x <= cx + radius; x++) {
+			for (int z = cz - radius; z <= cz + radius; z++) {
+				for (int y = fromY; y <= toY; y++) {
+					BlockPos pos = new BlockPos(x, y, z);
+					states.put(pos, level.getBlockState(pos));
+				}
+			}
+		}
+		return states;
+	}
+
+	private static void restore(ServerLevel level, Map<BlockPos, BlockState> states) {
+		for (Map.Entry<BlockPos, BlockState> entry : states.entrySet()) {
+			level.setBlock(entry.getKey(), entry.getValue(), Block.UPDATE_ALL);
+		}
 	}
 
 	private static boolean groupsOk(List<AnomalyComponent> set, AnomalyClass cls) {		java.util.Map<String, Integer> counts = new java.util.HashMap<>();

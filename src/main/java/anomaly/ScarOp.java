@@ -51,7 +51,8 @@ public final class ScarOp {
 	public static ScarOp spike(double x, double z, double radius, int height, long seed) {
 		ScarOp op = disk("spike", x, z, radius, seed);
 		op.height = height;
-		op.blocks = (int) Math.round(Math.PI * radius * radius * height / 3.0);
+		// реальная высота колонки ~0.5·h из-за спада к краю, а не h/3: иначе бюджет занижен в 1.5 раза
+		op.blocks = (int) Math.round(Math.PI * radius * radius * height * 0.55);
 		return op;
 	}
 

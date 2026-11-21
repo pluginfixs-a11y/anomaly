@@ -146,7 +146,7 @@ public class AnomalyConfig {
 		if (tick_period < 1) {
 			tick_period = 1;
 		}
-		chunks_per_tick = Math.max(0, Math.min(16, chunks_per_tick));
+		chunks_per_tick = Math.max(1, Math.min(16, chunks_per_tick));
 		blocks_per_tick = Math.max(100, Math.min(20_000, blocks_per_tick));
 		mspt_limit = Math.max(1.0, Math.min(1000.0, mspt_limit));
 		if (view_range < 1) {

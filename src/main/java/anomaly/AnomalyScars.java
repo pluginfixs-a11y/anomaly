@@ -27,6 +27,10 @@ import java.util.Random;
 public final class AnomalyScars {
 	private static final double TAU = Math.PI * 2.0;
 	private static final int MAX_HEIGHT = 150;
+	/** Колонок за проход: ~2000 изменённых блоков и несколько тысяч пустых проверок. */
+	private static final int COLUMNS_PER_PASS = 6000;
+	/** Часы на проход: средний mspt помнит 100 тиков, этого мало для 2000 setBlock подряд. */
+	private static final long NANOS_PER_PASS = 5_000_000L;
 	private static final Block[] SPIKE_BLOCKS = {
 			Blocks.STONE, Blocks.TUFF, Blocks.ANDESITE, Blocks.DEEPSLATE
 	};
@@ -37,16 +41,22 @@ public final class AnomalyScars {
 	// --- планирование ---
 
 	public static List<ScarOp> plan(Anomaly anomaly, AnomalyClass cls, Random rnd) {
+		return planAt(anomaly.x0, anomaly.z0, anomaly.r0, cls, rnd, anomaly.pinned);
+	}
+
+	/** План вокруг точки: при миграции старой зоны это её нынешнее место, а не точка рождения. */
+	public static List<ScarOp> planAt(double x, double z, double r0, AnomalyClass cls, Random rnd,
+			boolean pinned) {
 		List<ScarOp> ops = new ArrayList<>();
-		double budget = AnomalyClass.damageBudget(anomaly.r0, cls);
-		if (budget < 20.0 || anomaly.pinned) {
+		double budget = AnomalyClass.damageBudget(r0, cls);
+		if (budget < 20.0 || pinned) {
 			return ops;
 		}
 		double target = budget * (0.4 + rnd.nextDouble() * 0.5);
 		double used = 0.0;
 		int guard = 0;
 		while (used < target && guard++ < 40) {
-			ScarOp op = pick(anomaly, cls, rnd, target - used);
+			ScarOp op = pick(x, z, r0, cls, rnd, target - used);
 			if (op == null) {
 				break;
 			}
@@ -56,11 +66,11 @@ public final class AnomalyScars {
 		return ops;
 	}
 
-	private static ScarOp pick(Anomaly anomaly, AnomalyClass cls, Random rnd, double remaining) {
+	private static ScarOp pick(double cx, double cz, double r0, AnomalyClass cls, Random rnd, double remaining) {
 		boolean deadly = cls == AnomalyClass.DEADLY;
 		boolean dangerous = cls != AnomalyClass.SAFE;
 		double roll = rnd.nextDouble();
-		double[] spot = spot(anomaly, rnd);
+		double[] spot = spot(cx, cz, r0, rnd);
 
 		if (deadly && remaining > 6000.0 && roll < 0.40) {
 			ScarOp op = ScarOp.spike(spot[0], spot[1], 4.0 + rnd.nextDouble() * 10.0,
@@ -102,29 +112,37 @@ public final class AnomalyScars {
 		return crack.blocks <= remaining ? crack : null;
 	}
 
-	/** Точка в ядре: 35 % радиуса от центра рождения. Туда же попадает почти всё разрушение. */
-	private static double[] spot(Anomaly anomaly, Random rnd) {
+	/** Точка в ядре: 35 % радиуса от центра. Туда же попадает почти всё разрушение. */
+	private static double[] spot(double cx, double cz, double r0, Random rnd) {
 		double angle = rnd.nextDouble() * TAU;
-		double distance = anomaly.r0 * 0.35 * Math.sqrt(rnd.nextDouble());
+		double distance = r0 * 0.35 * Math.sqrt(rnd.nextDouble());
 		return new double[]{
-				anomaly.x0 + Math.cos(angle) * distance,
-				anomaly.z0 + Math.sin(angle) * distance
+				cx + Math.cos(angle) * distance,
+				cz + Math.sin(angle) * distance
 		};
 	}
 
 	// --- применение ---
 
-	/** Возвращает true, если что-то продвинулось: по этому полю решается, пора ли сохранять файл. */
+	/**
+	 * Возвращает true, если что-то продвинулось: по этому полю решается, пора ли сохранять файл.
+	 * <p>
+	 * Бюджет тройной: чанки, колонки и блоки. Колонки считаются отдельно, потому что на песке,
+	 * воде и камне {@code applyColumn} возвращает 0 — по одним изменённым блокам проход не
+	 * остановился бы никогда и за тик выгреб бы весь план зоны.
+	 */
 	public static boolean tick(MinecraftServer server, ServerLevel level, AnomalyFieldData data,
 			AnomalyConfig config) {
 		if (!config.scar_enabled) {
 			return false;
 		}
-		double mspt = server.getAverageTickTimeNanos() / 1_000_000.0;
-		if (mspt > config.mspt_limit) {
+		// средний mspt — грубый предохранитель с памятью в 100 тиков; точный — по часам внутри прохода
+		if (server.getAverageTickTimeNanos() / 1_000_000.0 > config.mspt_limit) {
 			return false;
 		}
+		long deadline = System.nanoTime() + NANOS_PER_PASS;
 		int chunksThisTick = 0;
+		int columnsThisTick = 0;
 		int blocksThisTick = 0;
 		boolean progressed = false;
 
@@ -138,8 +156,8 @@ public final class AnomalyScars {
 				boolean finished = true;
 				while (anomaly.scar_cursor < count) {
 					int[] column = op.column(anomaly.scar_cursor);
-					anomaly.scar_cursor++;
 					if (column == null) {
+						anomaly.scar_cursor++;
 						continue;
 					}
 					int chunkX = column[0] >> 4;
@@ -152,9 +170,18 @@ public final class AnomalyScars {
 						level.getChunk(chunkX, chunkZ);
 						chunksThisTick++;
 					}
-					blocksThisTick += applyColumn(level, op, column[0], column[1]);
+					// курсор двигаем только после проверок: иначе колонка на стыке бюджета чанков теряется
+					anomaly.scar_cursor++;
+					columnsThisTick++;
+					try {
+						blocksThisTick += applyColumn(level, op, column[0], column[1]);
+					} catch (RuntimeException e) {
+						AnomalyMod.LOGGER.warn("Anomaly: след #{} в {}, {} не применён ({})",
+								anomaly.id, column[0], column[1], e.toString());
+					}
 					progressed = true;
-					if (blocksThisTick >= config.blocks_per_tick) {
+					if (blocksThisTick >= config.blocks_per_tick || columnsThisTick >= COLUMNS_PER_PASS
+							|| System.nanoTime() > deadline) {
 						finished = false;
 						break;
 					}
@@ -164,7 +191,8 @@ public final class AnomalyScars {
 				}
 				anomaly.scar_next++;
 				anomaly.scar_cursor = 0;
-				if (blocksThisTick >= config.blocks_per_tick || chunksThisTick >= config.chunks_per_tick) {
+				if (blocksThisTick >= config.blocks_per_tick || chunksThisTick >= config.chunks_per_tick
+						|| columnsThisTick >= COLUMNS_PER_PASS) {
 					return progressed;
 				}
 			}
@@ -172,10 +200,16 @@ public final class AnomalyScars {
 		return progressed;
 	}
 
-	private static int applyColumn(ServerLevel level, ScarOp op, int x, int z) {
+	static int applyColumn(ServerLevel level, ScarOp op, int x, int z) {
 		// чанк уже загружен вызывающим: иначе getHeight отдаёт минимум мира
 		int surface = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, x, z);
 		if (surface <= level.getMinY() + 3 || surface >= level.getMaxY() - 2) {
+			return 0;
+		}
+		// heightmap считает воду и лёд грунтом. В холодном океане на льдине вырос бы каменный шип,
+		// а обломки заменили бы лёд булыжником: такие поверхности не трогаем вовсе.
+		BlockState ground = level.getBlockState(new BlockPos(x, surface - 1, z));
+		if (!ground.getFluidState().isEmpty() || isFragileSurface(ground)) {
 			return 0;
 		}
 		return switch (op.type) {
@@ -193,13 +227,13 @@ public final class AnomalyScars {
 		BlockPos ground = new BlockPos(x, surface - 1, z);
 		BlockState state = level.getBlockState(ground);
 		if (!protectedBlock(state) && (state.is(Blocks.GRASS_BLOCK) || state.is(Blocks.DIRT)
-				|| state.is(Blocks.PODZOL) || state.is(Blocks.MOSS_BLOCK) || state.is(Blocks.SNOW_BLOCK))) {
+				|| state.is(Blocks.PODZOL) || state.is(Blocks.MOSS_BLOCK))) {
 			level.setBlock(ground, Blocks.COARSE_DIRT.defaultBlockState(), Block.UPDATE_ALL);
 			changed++;
 		}
 		BlockPos above = new BlockPos(x, surface, z);
 		BlockState plant = level.getBlockState(above);
-		if (!plant.isAir() && !protectedBlock(plant) && !plant.blocksMotion()) {
+		if (!plant.isAir() && !protectedBlock(plant) && !plant.blocksMotion() && plant.getFluidState().isEmpty()) {
 			level.setBlock(above, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
 			changed++;
 		}
@@ -316,13 +350,23 @@ public final class AnomalyScars {
 		return changed;
 	}
 
-	private static boolean protectedBlock(BlockState state) {
+	/**
+	 * Поверхность, на которой след выглядит мусором: лёд (льдины холодного океана, ледяные пики),
+	 * рыхлый снег. Вода и так отсекается по жидкости. Такую колонку не трогаем ни одним следом.
+	 */
+	private static boolean isFragileSurface(BlockState state) {
+		return state.is(Blocks.ICE) || state.is(Blocks.PACKED_ICE) || state.is(Blocks.BLUE_ICE)
+				|| state.is(Blocks.FROSTED_ICE) || state.is(Blocks.SNOW_BLOCK);
+	}
+
+	static boolean protectedBlock(BlockState state) {
 		if (state.hasBlockEntity()) {
 			return true;
 		}
 		return state.is(Blocks.BEDROCK) || state.is(Blocks.OBSIDIAN) || state.is(Blocks.CRYING_OBSIDIAN)
 				|| state.is(Blocks.ANCIENT_DEBRIS) || state.is(Blocks.REINFORCED_DEEPSLATE)
 				|| state.is(Blocks.BARRIER) || state.is(Blocks.END_PORTAL_FRAME)
+				|| state.is(Blocks.NETHER_PORTAL) || state.is(Blocks.END_PORTAL) || state.is(Blocks.END_GATEWAY)
 				|| state.is(Blocks.RESPAWN_ANCHOR) || state.is(Blocks.LODESTONE)
 				|| state.is(Blocks.BEACON) || state.is(Blocks.SPAWNER);
 	}
@@ -334,7 +378,15 @@ public final class AnomalyScars {
 		}
 		int sum = 0;
 		for (int i = anomaly.scar_next; i < anomaly.scars.size(); i++) {
-			sum += anomaly.scars.get(i).blocks;
+			ScarOp op = anomaly.scars.get(i);
+			if (i == anomaly.scar_next) {
+				// текущий след уже частично пройден — не показываем его целиком второй раз
+				int count = op.columnCount();
+				int left = Math.max(0, count - anomaly.scar_cursor);
+				sum += count > 0 ? (int) ((long) op.blocks * left / count) : 0;
+				continue;
+			}
+			sum += op.blocks;
 		}
 		return sum;
 	}

@@ -92,8 +92,12 @@ public final class AnomalyField {
 				// зоны, рождённые до 0.2.0-alpha3, приходят без плана следов — планируем на загрузке
 				if (!anomaly.pinned && (anomaly.scars == null || anomaly.scars.isEmpty())
 						&& anomaly.scar_next == 0 && anomaly.scar_cursor == 0) {
-					List<ScarOp> planned = AnomalyScars.plan(anomaly, AnomalyClass.byId(anomaly.cls),
-							new Random(anomaly.id * 0x2545F4914F6CDD1DL));
+					// за 50–150 ч дрейф уводит зону на километры: следы планируем вокруг нынешнего места,
+					// иначе они окажутся вне зоны и в чужих землях
+					double[] center = anomaly.position(anomaly.ageHours(AnomalyClock.now()));
+					List<ScarOp> planned = AnomalyScars.planAt(center[0], center[1], anomaly.r0,
+							AnomalyClass.byId(anomaly.cls), new Random(anomaly.id * 0x2545F4914F6CDD1DL),
+							false);
 					if (!planned.isEmpty()) {
 						anomaly.scars = planned;
 						migrated = true;

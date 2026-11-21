@@ -266,9 +266,17 @@ public final class Anomaly {
 		if (scars == null) {
 			scars = new ArrayList<>();
 		}
-		scars.removeIf(op -> op == null || op.blocks < 0 || !Double.isFinite(op.x) || !Double.isFinite(op.z));
+		scars.removeIf(op -> op == null || op.blocks < 0 || !Double.isFinite(op.x) || !Double.isFinite(op.z)
+				|| !Double.isFinite(op.radius) || op.radius < 1.0 || op.length < 0 || op.width < 1
+				|| op.height < 0 || op.height > 400);
 		scar_next = Math.max(0, Math.min(scar_next, scars.size()));
 		scar_cursor = Math.max(0, scar_cursor);
+		// битый курсор молча съедал бы след: подрезаем к длине текущего опа
+		if (scar_next < scars.size()) {
+			scar_cursor = Math.min(scar_cursor, scars.get(scar_next).columnCount());
+		} else {
+			scar_cursor = 0;
+		}
 		if (!(Double.isFinite(shrink) && shrink > 0.0 && shrink <= 4.0)) {
 			shrink = 1.0;
 		}

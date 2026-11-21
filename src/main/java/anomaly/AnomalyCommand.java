@@ -139,6 +139,12 @@ public final class AnomalyCommand {
 	/** Что сейчас в колонке: для проверки следов и «почему тут камень». */
 	private static int probe(CommandSourceStack source, int x, int z) {
 		ServerLevel level = source.getLevel();
+		// probe — отладка, а не путешествие: за границей мира чанк не грузим,
+		// иначе команда с координатами ±30M сгенерирует регион и заблокирует тик
+		if (!level.getWorldBorder().isWithinBounds(new BlockPos(x, 0, z))) {
+			reply(source, "Колонка " + x + ", " + z + " за границей мира — чанк не гружу", ChatFormatting.RED);
+			return 0;
+		}
 		level.getChunk(x >> 4, z >> 4);
 		int surface = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, x, z);
 		BlockPos pos = new BlockPos(x, surface - 1, z);
