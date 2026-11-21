@@ -3,6 +3,7 @@ package anomaly;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.tags.BlockTags;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
@@ -202,6 +203,53 @@ public final class AnomalyScars {
 			level.setBlock(above, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
 			changed++;
 		}
+		// выжженная земля не может стоять под зелёной кроной: дерево над следом сносим
+		changed += deforest(level, x, surface, z);
+		return changed;
+	}
+
+	/**
+	 * Если в колонке стоит дерево — сносит ствол и крону в радиусе двух блоков.
+	 * Сначала дешёвая проверка ствола: в лесу это редкость, и платить за 25 колонок каждый раз незачем.
+	 */
+	private static int deforest(ServerLevel level, int x, int surface, int z) {
+		if (!isLog(level, x, surface, z) && !isLog(level, x, surface + 1, z)) {
+			return 0;
+		}
+		int changed = 0;
+		for (int dx = -2; dx <= 2; dx++) {
+			for (int dz = -2; dz <= 2; dz++) {
+				changed += clearTreeColumn(level, x + dx, surface, z + dz);
+			}
+		}
+		return changed;
+	}
+
+	private static boolean isLog(ServerLevel level, int x, int y, int z) {
+		return level.getBlockState(new BlockPos(x, y, z)).is(BlockTags.LOGS);
+	}
+
+	private static int clearTreeColumn(ServerLevel level, int x, int surface, int z) {
+		BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
+		int changed = 0;
+		int top = Math.min(level.getMaxY() - 2, surface + 48);
+		boolean sawTree = false;
+		for (int y = surface; y <= top; y++) {
+			BlockState state = level.getBlockState(pos.set(x, y, z));
+			if (state.is(BlockTags.LOGS) || state.is(BlockTags.LEAVES)) {
+				if (protectedBlock(state)) {
+					break;
+				}
+				level.setBlock(pos, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
+				changed++;
+				sawTree = true;
+				continue;
+			}
+			// дошли до твёрдого не-дерева — выше этой точки дерева нет
+			if (state.blocksMotion() || (sawTree && state.isAir() && y > surface + 2)) {
+				break;
+			}
+		}
 		return changed;
 	}
 
@@ -216,7 +264,7 @@ public final class AnomalyScars {
 			return 0;
 		}
 		level.setBlock(ground, block.defaultBlockState(), Block.UPDATE_ALL);
-		return 1;
+		return 1 + deforest(level, x, surface, z);
 	}
 
 	private static int trench(ServerLevel level, int x, int surface, int z, int depth, boolean lava) {
@@ -240,6 +288,8 @@ public final class AnomalyScars {
 	}
 
 	private static int spike(ServerLevel level, ScarOp op, int x, int surface, int z) {
+		// пик прорастает сквозь лес, а не сквозь крону: дерево в этой колонке сносим
+		clearTreeColumn(level, x, surface, z);
 		double dx = x - op.x;
 		double dz = z - op.z;
 		double falloff = 1.0 - Math.min(1.0, Math.sqrt(dx * dx + dz * dz) / Math.max(0.5, op.radius));
