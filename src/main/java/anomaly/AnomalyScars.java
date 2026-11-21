@@ -644,6 +644,8 @@ public final class AnomalyScars {
 						|| ground.is(BlockTags.LEAVES) || ground.is(Blocks.CACTUS)) {
 					continue;
 				}
+				// наледь ложится на голую землю: трава и цветы убираются, иначе снег лежит под ними
+				clearPlant(level, x0, surface, z0);
 				if (level.getBlockState(new BlockPos(x0, surface, z0)).isAir()) {
 					level.setBlock(new BlockPos(x0, surface, z0), Blocks.SNOW.defaultBlockState(),
 							Block.UPDATE_ALL);

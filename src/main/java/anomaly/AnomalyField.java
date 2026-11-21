@@ -541,21 +541,35 @@ public final class AnomalyField {
 				? Math.max(24.0 * 365.0, config.lifetime_max_hours)
 				: lifeFor(anomaly.r0, config, rnd);
 
-		anomaly.stretch = 0.55 + rnd.nextDouble() * 1.7;
+		anomaly.stretch = 0.45 + rnd.nextDouble() * 2.15;
 		anomaly.rotation = rnd.nextDouble() * Math.PI * 2.0;
 
-		int count = 2 + rnd.nextInt(4);
+		// низкие гармоники задают лепестки и вытянутость, высокие — рваный край.
+		// Раньше суммарная амплитуда была ~0.5 при трёх-пяти гармониках, и зона читалась как круг;
+		// теперь лепестки глубже, а сверху ещё 1–2 мелких зубца, чтобы контур не был гладким.
+		int count = 3 + rnd.nextInt(3);
 		for (int i = 0; i < count; i++) {
 			int k = 2 + i;
 			anomaly.harmonics.add(new Harmonic(k,
-					0.05 + rnd.nextDouble() * 0.20,
+					0.08 + rnd.nextDouble() * 0.22,
 					rnd.nextDouble() * Math.PI * 2.0,
 					(rnd.nextDouble() * 2.0 - 1.0) * 0.009,
 					0.10 + rnd.nextDouble() * 0.20,
 					0.10 + rnd.nextDouble() * 0.30,
 					rnd.nextDouble() * Math.PI * 2.0));
 		}
-		anomaly.breath = 0.01 + rnd.nextDouble() * 0.02;
+		int teeth = 1 + rnd.nextInt(2);
+		for (int i = 0; i < teeth; i++) {
+			int k = 8 + rnd.nextInt(6);
+			anomaly.harmonics.add(new Harmonic(k,
+					0.03 + rnd.nextDouble() * 0.06,
+					rnd.nextDouble() * Math.PI * 2.0,
+					(rnd.nextDouble() * 2.0 - 1.0) * 0.02,
+					0.20 + rnd.nextDouble() * 0.30,
+					0.10 + rnd.nextDouble() * 0.40,
+					rnd.nextDouble() * Math.PI * 2.0));
+		}
+		anomaly.breath = 0.015 + rnd.nextDouble() * 0.025;
 		anomaly.breath_speed = 0.2 + rnd.nextDouble() * 0.4;
 
 		anomaly.speed = pinned ? 0.0 : config.driftSpeedPerHour(anomaly.r0);
