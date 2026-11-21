@@ -171,8 +171,7 @@ public final class AnomalyCommand {
 		reply(source, "Рассеивание: внутри " + config.dissipate_radius + ", подавление до " + config.suppress_until
 				+ "; время поля ×" + trim(AnomalyClock.scale()) + " (" + timeHint() + ")");
 		reply(source, "Остаток на игрока: /anomaly residue [ник] · set/add/clear — для проверки последствий");
-		reply(source, "Проверка: /anomaly field · here · spawn · edge · show · timescale · event · selftest");
-		return 1;
+		reply(source, "Проверка: /anomaly field · here · spawn · edge · show · timescale · event · selftest");		return 1;
 	}
 
 	private static int components(CommandSourceStack source) {
@@ -328,12 +327,12 @@ public final class AnomalyCommand {
 	}
 
 	private static int residue(CommandSourceStack source, String name) {
-		ServerPlayer player = residueTarget(source, name);
-		if (player == null) {
+		java.util.UUID id = residueId(source, name);
+		if (id == null) {
 			return 0;
 		}
-		double hours = AnomalyResidue.hours(player);
-		reply(source, "Остаток " + player.getName().getString() + ": " + trim(hours) + " ч — "
+		double hours = AnomalyResidue.hours(id);
+		reply(source, "Остаток " + residueName(source, name) + ": " + trim(hours) + " ч — "
 				+ AnomalyResidue.state(hours));
 		reply(source, "Растёт в опасных и смертельных зонах, спадает сам и вдвое быстрее у центра;"
 				+ " сон снимает 1–2 ч. Потолок " + trim(AnomalyMod.config.residue_cap_hours) + " ч.");
@@ -341,50 +340,63 @@ public final class AnomalyCommand {
 	}
 
 	private static int residueSet(CommandSourceStack source, String name, double hours, boolean add) {
-		ServerPlayer player = residueTarget(source, name);
-		if (player == null) {
+		java.util.UUID id = residueId(source, name);
+		if (id == null) {
 			return 0;
 		}
+		String who = residueName(source, name);
 		if (add) {
-			AnomalyResidue.add(player.getUUID(), hours);
-			reply(source, "Остаток " + player.getName().getString() + " изменён на " + trim(hours)
-					+ " ч: теперь " + trim(AnomalyResidue.hours(player)) + " ч ("
-					+ AnomalyResidue.state(AnomalyResidue.hours(player)) + ")");
+			AnomalyResidue.add(id, hours);
+			reply(source, "Остаток " + who + " изменён на " + trim(hours) + " ч: теперь "
+					+ trim(AnomalyResidue.hours(id)) + " ч (" + AnomalyResidue.state(AnomalyResidue.hours(id)) + ")");
 		} else {
-			AnomalyResidue.set(player.getUUID(), hours);
-			reply(source, "Остаток " + player.getName().getString() + " = " + trim(hours) + " ч ("
-					+ AnomalyResidue.state(hours) + ")");
+			AnomalyResidue.set(id, hours);
+			// печатаем сохранённое, а не запрошенное: 100 ч сверх потолка станут 24
+			reply(source, "Остаток " + who + " = " + trim(AnomalyResidue.hours(id)) + " ч ("
+					+ AnomalyResidue.state(AnomalyResidue.hours(id)) + ")");
 		}
 		return 1;
 	}
 
 	private static int residueClear(CommandSourceStack source, String name) {
-		ServerPlayer player = residueTarget(source, name);
-		if (player == null) {
+		java.util.UUID id = residueId(source, name);
+		if (id == null) {
 			return 0;
 		}
-		AnomalyResidue.clear(player.getUUID());
-		reply(source, "Остаток " + player.getName().getString() + " сброшен");
+		AnomalyResidue.clear(id);
+		reply(source, "Остаток " + residueName(source, name) + " сброшен");
 		return 1;
 	}
 
-	/** Игрок по имени в списке онлайна; без имени — тот, кто ввёл команду. */
-	private static ServerPlayer residueTarget(CommandSourceStack source, String name) {
+	/** UUID по нику: онлайн — сразу, офлайн — из кэша имён сервера (файл остатка тоже по UUID). */
+	private static java.util.UUID residueId(CommandSourceStack source, String name) {
 		if (name == null) {
 			ServerPlayer self = source.getPlayer();
 			if (self == null) {
 				reply(source, "Из консоли нужно имя игрока: /anomaly residue get <ник>", ChatFormatting.RED);
 				return null;
 			}
-			return self;
+			return self.getUUID();
 		}
-		ServerPlayer player = source.getServer().getPlayerList().getPlayerByName(name);
-		if (player == null) {
-			reply(source, "Игрок «" + name + "» не в сети: остаток читается только у онлайна",
-					ChatFormatting.RED);
-			return null;
+		ServerPlayer online = source.getServer().getPlayerList().getPlayerByName(name);
+		if (online != null) {
+			return online.getUUID();
 		}
-		return player;
+		java.util.Optional<net.minecraft.server.players.NameAndId> found =
+				source.getServer().services().nameToIdCache().get(name);
+		if (found.isPresent()) {
+			return found.get().id();
+		}
+		reply(source, "Не знаю игрока «" + name + "»: он ни разу не заходил на сервер", ChatFormatting.RED);
+		return null;
+	}
+
+	private static String residueName(CommandSourceStack source, String name) {
+		if (name != null) {
+			return name;
+		}
+		ServerPlayer self = source.getPlayer();
+		return self == null ? "?" : self.getName().getString();
 	}
 
 	private static int stats(CommandSourceStack source) {
@@ -440,7 +452,12 @@ public final class AnomalyCommand {
 		ServerPlayer player = source.getPlayer();
 		double px = player != null ? player.getX() : source.getPosition().x;
 		double pz = player != null ? player.getZ() : source.getPosition().z;
-		Anomaly anomaly = AnomalyField.nearest(px, pz);
+		// «стою в зоне» важнее «рядом с другой»: nearest() считает |расстояние до края|
+		// и у точки глубоко внутри большой зоны выбирал бы соседнюю снаружи
+		Anomaly anomaly = AnomalyField.containing(px, pz);
+		if (anomaly == null) {
+			anomaly = AnomalyField.nearest(px, pz);
+		}
 		if (anomaly == null) {
 			reply(source, "Аномалий нет вообще");
 			return 1;
@@ -652,6 +669,7 @@ public final class AnomalyCommand {
 
 	private static int save(CommandSourceStack source) {
 		boolean saved = AnomalyField.save();
+		AnomalyResidue.save();
 		if (saved) {
 			reply(source, "Поле записано: " + AnomalyField.path(), ChatFormatting.GREEN);
 		} else {

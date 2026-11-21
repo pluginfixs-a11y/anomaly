@@ -1,11 +1,8 @@
 package anomaly;
 
-import net.minecraft.core.BlockPos;
-import net.minecraft.core.particles.BlockParticleOption;
 import net.minecraft.core.particles.DustColorTransitionOptions;
 import net.minecraft.core.particles.ParticleOptions;
 import net.minecraft.core.particles.ParticleTypes;
-import net.minecraft.core.particles.TrailParticleOption;
 import net.minecraft.network.protocol.game.ClientboundSetEntityMotionPacket;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
@@ -14,9 +11,7 @@ import net.minecraft.sounds.SoundSource;
 import net.minecraft.world.entity.EntitySpawnReason;
 import net.minecraft.world.entity.EntityTypes;
 import net.minecraft.world.entity.LightningBolt;
-import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.levelgen.Heightmap;
-import net.minecraft.world.phys.Vec3;
 
 import java.util.List;
 
@@ -59,42 +54,50 @@ public final class AnomalyEffects {
 		}
 	}
 
-	/** Видимое: и внутри, и у края — в пределах {@code view_range} от границы. */
+	/**
+	 * Видимое и слышимое: вызывается, когда игрок в пределах {@code view_range} от границы.
+	 * <p>
+	 * {@code draw} — рисовать ли край и частицы. Звук, компонентные пульсы (молния, гарь, левитация)
+	 * идут всегда: это механика, а не косметика, и её нельзя выключить лимитом ближайших зон.
+	 */
 	public static void ambience(ServerLevel level, ServerPlayer player, Zone zone, AnomalyConfig config,
-			AnomalyState state) {
-		if (zone.signedDistance(player.getX(), player.getZ()) > config.view_range) {
+			AnomalyState state, boolean draw) {
+		double sd = zone.signedDistance(player.getX(), player.getZ());
+		if (sd > config.view_range) {
 			return;
 		}
-		// кадр раз в секунду: пыль живёт 10–20 тиков, а пакетов за это время уходит в два раза меньше
-		boolean frame = state.pulseTicks % 20 < Math.max(1, state.lastStep);
-		boolean wall = zone.components().contains(AnomalyComponent.LIGHT_WALL);
-		if (frame) {
-			// край — стена с переливом цвета, а не линия: пыль меняет оттенок к тёмному по жизни
-			edgeBand(level, player, zone, config.view_range, wall ? 2.8f : scaleFor(zone), wall ? 12 : 9,
-					wall ? 4.5 : spreadFor(zone), 1.0);
-			if (wall) {
-				// световая стена даёт второй контур внутри: большая область читается как область
-				edgeBand(level, player, zone, config.view_range, 2.1f, 6, 3.5, 0.84);
-			}
-			anchors(level, player, zone);
-			seam(level, player, zone, config);
-		}
-		coreBeacon(level, player, zone);
-		corePillar(level, player, zone);
-		interior(level, player, zone, config, state);
-		pull(level, player, zone);
-		mood(level, player, zone);
+		mood(level, player, zone, sd);
 		for (AnomalyComponent component : zone.components()) {
 			component.pulse(level, player, zone, config, state);
 		}
+		if (!draw) {
+			return;
+		}
+		// каждая зона берёт свою фазу кадра: иначе все соседние стены рисуются в один тик,
+		// и клиент получает залп из сотен пакетов вместо ровного потока
+		int phase = Math.floorMod((int) (zone.id() & 0xFFFFL), 20);
+		boolean frame = Math.floorMod(state.pulseTicks + phase, 20) < Math.max(1, state.lastStep);
+		if (frame) {
+			boolean wall = zone.components().contains(AnomalyComponent.LIGHT_WALL);
+			// край — стена с переливом цвета, а не линия: пыль меняет оттенок к тёмному по жизни
+			edgeBand(level, player, zone, config.view_range, wall ? 0.45f : scaleFor(zone), wall ? 22 : 16,
+					wall ? 4.5 : spreadFor(zone), 1.0);
+			if (wall) {
+				// световая стена даёт второй контур внутри: большая область читается как область
+				edgeBand(level, player, zone, config.view_range, 0.3f, 12, 3.5, 0.84);
+			}
+			anchors(level, player, zone);
+		}
+		coreBeacon(level, player, zone);
+		interior(level, player, zone, sd);
 	}
 
 	/** Толщина стены и высота разброса — по классу: смертельные видны издалека. */
 	private static float scaleFor(Zone zone) {
 		return switch (zone.cls()) {
-			case SAFE -> 1.9f;
-			case DANGER -> 2.3f;
-			case DEADLY -> 2.8f;
+			case SAFE -> 0.25f;
+			case DANGER -> 0.3f;
+			case DEADLY -> 0.35f;
 		};
 	}
 
@@ -111,8 +114,8 @@ public final class AnomalyEffects {
 	 * игрока — звук с расстояния 16 блоков до него не доходит (радиус слышимости = max(16, 16·vol)).
 	 * Набор компонентов задаёт характер: холод — души, гроза — базальт, голод — багровый лес.
 	 */
-	private static void mood(ServerLevel level, ServerPlayer player, Zone zone) {
-		if (zone.signedDistance(player.getX(), player.getZ()) > 0.0) {
+	private static void mood(ServerLevel level, ServerPlayer player, Zone zone, double sd) {
+		if (sd > 0.0) {
 			return;
 		}
 		var rnd = player.getRandom();
@@ -155,7 +158,8 @@ public final class AnomalyEffects {
 			return;
 		}
 		double dist = Math.hypot(zone.coreX() - player.getX(), zone.coreZ() - player.getZ());
-		if (dist > 320.0) {
+		// дальше 192 блоков клиент маяк уже не отрисует: пакеты ушли бы в никуда
+		if (dist > 192.0) {
 			return;
 		}
 		int bx = (int) Math.floor(zone.coreX());
@@ -166,35 +170,9 @@ public final class AnomalyEffects {
 		double base = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, bx, bz);
 		// столб до 40 блоков над землёй, но не выше 64 и не ниже уровня глаз игрока в горах
 		int top = (int) Math.min(64.0, Math.max(40.0, player.getY() + 16.0 - base));
-		for (int i = 2; i <= top; i += 4) {
-			level.sendParticles(player, ParticleTypes.END_ROD,
-					true, true, zone.coreX(), base + i, zone.coreZ(), 2, 0.2, 0.2, 0.2, 0.0);
-		}
-	}
-
-	/**
-	 * Пылевой столб из настоящего блока под ядром: не светящаяся метка, а поднятая с земли порода.
-	 * Один пакет на два такта, зато видно, что ядро «дышит» и стоит на этой земле, а не парит.
-	 */
-	private static void corePillar(ServerLevel level, ServerPlayer player, Zone zone) {
-		if (player.tickCount % 40 != 0) {
-			return;
-		}
-		if (Math.hypot(zone.coreX() - player.getX(), zone.coreZ() - player.getZ()) > 160.0) {
-			return;
-		}
-		int bx = (int) Math.floor(zone.coreX());
-		int bz = (int) Math.floor(zone.coreZ());
-		if (!level.getChunkSource().hasChunk(bx >> 4, bz >> 4)) {
-			return;
-		}
-		int surface = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, bx, bz);
-		BlockState below = level.getBlockState(new BlockPos(bx, surface - 1, bz));
-		if (below.isAir()) {
-			return;
-		}
-		level.sendParticles(player, new BlockParticleOption(ParticleTypes.DUST_PILLAR, below),
-				true, true, zone.coreX(), surface, zone.coreZ(), 1, 0.0, 0.0, 0.0, 0.0);
+		// один пакет на весь столб: разброс dy растягивает частицы по высоте, а не рисует 10 точек
+		level.sendParticles(player, ParticleTypes.END_ROD, true, true,
+				zone.coreX(), base + top / 2.0, zone.coreZ(), 28, 0.15, top / 2.0, 0.15, 0.0);
 	}
 
 	/**
@@ -203,7 +181,7 @@ public final class AnomalyEffects {
 	 */
 	private static void anchors(ServerLevel level, ServerPlayer player, Zone zone) {
 		int color = zone.edgeColor();
-		var dust = new DustColorTransitionOptions(color, darken(color), 2.2f);
+		var dust = new DustColorTransitionOptions(color, darken(color), 0.45f);
 		for (int i = 0; i < 3; i++) {
 			double angle = noise01(zone.id() * 31L + i * 7919L) * Math.PI * 2.0;
 			double dist = zone.radius() * (0.25 + noise01(zone.id() * 17L + i * 104729L) * 0.35);
@@ -227,9 +205,8 @@ public final class AnomalyEffects {
 	 * Внутри зоны: редкая взвесь вокруг игрока, у каждого класса своя. Это не «полоса у края»,
 	 * а воздух, в котором стоишь: без него внутри большой зоны вообще нет картинки.
 	 */
-	private static void interior(ServerLevel level, ServerPlayer player, Zone zone, AnomalyConfig config,
-			AnomalyState state) {
-		if (zone.signedDistance(player.getX(), player.getZ()) > 0.0) {
+	private static void interior(ServerLevel level, ServerPlayer player, Zone zone, double sd) {
+		if (sd > 0.0) {
 			return;
 		}
 		// раз в полсекунды, независимо от периода тика эффектов
@@ -242,49 +219,10 @@ public final class AnomalyEffects {
 		double x = player.getX() + (rnd.nextDouble() - 0.5) * 18.0;
 		double z = player.getZ() + (rnd.nextDouble() - 0.5) * 18.0;
 		double y = player.getY() + rnd.nextDouble() * 4.0;
-		level.sendParticles(player, new DustColorTransitionOptions(color, darken(color), 2.4f),
+		level.sendParticles(player, new DustColorTransitionOptions(color, darken(color), 0.35f),
 				true, true, x, y, z, 3, 0.6, 0.9, 0.6, 0.02);
 		if (zone.cls() != AnomalyClass.SAFE) {
 			level.sendParticles(player, accent, true, true, x, y, z, 1, 0.4, 0.8, 0.4, 0.0);
-		}
-	}
-
-	/**
-	 * Тяга видна: пылинки идут к ядру по прямой, а не просто висят. Раньше тягу можно было
-	 * заметить только по собственной скорости — и она выглядела как «ничего не происходит».
-	 */
-	private static void pull(ServerLevel level, ServerPlayer player, Zone zone) {
-		if (zone.components().contains(AnomalyComponent.REPULSION)) {
-			return;
-		}
-		if (!zone.components().contains(AnomalyComponent.TRACTION) && zone.cls() != AnomalyClass.DEADLY) {
-			return;
-		}
-		if (player.tickCount % 15 != 0) {
-			return;
-		}
-		double dx = zone.coreX() - player.getX();
-		double dz = zone.coreZ() - player.getZ();
-		double length = Math.hypot(dx, dz);
-		if (length < 1.0) {
-			return;
-		}
-		double ux = dx / length;
-		double uz = dz / length;
-		var rnd = player.getRandom();
-		int count = zone.cls() == AnomalyClass.DEADLY ? 4 : 2;
-		int color = 0xFF000000 | zone.edgeColor();
-		for (int i = 0; i < count; i++) {
-			double angle = rnd.nextDouble() * Math.PI * 2.0;
-			double radius = 5.0 + rnd.nextDouble() * 17.0;
-			double sx = player.getX() + Math.cos(angle) * radius;
-			double sz = player.getZ() + Math.sin(angle) * radius;
-			double sy = player.getY() + 1.0 + rnd.nextDouble() * 3.0;
-			// цель — 18 блоков к ядру: дальше не надо, пылинка всё равно живёт секунду
-			level.sendParticles(player,
-					new TrailParticleOption(new Vec3(sx + ux * 18.0, sy + 1.5, sz + uz * 18.0), color,
-							16 + rnd.nextInt(8)),
-					true, true, sx, sy, sz, 1, 0.0, 0.0, 0.0, 0.0);
 		}
 	}
 
@@ -341,12 +279,26 @@ public final class AnomalyEffects {
 			return;
 		}
 		double toPlayer = Math.atan2(player.getZ() - zone.z(), player.getX() - zone.x());
-		double half = radius <= reach ? Math.PI : Math.asin(Math.min(1.0, reach / radius));
-		// рисуем не больше ~224 блоков дуги вокруг направления на игрока: у мелкой зоны полный круг
-		// при шаге 4 блока — это 10–30 блоков между точками и «пунктир», а лишние пакеты не видны
-		half = Math.min(half, 112.0 / radius);
+		// мелкая зона целиком в пределах видимости: рисуем кольцо, иначе стоящий внутри видит
+		// стену только с одной стороны — ровно то, на что жаловался владелец
+		boolean full = radius <= reach;
+		double half;
+		if (full) {
+			half = Math.PI;
+		} else {
+			half = Math.asin(Math.min(1.0, reach / radius));
+			// у большой зоны — только дуга 224 блока вокруг игрока: остальное не в кадре
+			half = Math.min(half, 112.0 / radius);
+		}
 		double arc = 2.0 * half * radius;
-		int points = Math.max(18, Math.min(56, (int) (arc / 4.0)));
+		double spacing = full ? 8.0 : 4.0;
+		int cap = full ? 96 : 56;
+		int points = Math.max(16, Math.min(cap, (int) (arc / spacing)));
+		// полное кольцо — это в 5 раз больше точек: плотность на точку вдвое ниже, иначе
+		// один кадр такой зоны вытесняет все остальные частицы у клиента
+		if (full) {
+			count = Math.max(3, count / 2);
+		}
 		int color = zone.edgeColor();
 		var dust = new DustColorTransitionOptions(color, darken(color), scale);
 		ParticleOptions accent = accent(zone);
@@ -364,55 +316,20 @@ public final class AnomalyEffects {
 			}
 			double y = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, bx, bz) + 0.6;
 			level.sendParticles(player, dust, true, true, point[0], y, point[1], count, 0.0, spread, 0.0, 0.0);
-			if (i % 3 == 0) {
+			if (i % 4 == 0) {
 				// верхние клочья: стена выше и не обрывается ровной линией по грудь
 				level.sendParticles(player, dust, true, true, point[0], y + spread + 2.5, point[1],
 						2, 0.0, 1.5, 0.0, 0.0);
 			}
-			if (i % 2 == 0) {
+			if (i % 6 == 0) {
+				// вертикальный «язык»: один пакет на шесть точек, а край читается и с 40–60 блоков
+				level.sendParticles(player, dust, true, true, point[0], y + 2.5, point[1],
+						6, 0.0, 5.0, 0.0, 0.0);
+			}
+			if (i % 3 == 0) {
 				level.sendParticles(player, accent, true, true, point[0], y + rnd.nextDouble() * spread,
 						point[1], 1, 0.2, 0.3, 0.2, 0.0);
 			}
-		}
-	}
-
-	/**
-	 * «Шов»: раз в несколько секунд вдоль края проходит яркая волна. Один кадр даёт зоне
-	 * ощущение живого барьера, которого нет у статичной пыли.
-	 */
-	private static void seam(ServerLevel level, ServerPlayer player, Zone zone, AnomalyConfig config) {
-		if (player.tickCount % 100 != 0) {
-			return;
-		}
-		double radius = zone.radius();
-		if (radius < 2.0) {
-			return;
-		}
-		double toPlayer = Math.atan2(player.getZ() - zone.z(), player.getX() - zone.x());
-		double half = radius <= config.view_range ? Math.PI : Math.asin(Math.min(1.0, config.view_range / radius));
-		if (half < 0.05) {
-			return;
-		}
-		// волна идёт по видимой дуге за ~1 секунду: 10 шагов на кадр, а не кольцо сразу
-		int steps = 10;
-		double start = toPlayer - half;
-		double step = 2.0 * half / steps;
-		var rnd = player.getRandom();
-		for (int i = 0; i <= steps; i++) {
-			double angle = start + step * i + step * rnd.nextDouble();
-			double[] point = zone.anomaly().boundaryPoint(angle, zone.ageHours(), radius);
-			if (Math.hypot(point[0] - player.getX(), point[1] - player.getZ()) > config.view_range) {
-				continue;
-			}
-			int bx = (int) Math.floor(point[0]);
-			int bz = (int) Math.floor(point[1]);
-			if (!level.getChunkSource().hasChunk(bx >> 4, bz >> 4)) {
-				continue;
-			}
-			double y = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, bx, bz) + 1.2;
-			// end rod не тускнеет ни днём, ни ночью — волна видна и в полдень
-			level.sendParticles(player, ParticleTypes.END_ROD, true, true, point[0], y, point[1],
-					3, 0.0, 2.4, 0.0, 0.02);
 		}
 	}
 
@@ -421,7 +338,7 @@ public final class AnomalyEffects {
 		level.playSound(null, player.getX(), player.getY(), player.getZ(),
 				SoundEvents.AMETHYST_BLOCK_CHIME, SoundSource.AMBIENT, 1.2f, 0.7f);
 		int color = zone.edgeColor();
-		var dust = new DustColorTransitionOptions(color, darken(color), 2.8f);
+		var dust = new DustColorTransitionOptions(color, darken(color), 0.5f);
 		level.sendParticles(player, dust, true, true, player.getX(), player.getY() + 0.6, player.getZ(),
 				24, 1.6, 0.5, 1.6, 0.05);
 		if (zone.cls() == AnomalyClass.DEADLY) {

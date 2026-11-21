@@ -24,11 +24,18 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
  */
 @Mixin(PortalProcessor.class)
 public abstract class PortalProcessorMixin {
-	@Inject(method = "processPortalTeleportation", at = @At("HEAD"), cancellable = true)
-	private void anomaly$refuseNether(ServerLevel level, Entity entity, boolean isPlayer,
+	/**
+	 * Проверяем на выходе, а не на входе: за время работы метода ваниль списывает
+	 * {@code insidePortalThisTick} и накручивает {@code portalTime}. Если отменить метод целиком,
+	 * нагретый процессор остаётся «внутри портала» без входного блока — и когда печать спадёт,
+	 * игрока телепортирует из любой точки мира. Возврат {@code false} при этом безопасен:
+	 * сам метод ничего не телепортирует, решение принимает вызывающий {@code Entity.handlePortal}.
+	 */
+	@Inject(method = "processPortalTeleportation", at = @At("RETURN"), cancellable = true)
+	private void anomaly$refuseNether(ServerLevel level, Entity entity, boolean canUsePortal,
 			CallbackInfoReturnable<Boolean> cir) {
-		if (level.dimension() == Level.OVERWORLD && entity instanceof ServerPlayer player
-				&& AnomalyResidue.sealsNether(player)) {
+		if (cir.getReturnValue() && level.dimension() == Level.OVERWORLD
+				&& entity instanceof ServerPlayer player && AnomalyResidue.sealsNether(player)) {
 			AnomalyResidue.onPortalRefused(player);
 			cir.setReturnValue(false);
 		}

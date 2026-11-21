@@ -70,6 +70,8 @@ public final class AnomalyResidue {
 
 		/** Время, когда игрок лёг: по нему видно, был это сон или «полежал и встал». */
 		transient long asleepSinceMs;
+		/** Была ли ночь в момент, когда лёг: на сервере будят всех сразу, и «сон до утра» длится тик. */
+		transient boolean asleepAtNight;
 		transient int lastFood = -1;
 		transient float lastSat;
 		transient long lastRefuseMs;
@@ -93,6 +95,14 @@ public final class AnomalyResidue {
 		data = loaded != null ? loaded : new Data();
 		if (data.players == null) {
 			data.players = new LinkedHashMap<>();
+		}
+		// в файл мог попасть Infinity из ручной правки: без клампа печать не снялась бы никогда
+		data.players.values().removeIf(entry -> entry == null);
+		for (Entry entry : data.players.values()) {
+			entry.hours = clamp(entry.hours);
+			if (entry.updated_ms <= 0L) {
+				entry.updated_ms = System.currentTimeMillis();
+			}
 		}
 		dirty = false;
 		lastSaveMs = System.currentTimeMillis();
@@ -267,9 +277,12 @@ public final class AnomalyResidue {
 	/** Вызывается с периодом тика эффектов. {@code inside} — в какой зоне игрок, если в какой-то. */
 	public static void update(ServerPlayer player, double seconds, Zone inside, double dose) {
 		AnomalyConfig config = AnomalyMod.config;
-		if (config == null || !config.residue_enabled || player.isCreative() || player.isSpectator()) {
+		if (config == null || !config.residue_enabled) {
 			return;
 		}
+		// в креативе и наблюдателем не болеют, но шкала всё равно тает: иначе наблюдатель —
+		// бесплатная пауза, а админ в креативе никогда не отдышится
+		boolean immune = player.isCreative() || player.isSpectator();
 		long now = System.currentTimeMillis();
 		Entry entry = entry(player.getUUID());
 		// шаг по реальным часам: сервер мог стоять, а игрок — нет; минута за один вызов уже много
@@ -280,7 +293,7 @@ public final class AnomalyResidue {
 		}
 
 		double growth = 0.0;
-		if (inside != null && !inside.remnant()) {
+		if (inside != null && !inside.remnant() && !immune) {
 			double radius = Math.max(1.0, inside.radius());
 			double depth = -inside.signedDistance(player.getX(), player.getZ()) / radius;
 			growth = growthPerHour(inside.cls(), depth, dose) * dtHours;
@@ -293,7 +306,9 @@ public final class AnomalyResidue {
 			entry.hours = next;
 			dirty = true;
 		}
-		effects(player, entry, now);
+		if (!immune) {
+			effects(player, entry, now);
+		}
 	}
 
 	/** Рядом есть второй игрок: их присутствие вытягивает «остаток» быстрее. */
@@ -368,7 +383,7 @@ public final class AnomalyResidue {
 	/** «Оскомина»: в окно 5–10 минут из каждых 20 элитра не держит фейерверк. */
 	public static boolean mufflesFirework(ServerPlayer player) {
 		AnomalyConfig config = AnomalyMod.config;
-		if (config == null || !config.residue_enabled || player.isCreative()) {
+		if (config == null || !config.enabled || !config.residue_enabled || player.isCreative()) {
 			return false;
 		}
 		if (hours(player) < AFTERTASTE) {
@@ -381,7 +396,7 @@ public final class AnomalyResidue {
 	/** «Печать ада»: портал в Нижний не берёт. Возврат из Нижнего — не блокируем. */
 	public static boolean sealsNether(ServerPlayer player) {
 		AnomalyConfig config = AnomalyMod.config;
-		if (config == null || !config.residue_enabled || player.isCreative()) {
+		if (config == null || !config.enabled || !config.residue_enabled || player.isCreative()) {
 			return false;
 		}
 		return hours(player) >= SEAL;
@@ -407,7 +422,9 @@ public final class AnomalyResidue {
 		AnomalyMod.LOGGER.info("Anomaly: портальный миксин на {}", net.minecraft.world.entity.PortalProcessor.class.getName());
 		EntitySleepEvents.START_SLEEPING.register((entity, pos) -> {
 			if (entity instanceof ServerPlayer player) {
-				entry(player.getUUID()).asleepSinceMs = System.currentTimeMillis();
+				Entry entry = entry(player.getUUID());
+				entry.asleepSinceMs = System.currentTimeMillis();
+				entry.asleepAtNight = !isDay(player);
 			}
 		});
 		EntitySleepEvents.STOP_SLEEPING.register((entity, pos) -> {
@@ -416,9 +433,13 @@ public final class AnomalyResidue {
 			}
 			Entry entry = entry(player.getUUID());
 			long sleptMs = entry.asleepSinceMs > 0L ? System.currentTimeMillis() - entry.asleepSinceMs : 0L;
+			boolean skippedNight = entry.asleepAtNight && isDay(player);
 			entry.asleepSinceMs = 0L;
-			// «полежал минуту и встал» сном не считается: иначе кровать — бесплатный целитель
-			if (sleptMs >= 60_000L && entry.hours > 0.0) {
+			entry.asleepAtNight = false;
+			// «полежал минуту и встал» сном не считается: иначе кровать — бесплатный целитель.
+			// Ночь на сервере пропускают сразу, как лёг последний спящий (сон длится тик),
+			// поэтому «лёг ночью, встал днём» — тоже полноценный сон.
+			if ((sleptMs >= 60_000L || skippedNight) && entry.hours > 0.0) {
 				double relief = 1.0 + player.getRandom().nextDouble();
 				entry.hours = clamp(entry.hours - relief);
 				entry.updated_ms = System.currentTimeMillis();
@@ -428,7 +449,7 @@ public final class AnomalyResidue {
 			}
 		});
 		UseItemCallback.EVENT.register((player, level, hand) -> {
-			if (!(player instanceof ServerPlayer serverPlayer) || hand != InteractionHand.MAIN_HAND) {
+			if (!(player instanceof ServerPlayer serverPlayer)) {
 				return InteractionResult.PASS;
 			}
 			ItemStack stack = player.getItemInHand(hand);
@@ -443,5 +464,10 @@ public final class AnomalyResidue {
 					SoundEvents.FIRE_EXTINGUISH, SoundSource.PLAYERS, 0.8f, 1.3f);
 			return InteractionResult.FAIL;
 		});
+	}
+
+	/** День по мировым часам: 0–13000. */
+	private static boolean isDay(ServerPlayer player) {
+		return player.level().getOverworldClockTime() % 24000L < 13000L;
 	}
 }

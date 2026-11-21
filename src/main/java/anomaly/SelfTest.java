@@ -878,14 +878,14 @@ public final class SelfTest {
 	// --- остаток ---
 
 	private static void checkResidue(Result result, AnomalyConfig config) {
-		double cap = config.residue_cap_hours;
+		// у пользователя потолок может быть ниже 24: тест не должен падать от легального конфига
+		double cap = Math.max(24.0, config.residue_cap_hours);
 		check(result, "остаток растёт по часам", 1.2,
 				AnomalyResidue.nextHours(0.0, 2.0, 0.8, 1.0, false, false, cap), 1e-9);
 		check(result, "остаток не уходит в минус", 0.0,
 				AnomalyResidue.nextHours(0.1, 0.0, 0.8, 1.0, false, false, cap), 1e-9);
 		check(result, "потолок остатка держит", cap,
-				AnomalyResidue.nextHours(cap - 1.0, 50.0, 0.0, 1.0, false, false, cap), 1e-9);
-		// рядом с другим игроком −10 % от текущего за час
+				AnomalyResidue.nextHours(cap - 1.0, 50.0, 0.0, 1.0, false, false, cap), 1e-9);		// рядом с другим игроком −10 % от текущего за час
 		check(result, "рядом с другим −10 % в час", 9.0,
 				AnomalyResidue.nextHours(10.0, 0.0, 0.0, 1.0, true, false, cap), 1e-6);
 		// у центра мира спад вдвое быстрее: 10 − 2·0.8 = 8.4

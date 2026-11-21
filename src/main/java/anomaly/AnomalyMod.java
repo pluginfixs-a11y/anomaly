@@ -11,6 +11,7 @@ import net.minecraft.world.level.Level;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -118,22 +119,24 @@ public class AnomalyMod implements ModInitializer {
 				inside = zone;
 			}
 		}
-		// рисуем не больше четырёх ближайших: в наложении зон это десятки пакетов на игрока,
-		// а увидеть всё равно можно только то, что ближе
-		int drawn = 0;
+		// Компонентные пульсы (молния, гарь, левитация) идут у всех зон рядом: это механика.
+		// Частицы края рисуем только у четырёх ближайших — в наложении это сотни пакетов на игрока,
+		// а увидеть всё равно можно то, что ближе.
+		List<Zone> drawOrder = new ArrayList<>(near);
+		drawOrder.sort((a, b) -> Double.compare(
+				Math.abs(a.signedDistance(player.getX(), player.getZ())),
+				Math.abs(b.signedDistance(player.getX(), player.getZ()))));
 		if (inside != null) {
-			AnomalyEffects.ambience(level, player, inside, config, state);
-			drawn++;
+			long insideId = inside.id();
+			drawOrder.removeIf(zone -> zone.id() == insideId);
+			drawOrder.add(0, inside);
+		}
+		java.util.Set<Long> drawnIds = new java.util.HashSet<>();
+		for (int i = 0; i < Math.min(4, drawOrder.size()); i++) {
+			drawnIds.add(drawOrder.get(i).id());
 		}
 		for (Zone zone : near) {
-			if (drawn >= 4) {
-				break;
-			}
-			if (inside != null && zone.id() == inside.id()) {
-				continue;
-			}
-			AnomalyEffects.ambience(level, player, zone, config, state);
-			drawn++;
+			AnomalyEffects.ambience(level, player, zone, config, state, drawnIds.contains(zone.id()));
 		}
 
 		AnomalyResidue.update(player, seconds, inside, state.dose);

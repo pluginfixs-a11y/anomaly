@@ -354,6 +354,21 @@ public final class AnomalyField {
 		return best;
 	}
 
+	/** Зона, внутри которой точка: выбирается самая сильная из перекрывающихся. */
+	public static Anomaly containing(double px, double pz) {
+		long now = AnomalyClock.now();
+		Anomaly best = null;
+		double bestStrength = -1.0;
+		for (Anomaly anomaly : data.anomalies) {
+			Zone zone = anomaly.zone(now);
+			if (zone.radius() > 0.0 && zone.contains(px, pz) && zone.strength() > bestStrength) {
+				bestStrength = zone.strength();
+				best = anomaly;
+			}
+		}
+		return best;
+	}
+
 	public static Anomaly biggest() {
 		Anomaly best = null;
 		for (Anomaly anomaly : data.anomalies) {
