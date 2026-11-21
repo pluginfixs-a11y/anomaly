@@ -57,7 +57,7 @@ public final class AnomalyCommand {
 								.then(Commands.literal("list").executes(context -> eventList(context.getSource())))
 								.then(Commands.literal("crater")
 										.executes(context -> event(context.getSource(), "crater", 1.0, 1))
-										.then(Commands.argument("radius", DoubleArgumentType.doubleArg(0.4, 8.0))
+										.then(Commands.argument("radius", DoubleArgumentType.doubleArg(0.4, 10.0))
 												.executes(context -> event(context.getSource(), "crater",
 														DoubleArgumentType.getDouble(context, "radius"), 1))
 												.then(Commands.argument("depth", IntegerArgumentType.integer(1, 6))
@@ -76,7 +76,7 @@ public final class AnomalyCommand {
 														DoubleArgumentType.getDouble(context, "radius"), 1))))
 								.then(Commands.literal("burst")
 										.executes(context -> event(context.getSource(), "burst", 1.2, 1))
-										.then(Commands.argument("radius", DoubleArgumentType.doubleArg(0.4, 8.0))
+										.then(Commands.argument("radius", DoubleArgumentType.doubleArg(0.4, 10.0))
 												.executes(context -> event(context.getSource(), "burst",
 														DoubleArgumentType.getDouble(context, "radius"), 1))
 												.then(Commands.argument("depth", IntegerArgumentType.integer(1, 6))
@@ -87,7 +87,11 @@ public final class AnomalyCommand {
 										.executes(context -> event(context.getSource(), "bolt", 2.0, 1))
 										.then(Commands.argument("radius", DoubleArgumentType.doubleArg(0.4, 10.0))
 												.executes(context -> event(context.getSource(), "bolt",
-														DoubleArgumentType.getDouble(context, "radius"), 1)))))
+														DoubleArgumentType.getDouble(context, "radius"), 1))
+												.then(Commands.argument("depth", IntegerArgumentType.integer(1, 6))
+														.executes(context -> event(context.getSource(), "bolt",
+																DoubleArgumentType.getDouble(context, "radius"),
+																IntegerArgumentType.getInteger(context, "depth")))))))
 						.then(Commands.literal("spawn")
 								.executes(context -> spawn(context.getSource(), null, null))
 								.then(Commands.argument("radius", DoubleArgumentType.doubleArg(10.0, 5000.0))
@@ -209,18 +213,22 @@ public final class AnomalyCommand {
 		ServerPlayer player = source.getPlayer();
 		double x;
 		double z;
+		double aimY;
 		if (player != null) {
 			var hit = player.pick(32.0, 0.0f, false);
 			if (hit.getType() == net.minecraft.world.phys.HitResult.Type.MISS) {
-				x = player.getX();
-				z = player.getZ();
-			} else {
-				x = hit.getLocation().x;
-				z = hit.getLocation().z;
+				// без цели молча рыть под ногами — сюрприз: игрок может стоять в своей постройке
+				reply(source, "Не вижу блок в 32 блоках — прицелься в землю или встань ближе",
+						ChatFormatting.RED);
+				return 0;
 			}
+			x = hit.getLocation().x;
+			z = hit.getLocation().z;
+			aimY = hit.getLocation().y;
 		} else {
 			x = source.getPosition().x;
 			z = source.getPosition().z;
+			aimY = Double.NaN;
 		}
 		int bx = Mth.floor(x);
 		int bz = Mth.floor(z);
@@ -233,10 +241,17 @@ public final class AnomalyCommand {
 			}
 		}
 		int surface = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, bx, bz);
+		if (!Double.isNaN(aimY) && Math.abs(surface - aimY) > 8.0) {
+			// прицел в пещеру или внутрь дома: дыра вышла бы на поверхности в 20 блоках от кадра
+			reply(source, "Прицел не на поверхности: она на " + Math.round(Math.abs(surface - aimY))
+					+ " блоков " + (surface > aimY ? "выше" : "ниже") + " — целься в землю", ChatFormatting.RED);
+			return 0;
+		}
+		double nearY = Double.isNaN(aimY) ? surface : aimY;
 		int changed = switch (type) {
-			case "crater" -> AnomalyScars.microCrater(level, x, z, radius, depth, surface);
-			case "scorch" -> AnomalyScars.scorch(level, x, z, radius, surface);
-			case "frost" -> AnomalyScars.frost(level, x, z, radius, surface);
+			case "crater" -> AnomalyScars.microCrater(level, x, z, radius, depth, nearY);
+			case "scorch" -> AnomalyScars.scorch(level, x, z, radius, nearY);
+			case "frost" -> AnomalyScars.frost(level, x, z, radius, nearY);
 			case "burst" -> {
 				double y = surface + 1.0;
 				if (player != null) {
@@ -245,12 +260,12 @@ public final class AnomalyCommand {
 				}
 				level.playSound(null, x, y, z, net.minecraft.sounds.SoundEvents.GENERIC_EXPLODE.value(),
 						net.minecraft.sounds.SoundSource.AMBIENT, 1.6f, 1.6f);
-				yield AnomalyScars.microCrater(level, x, z, radius, depth, surface);
+				yield AnomalyScars.microCrater(level, x, z, radius, depth, nearY);
 			}
 			case "bolt" -> {
 				AnomalyEffects.visualBolt(level, x, surface, z);
-				int n = AnomalyScars.scorch(level, x, z, radius, surface);
-				n += AnomalyScars.microCrater(level, x, z, 0.7, depth, surface);
+				int n = AnomalyScars.scorch(level, x, z, radius, nearY);
+				n += AnomalyScars.microCrater(level, x, z, 0.7, depth, nearY);
 				yield n;
 			}
 			default -> 0;
@@ -270,7 +285,7 @@ public final class AnomalyCommand {
 		reply(source, "Зон " + stats.total() + ": безопасных " + stats.safe()
 				+ ", опасных " + stats.danger() + ", смертельных " + stats.deadly()
 				+ (stats.pinned() > 0 ? ", тестовых " + stats.pinned() : ""));
-		reply(source, String.format("Покрыто %.1f %% площади мира, суммарный бюджет разрушения %s блоков",
+		reply(source, String.format(java.util.Locale.ROOT, "Покрыто %.1f %% площади мира, суммарный бюджет разрушения %s блоков",
 				stats.coveragePercent(), thousands(stats.budget())));
 		int pending = 0;
 		for (Anomaly anomaly : AnomalyField.all()) {
@@ -278,7 +293,7 @@ public final class AnomalyCommand {
 		}
 		reply(source, "Следов в очереди: " + thousands(pending) + " блоков"
 				+ (AnomalyMod.config.scar_enabled ? "" : " (разрушения выключены)"));
-		reply(source, "Время поля " + String.format("%.1f", AnomalyClock.fieldMs() / 3_600_000.0)
+		reply(source, "Время поля " + String.format(java.util.Locale.ROOT, "%.1f", AnomalyClock.fieldMs() / 3_600_000.0)
 				+ " ч, множитель ×" + trim(AnomalyClock.scale()));
 		return 1;
 	}
@@ -304,9 +319,9 @@ public final class AnomalyCommand {
 			reply(source, "#" + anomaly.id
 					+ (anomaly.pinned ? " [тест]" : "")
 					+ " " + classTag(zone.cls()) + " r " + Math.round(anomaly.r0)
-					+ " · " + String.format("%.1f", zone.ageHours()) + "/" + String.format("%.1f", anomaly.life_hours) + " ч"
+					+ " · " + String.format(java.util.Locale.ROOT, "%.1f", zone.ageHours()) + "/" + String.format(java.util.Locale.ROOT, "%.1f", anomaly.life_hours) + " ч"
 					+ " · дрейф " + Math.round(anomaly.speed) + " бл/ч"
-					+ " · дуга " + String.format("%.1f", zone.turnDegrees()) + "°"
+					+ " · дуга " + String.format(java.util.Locale.ROOT, "%.1f", zone.turnDegrees()) + "°"
 					+ " · " + zone.components().size() + " комп."
 					+ " · " + blocks(distance) + " от точки");
 		}
@@ -329,11 +344,11 @@ public final class AnomalyCommand {
 		reply(source, "#" + anomaly.id + (anomaly.pinned ? " [тест]" : "") + " " + classTag(zone.cls())
 				+ " · " + (signed <= 0 ? "точка ВНУТРИ" : "снаружи") + " · до края " + blocks(Math.abs(signed)));
 		reply(source, "Радиус " + Math.round(zone.radius()) + " из " + Math.round(anomaly.r0)
-				+ " (жизнь " + String.format("%.1f", zone.ageHours()) + "/" + String.format("%.1f", anomaly.life_hours)
+				+ " (жизнь " + String.format(java.util.Locale.ROOT, "%.1f", zone.ageHours()) + "/" + String.format(java.util.Locale.ROOT, "%.1f", anomaly.life_hours)
 				+ " ч, фаза " + phase(anomaly, zone.ageHours()) + ")");
 		reply(source, "Центр " + coord(zone.x(), zone.z()) + " · от центра мира " + blocks(Math.hypot(zone.x(), zone.z()))
 				+ " · ядро " + blocks(Math.hypot(zone.coreX() - zone.x(), zone.coreZ() - zone.z())) + " от центра");
-		reply(source, "Дрейф " + Math.round(anomaly.speed) + " бл/ч, дуга " + String.format("%.1f", zone.turnDegrees())
+		reply(source, "Дрейф " + Math.round(anomaly.speed) + " бл/ч, дуга " + String.format(java.util.Locale.ROOT, "%.1f", zone.turnDegrees())
 				+ "°, прошла " + blocks(drift) + " от рождения");
 		reply(source, "Компоненты: " + AnomalyComponent.titles(zone.components()));
 		reply(source, "Бюджет разрушения " + thousands(zone.budget()) + " блоков"
@@ -571,7 +586,7 @@ public final class AnomalyCommand {
 
 	private static String blocks(double value) {
 		if (value >= 1000.0) {
-			return String.format("%.1fк", value / 1000.0);
+			return String.format(java.util.Locale.ROOT, "%.1fк", value / 1000.0);
 		}
 		return String.valueOf(Math.round(value));
 	}
@@ -584,7 +599,7 @@ public final class AnomalyCommand {
 		if (value == Math.rint(value)) {
 			return String.valueOf((long) value);
 		}
-		return String.format("%.1f", value);
+		return String.format(java.util.Locale.ROOT, "%.1f", value);
 	}
 
 	private static String timeHint() {

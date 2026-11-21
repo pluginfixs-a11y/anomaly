@@ -486,12 +486,15 @@ public final class AnomalyScars {
 				|| state.is(Blocks.FROSTED_ICE) || state.is(Blocks.SNOW_BLOCK) || state.is(Blocks.POWDER_SNOW);
 	}
 
-	/** Чужие постройки — не рельеф: доски, кирпич, стекло, бетон, шерсть не трогаем. */
+	/** Чужие постройки — не рельеф: доски, кирпич, стекло, бетон, шерсть, медь и тёсаный камень. */
 	static boolean builtBlock(BlockState state) {
 		return state.is(BlockTags.PLANKS) || state.is(BlockTags.STONE_BRICKS) || state.is(BlockTags.WOOL)
-				|| state.is(BlockTags.CONCRETE) || state.is(BlockTags.CONCRETE_POWDERS)
+				|| state.is(BlockTags.CONCRETE) || state.is(BlockTags.CONCRETE_POWDERS) || state.is(BlockTags.COPPER)
 				|| state.is(Blocks.BRICKS) || state.is(Blocks.GLASS) || state.is(Blocks.GLASS_PANE)
-				|| state.is(Blocks.TINTED_GLASS);
+				|| state.is(Blocks.TINTED_GLASS) || state.is(Blocks.SANDSTONE) || state.is(Blocks.SMOOTH_SANDSTONE)
+				|| state.is(Blocks.CUT_SANDSTONE) || state.is(Blocks.SMOOTH_STONE) || state.is(Blocks.MUD_BRICKS)
+				|| state.is(Blocks.DEEPSLATE_BRICKS) || state.is(Blocks.DEEPSLATE_TILES)
+				|| state.is(Blocks.POLISHED_DEEPSLATE);
 	}
 
 	static boolean protectedBlock(BlockState state) {
@@ -545,6 +548,7 @@ public final class AnomalyScars {
 					continue;
 				}
 				clearPlant(level, x0, surface, z0);
+				int dug = surface;
 				for (int i = 0; i < depth; i++) {
 					int y = surface - 1 - i;
 					if (y <= level.getMinY()) {
@@ -558,13 +562,17 @@ public final class AnomalyScars {
 					}
 					level.setBlock(pos, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
 					changed++;
+					dug = y;
 				}
-				// дно воронки: обломки, а не дыра в темноту (и только на пустое место)
-				int floorY = Math.max(level.getMinY() + 1, surface - depth - 1);
-				BlockState floor = level.getBlockState(pos.set(x0, floorY, z0));
-				if (floor.canBeReplaced() && !protectedBlock(floor) && !builtBlock(floor)) {
-					level.setBlock(pos, Blocks.COBBLESTONE.defaultBlockState(), Block.UPDATE_ALL);
-					changed++;
+				// дно воронки — под последним выкопанным блоком, а не «где-то по плану»:
+				// если копание прервалось на сундуке, пол не должен висеть в пещере ниже
+				if (dug < surface) {
+					int floorY = Math.max(level.getMinY() + 1, dug - 1);
+					BlockState floor = level.getBlockState(pos.set(x0, floorY, z0));
+					if (floor.canBeReplaced() && !protectedBlock(floor) && !builtBlock(floor)) {
+						level.setBlock(pos, Blocks.COBBLESTONE.defaultBlockState(), Block.UPDATE_ALL);
+						changed++;
+					}
 				}
 			}
 		}
