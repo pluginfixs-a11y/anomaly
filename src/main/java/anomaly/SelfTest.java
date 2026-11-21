@@ -156,11 +156,20 @@ public final class SelfTest {
 		}
 		report(result, "множитель формы в 0.35..4", factorSane);
 
+		// глубокая вмятина не должна выворачиваться наружу: мягкий максимум держит дно у 0.35
+		Anomaly dent = new Anomaly();
+		dent.r0 = 1000.0;
+		dent.harmonics = new ArrayList<>();
+		dent.harmonics.add(new Harmonic(2, 0.9, 0.0, 0.0, 0.0, 0.0, 0.0));
+		double trough = dent.shapeFactor(3.0 * Math.PI / 4.0, 0.0);
+		report(result, "вмятина упирается в 0.35, а не выворачивается (дно " + String.format("%.2f", trough) + ")",
+				trough >= 0.35 && trough < 0.45);
+
 		boolean harmonicsOk = anomaly.harmonics.size() >= 2 && anomaly.harmonics.size() <= 6;
 		for (Harmonic harmonic : anomaly.harmonics) {
 			harmonicsOk &= harmonic.valid();
 		}
-		report(result, "гармоник 2–5 и все корректны", harmonicsOk);
+		report(result, "гармоник 2–6 и все корректны", harmonicsOk);
 	}
 
 	// --- дрейф ---

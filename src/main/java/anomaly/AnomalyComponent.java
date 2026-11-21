@@ -347,6 +347,13 @@ public enum AnomalyComponent {
 	 */
 	public void pulse(ServerLevel level, ServerPlayer player, Zone zone, AnomalyConfig config, AnomalyState state) {
 		var rnd = player.getRandom();
+		// пассивные компоненты действуют внутри зоны: их звуки и пыль снаружи вводили бы в
+		// заблуждение («еда утекает» там, где ничего не утекает)
+		if ((this == HUNGER_DRAIN || this == SATURATION_BURN || this == XP_LEAK || this == AIR_DRAIN
+				|| this == TRACTION || this == REPULSION)
+				&& zone.signedDistance(player.getX(), player.getZ()) > 0.0) {
+			return;
+		}
 		switch (this) {
 			case LIGHT_WALL -> {
 				// стену рисует ambience: он знает, что у зоны есть light_wall, и делает дугу выше,
@@ -466,12 +473,13 @@ public enum AnomalyComponent {
 				}
 			}
 			case AIR_DRAIN -> {
-				if (rnd.nextInt(20) == 0) {
+				// плеск только у того, кто действительно под водой
+				if (player.isUnderWater() && rnd.nextInt(20) == 0) {
 					level.playSound(null, player.getX(), player.getY() + 1.2, player.getZ(),
 							SoundEvents.GENERIC_SPLASH, SoundSource.AMBIENT, 0.4f, 1.2f);
 				}
 			}
-			case TRACTION, REPULSION -> dustTowardsCore(level, player, zone, rnd);
+			case TRACTION, REPULSION -> dustTowardsCore(level, player, zone, rnd, this == REPULSION);
 			case PRESSURE -> {
 				// 1/8 при 2 Гц — раз в 4 с; 2 искры раз в 10 с на глаз не читались
 				if (rnd.nextInt(8) == 0) {
@@ -500,16 +508,22 @@ public enum AnomalyComponent {
 
 	/** Пыль между игроком и ядром: тяга и отторжение перестают быть невидимыми. */
 	private static void dustTowardsCore(ServerLevel level, ServerPlayer player, Zone zone,
-			net.minecraft.util.RandomSource rnd) {
+			net.minecraft.util.RandomSource rnd, boolean away) {
 		if (rnd.nextInt(4) != 0) {
 			return;
 		}
 		double dx = zone.coreX() - player.getX();
 		double dz = zone.coreZ() - player.getZ();
-		if (Math.hypot(dx, dz) < 2.0) {
+		double dist = Math.hypot(dx, dz);
+		if (dist < 2.0) {
 			return;
 		}
-		double t = 0.15 + rnd.nextDouble() * 0.35;
+		if (away) {
+			dx = -dx;
+			dz = -dz;
+		}
+		// пыль у самого игрока (4–12 блоков), а не у ядра в сотнях блоков: там её никто не увидит
+		double t = Math.min(0.35, (4.0 + rnd.nextDouble() * 8.0) / dist);
 		var color = new net.minecraft.core.particles.DustParticleOptions(zone.edgeColor(), 1.2f);
 		level.sendParticles(player, color, true, true,
 				player.getX() + dx * t,

@@ -24,7 +24,7 @@ public class AnomalyConfig {
 	private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
 	private static final Path PATH = FabricLoader.getInstance().getConfigDir().resolve("anomaly.json");
 	/** Текущая версия формата конфига. */
-	public static final int VERSION = 4;
+	public static final int VERSION = 5;
 
 	public int config_version = 0;
 
@@ -179,6 +179,10 @@ public class AnomalyConfig {
 		// v3 → v4: 250 зон на мир 40 000 блоков — это одна на 2 500 блоков, в поле зрения пусто.
 		// Поднимаем только старое дефолтное значение, выставленное руками не трогаем.
 		if (config_version < 4 && population == 250) {
+			population = 800;
+		}
+		// v4 → v5: 800 зон с крупными давали 38 % покрытия — перебор; 600 даёт ~32 %
+		if (config_version < 5 && population == 800) {
 			population = 600;
 		}
 		sanitize();
