@@ -170,8 +170,9 @@ public final class AnomalyCommand {
 				+ " опасные, дальше смертельные (размытие ±" + config.class_blur + ")");
 		reply(source, "Рассеивание: внутри " + config.dissipate_radius + ", подавление до " + config.suppress_until
 				+ "; время поля ×" + trim(AnomalyClock.scale()) + " (" + timeHint() + ")");
-		reply(source, "Остаток на игрока: /anomaly residue [ник] · set/add/clear — для проверки последствий");
-		reply(source, "Проверка: /anomaly field · here · spawn · edge · show · timescale · event · selftest");		return 1;
+		reply(source, "Остаток на игрока: /anomaly residue [get <ник>] · set/add/clear — для проверки последствий");
+		reply(source, "Проверка: /anomaly field · here · spawn · edge · show · timescale · event · selftest");
+		return 1;
 	}
 
 	private static int components(CommandSourceStack source) {
@@ -669,14 +670,17 @@ public final class AnomalyCommand {
 
 	private static int save(CommandSourceStack source) {
 		boolean saved = AnomalyField.save();
-		AnomalyResidue.save();
+		boolean residue = AnomalyResidue.save();
 		if (saved) {
 			reply(source, "Поле записано: " + AnomalyField.path(), ChatFormatting.GREEN);
 		} else {
 			reply(source, "Не смог записать поле в " + AnomalyField.path() + " — смотрите лог сервера",
 					ChatFormatting.RED);
 		}
-		return saved ? 1 : 0;
+		if (!residue) {
+			reply(source, "Остаток записать не удалось — смотрите лог сервера", ChatFormatting.RED);
+		}
+		return saved && residue ? 1 : 0;
 	}
 
 	// --- текст ---

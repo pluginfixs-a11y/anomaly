@@ -117,10 +117,8 @@ public final class AnomalyResidue {
 		}
 	}
 
-	public static void save() {
-		if (dirty) {
-			saveNow();
-		}
+	public static boolean save() {
+		return !dirty || saveNow();
 	}
 
 	static boolean saveNow() {
@@ -383,7 +381,7 @@ public final class AnomalyResidue {
 	/** «Оскомина»: в окно 5–10 минут из каждых 20 элитра не держит фейерверк. */
 	public static boolean mufflesFirework(ServerPlayer player) {
 		AnomalyConfig config = AnomalyMod.config;
-		if (config == null || !config.enabled || !config.residue_enabled || player.isCreative()) {
+		if (config == null || !config.enabled || !config.residue_enabled || player.isCreative() || player.isSpectator()) {
 			return false;
 		}
 		if (hours(player) < AFTERTASTE) {
@@ -396,7 +394,7 @@ public final class AnomalyResidue {
 	/** «Печать ада»: портал в Нижний не берёт. Возврат из Нижнего — не блокируем. */
 	public static boolean sealsNether(ServerPlayer player) {
 		AnomalyConfig config = AnomalyMod.config;
-		if (config == null || !config.enabled || !config.residue_enabled || player.isCreative()) {
+		if (config == null || !config.enabled || !config.residue_enabled || player.isCreative() || player.isSpectator()) {
 			return false;
 		}
 		return hours(player) >= SEAL;
@@ -424,7 +422,7 @@ public final class AnomalyResidue {
 			if (entity instanceof ServerPlayer player) {
 				Entry entry = entry(player.getUUID());
 				entry.asleepSinceMs = System.currentTimeMillis();
-				entry.asleepAtNight = !isDay(player);
+				entry.asleepAtNight = player.level().isDarkOutside();
 			}
 		});
 		EntitySleepEvents.STOP_SLEEPING.register((entity, pos) -> {
