@@ -9,7 +9,7 @@ import java.util.List;
  * числа — без повторных вызовов синусов на каждый вопрос «я внутри?».
  */
 public record Zone(Anomaly anomaly, long now, double x, double z, double radius, double coreX, double coreZ,
-		double ageHours) {
+		double ageHours, List<AnomalyComponent> components) {
 
 	public long id() {
 		return anomaly.id;
@@ -45,9 +45,9 @@ public record Zone(Anomaly anomaly, long now, double x, double z, double radius,
 		return AnomalyClass.damageBudget(anomaly.r0, cls());
 	}
 
-	/** Разобранный набор компонентов: пустой только у старых файлов до миграции. */
+	/** Разобранный набор компонентов: считается один раз при создании зоны. */
 	public List<AnomalyComponent> components() {
-		return AnomalyComponent.parse(anomaly.components);
+		return components;
 	}
 
 	/** Полный поворот траектории за жизнь, градусы. По концепции не больше 10. */

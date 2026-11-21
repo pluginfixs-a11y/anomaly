@@ -82,6 +82,16 @@ public class AnomalyMod implements ModInitializer {
 	private static void tickPlayer(ServerPlayer player, double seconds) {
 		ServerLevel level = player.level();
 		AnomalyState state = STATES.computeIfAbsent(player.getUUID(), key -> new AnomalyState());
+		state.pulse(AnomalyState.stepTicks(seconds));
+
+		// мёртвый на экране смерти не копит дозу и не получает эффектов; после респавна всё с нуля
+		if (!player.isAlive()) {
+			state.dose = 0.0;
+			state.zoneId = 0L;
+			state.ticksInside = 0;
+			state.damageTicks = 0;
+			return;
+		}
 
 		// вне Верхнего мира и у наблюдателей доза просто спадает, а не замирает
 		if ((config.overworld_only && level.dimension() != Level.OVERWORLD) || player.isSpectator()) {
@@ -93,7 +103,7 @@ public class AnomalyMod implements ModInitializer {
 
 		Zone inside = null;
 		for (Zone zone : near) {
-			AnomalyEffects.ambience(level, player, zone, config);
+			AnomalyEffects.ambience(level, player, zone, config, state);
 			if (zone.contains(player.getX(), player.getZ())
 					&& (inside == null || zone.strength() > inside.strength())) {
 				inside = zone;

@@ -64,9 +64,15 @@ public final class SelfTest {
 		runGroup(result, "сохранение", () -> checkPersistence(result, config, rnd));
 		runGroup(result, "края", () -> checkEdges(result, config, rnd));
 		if (server != null) {
-			// живое поле должно быть читаемым: если оно битое, это видно здесь, а не в игре
-			runGroup(result, "живое поле", () -> report(result,
-					"поле читается (" + AnomalyField.count() + " зон)", AnomalyField.count() >= 0));
+			// живое поле должно быть с компонентами: пустая зона — это невидимая и инертная оболочка
+			runGroup(result, "живое поле", () -> {
+				List<Anomaly> live = AnomalyField.all();
+				boolean withComponents = true;
+				for (Anomaly anomaly : live) {
+					withComponents &= !anomaly.componentList().isEmpty();
+				}
+				report(result, "у всех зон живого поля есть компоненты (" + live.size() + ")", withComponents);
+			});
 		}
 		return result;
 	}
@@ -241,11 +247,11 @@ public final class SelfTest {
 
 		AnomalyState amp = new AnomalyState();
 		amp.dose = 0.2;
-		check(result, "доза 0.2 → усилитель 0", 0, amp.amplifier(), 0);
+		report(result, "доза 0.2 → 20 %", amp.percent() == 20);
 		amp.dose = 0.5;
-		check(result, "доза 0.5 → усилитель 1", 1, amp.amplifier(), 0);
+		report(result, "доза 0.5 → 50 %", amp.percent() == 50);
 		amp.dose = 0.9;
-		check(result, "доза 0.9 → усилитель 2", 2, amp.amplifier(), 0);
+		report(result, "доза 0.9 → 90 %", amp.percent() == 90);
 
 		// смена набора не тащит чужую дозу: вход в другую зону срезает её до 30 %
 		Anomaly other = new Anomaly();
@@ -289,7 +295,8 @@ public final class SelfTest {
 						safeNoDamage = false;
 					}
 				}
-				if (cost > AnomalyComponent.budgetCap(cls) + 2) {
+				// полная цена учитывает и надбавку за синергии, а не только базовые стоимости
+				if (AnomalyComponent.totalCost(set) > AnomalyComponent.budgetCap(cls) + 2) {
 					budgets = false;
 				}
 				if (!groupsOk(set, cls)) {
@@ -331,6 +338,39 @@ public final class SelfTest {
 				AnomalyComponent.parse(List.of("no_such", "cold_creep", "cold_creep")).size() == 1);
 		report(result, "пустой список компонентов разбирается в пустой",
 				AnomalyComponent.parse(null).isEmpty());
+
+		java.util.Set<String> ids = new java.util.HashSet<>();
+		boolean unique = true;
+		boolean titled = true;
+		for (AnomalyComponent component : AnomalyComponent.values()) {
+			unique &= ids.add(component.id);
+			titled &= !component.title.isBlank();
+		}
+		report(result, "у компонентов уникальные id", unique);
+		report(result, "у каждого компонента есть название", titled);
+
+		AnomalyState pulses = new AnomalyState();
+		pulses.pulse(10);
+		pulses.pulse(10);
+		check(result, "счётчик эффектных тиков растёт", 20, pulses.pulseTicks, 0);
+
+		// выключение в конфиге действительно выключает: остаётся только разрешённое
+		AnomalyConfig onlyOne = new AnomalyConfig();
+		for (AnomalyComponent component : AnomalyComponent.values()) {
+			if (component != AnomalyComponent.LIGHT_WALL) {
+				onlyOne.disabled_components.add(component.id);
+			}
+		}
+		List<AnomalyComponent> only = AnomalyComponent.roll(AnomalyClass.DEADLY, new Random(5L), onlyOne, 900);
+		report(result, "выключенные компоненты не выпадают",
+				!only.isEmpty() && only.stream().allMatch(c -> c == AnomalyComponent.LIGHT_WALL));
+
+		AnomalyConfig noneEnabled = new AnomalyConfig();
+		for (AnomalyComponent component : AnomalyComponent.values()) {
+			noneEnabled.disabled_components.add(component.id);
+		}
+		report(result, "всё выключено → пустой набор без падения",
+				AnomalyComponent.roll(AnomalyClass.DEADLY, new Random(6L), noneEnabled, 900).isEmpty());
 
 		AnomalyFieldData field = new AnomalyFieldData();
 		Anomaly anomaly = AnomalyField.create(field, config, rnd, 0L, 12000, 0, null, null, false);

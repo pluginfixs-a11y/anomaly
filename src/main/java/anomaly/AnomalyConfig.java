@@ -69,7 +69,6 @@ public class AnomalyConfig {
 	public double lingering_floor = 0.1;
 
 	public int view_range = 48;
-	public int sound_period = 90;
 	/** Период серверного тика эффектов (10 = 0.5 с). Поле тикает раз в секунду отдельно. */
 	public int tick_period = 10;
 
@@ -152,18 +151,21 @@ public class AnomalyConfig {
 
 	/** 0.1.0 → 0.2: столбы 6–14 блоков заменяются областями, плотность по чанкам — населением. */
 	private void migrate(boolean existed) {
-		radius_min = 100.0;
-		radius_max = 3000.0;
-		spawn_min_radius = 6000;
-		world_radius = 20000;
-		population = 250;
-		lifetime_max_hours = 168.0;
-		// в 0.2.0-alpha1 не было компонентов: старый список выключенных «типов» больше не значит ничего
+		if (config_version < 2) {
+			radius_min = 100.0;
+			radius_max = 3000.0;
+			spawn_min_radius = 6000;
+			world_radius = 20000;
+			population = 250;
+			lifetime_max_hours = 168.0;
+		}
+		// v2 → v3: появились компоненты, старый список выключенных «типов» больше не значит ничего.
+		// Геометрию при этом не трогаем: пользователь мог её уже настроить.
 		disabled_components = new ArrayList<>();
 		sanitize();
 		config_version = VERSION;
 		if (existed) {
-			AnomalyMod.LOGGER.info("Anomaly: конфиг обновлён до версии {} (геометрия сброшена на концепцию 0.2)", VERSION);
+			AnomalyMod.LOGGER.info("Anomaly: конфиг обновлён до версии {}", VERSION);
 		}
 	}
 

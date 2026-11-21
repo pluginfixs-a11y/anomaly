@@ -8,6 +8,7 @@ import net.minecraft.sounds.SoundSource;
 import net.minecraft.world.effect.MobEffectInstance;
 import net.minecraft.world.effect.MobEffects;
 import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.food.FoodData;
 import net.minecraft.world.phys.AABB;
 
@@ -254,6 +255,15 @@ public enum AnomalyComponent {
 		return 1.0 + 0.25 * synergyCount(components);
 	}
 
+	/** Полная цена набора: стоимости компонентов плюс по единице за каждую синергию. */
+	public static int totalCost(List<AnomalyComponent> components) {
+		int sum = 0;
+		for (AnomalyComponent component : components) {
+			sum += component.cost;
+		}
+		return sum + synergyCount(components);
+	}
+
 	public static List<String> ids(List<AnomalyComponent> components) {
 		List<String> out = new ArrayList<>(components.size());
 		for (AnomalyComponent component : components) {
@@ -291,21 +301,27 @@ public enum AnomalyComponent {
 				}
 			}
 			case XP_LEAK -> {
-				if ((level.getGameTime() + zone.id()) % 60L == 0L) {
+				// минус в опыт на нуле уводит счётчик в отрицательные значения — не трогаем пустой карман;
+				// раз в 20–40 с, а не чаще: иначе уровень тает на глазах
+				long period = 400L + Math.floorMod(zone.id(), 400L);
+				if (state.pulseTicks % period == 0L && player.totalExperience > 0) {
 					player.giveExperiencePoints(-1);
 				}
 			}
-			case COLD_CREEP -> player.setTicksFrozen(
-					Math.min(300, player.getTicksFrozen() + (int) Math.round(6.0 * dose * intensity)));
+			// ваниль снимает 2 за тик, то есть 20 за 0.5 с; +30 за шаг даёт нетто +10 и реальный набор инея
+			case COLD_CREEP -> player.setTicksFrozen(Math.min(300, player.getTicksFrozen()
+					+ (int) Math.round(3.0 * AnomalyState.stepTicks(seconds) * dose * intensity)));
 			case AIR_DRAIN -> {
 				if (player.isUnderWater()) {
-					player.setAirSupply(Math.max(0,
-							player.getAirSupply() - (int) Math.round(8.0 * dose * intensity)));
+					// не режем нулём: ванильный урон начинается только при воздухе ≤ −20
+					int drain = (int) Math.round(0.8 * AnomalyState.stepTicks(seconds) * dose * intensity);
+					player.setAirSupply(Math.max(-20, player.getAirSupply() - Math.max(1, drain)));
 				}
 			}
 			case PRESSURE -> {
+				// 0.5 урона раз в 20 с, а не раз в 2: иначе «опасная» убивает за полторы минуты
 				state.damageTicks += AnomalyState.stepTicks(seconds);
-				if (state.damageTicks >= 40) {
+				if (state.damageTicks >= 400) {
 					state.damageTicks = 0;
 					player.hurt(level.damageSources().magic(), (float) (0.5 * dose * intensity));
 				}
@@ -322,7 +338,7 @@ public enum AnomalyComponent {
 	 * Видимое и слышимое: вызывается, когда игрок в пределах {@code view_range}, — и внутри, и у края.
 	 * Частицы ставятся у самого игрока, а не в центре зоны: у области в три километра центра не видно.
 	 */
-	public void pulse(ServerLevel level, ServerPlayer player, Zone zone, AnomalyConfig config) {
+	public void pulse(ServerLevel level, ServerPlayer player, Zone zone, AnomalyConfig config, AnomalyState state) {
 		var rnd = player.getRandom();
 		switch (this) {
 			case LIGHT_WALL -> lightWall(level, player, zone, rnd);
@@ -351,16 +367,26 @@ public enum AnomalyComponent {
 				}
 			}
 			case GLOW_ALL -> {
-				if (level.getGameTime() % 40L == 0L) {
+				if (state.pulseTicks % 40 == 0) {
 					for (LivingEntity entity : nearby(level, player, 24.0)) {
 						entity.addEffect(new MobEffectInstance(MobEffects.GLOWING, 60, 0, false, false, false));
 					}
 				}
 			}
 			case FLOAT_ALL -> {
-				if (level.getGameTime() % 40L == 0L) {
+				if (state.pulseTicks % 40 == 0) {
 					for (LivingEntity entity : nearby(level, player, 24.0)) {
 						entity.addEffect(new MobEffectInstance(MobEffects.LEVITATION, 20, 0, false, true, true));
+					}
+					// игрок висит только внутри зоны: иначе левитация «догоняет» снаружи и убивает падением
+					if (zone.signedDistance(player.getX(), player.getZ()) <= 0.0) {
+						player.addEffect(new MobEffectInstance(MobEffects.LEVITATION, 20, 0, false, true, true));
+					}
+					// и дроп тоже: «всё, что не приколочено»
+					for (ItemEntity item : level.getEntitiesOfClass(ItemEntity.class,
+							new AABB(player.getX() - 16.0, player.getY() - 6.0, player.getZ() - 16.0,
+									player.getX() + 16.0, player.getY() + 8.0, player.getZ() + 16.0))) {
+						item.push(0.0, 0.08, 0.0);
 					}
 				}
 			}

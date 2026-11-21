@@ -162,7 +162,7 @@ public final class Anomaly {
 		double coreAngle = core_angle + core_spin * ageHours;
 		double coreX = pos[0] + Math.cos(coreAngle) * radius * core_offset;
 		double coreZ = pos[1] + Math.sin(coreAngle) * radius * core_offset;
-		return new Zone(this, now, pos[0], pos[1], radius, coreX, coreZ, ageHours);
+		return new Zone(this, now, pos[0], pos[1], radius, coreX, coreZ, ageHours, componentList());
 	}
 
 	/** Радиус с учётом фазы жизни и уже случившегося сжатия у центра. */
@@ -218,7 +218,8 @@ public final class Anomaly {
 		return AnomalyComponent.parse(components);
 	}
 
-	/** Пригодность записи из файла: битые строки выбрасываются, а не роняют поле. */	public boolean valid() {
+	/** Пригодность записи из файла: битые строки выбрасываются, а не роняют поле. */
+	public boolean valid() {
 		if (!(Double.isFinite(x0) && Double.isFinite(z0) && Double.isFinite(r0) && r0 > 0.0)) {
 			return false;
 		}

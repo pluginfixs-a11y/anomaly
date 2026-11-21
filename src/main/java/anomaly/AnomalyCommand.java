@@ -52,15 +52,15 @@ public final class AnomalyCommand {
 														DoubleArgumentType.getDouble(context, "radius"),
 														StringArgumentType.getString(context, "class"))))))
 						.then(Commands.literal("kill")
-								.then(Commands.argument("target", StringArgumentType.word())
+								.then(Commands.argument("target", StringArgumentType.greedyString())
 										.executes(context -> kill(context.getSource(),
 												StringArgumentType.getString(context, "target")))))
 						.then(Commands.literal("tp")
-								.then(Commands.argument("target", StringArgumentType.word())
+								.then(Commands.argument("target", StringArgumentType.greedyString())
 										.executes(context -> teleport(context.getSource(),
 												StringArgumentType.getString(context, "target"), false))))
 						.then(Commands.literal("edge")
-								.then(Commands.argument("target", StringArgumentType.word())
+								.then(Commands.argument("target", StringArgumentType.greedyString())
 										.executes(context -> teleport(context.getSource(),
 												StringArgumentType.getString(context, "target"), true))))
 						.then(Commands.literal("show").executes(context -> show(context.getSource())))
@@ -100,7 +100,8 @@ public final class AnomalyCommand {
 		return 1;
 	}
 
-	private static int stats(CommandSourceStack source) {		AnomalyField.Stats stats = AnomalyField.stats();
+	private static int stats(CommandSourceStack source) {
+		AnomalyField.Stats stats = AnomalyField.stats();
 		reply(source, "Зон " + stats.total() + ": безопасных " + stats.safe()
 				+ ", опасных " + stats.danger() + ", смертельных " + stats.deadly()
 				+ (stats.pinned() > 0 ? ", тестовых " + stats.pinned() : ""));

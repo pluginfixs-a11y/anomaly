@@ -77,13 +77,20 @@ public final class AnomalyField {
 		boolean migrated = false;
 		if (config != null) {
 			for (Anomaly anomaly : data.anomalies) {
-				if (anomaly.componentList().isEmpty()) {
-					anomaly.components = AnomalyComponent.ids(AnomalyComponent.roll(
+				if (anomaly.components == null || anomaly.components.isEmpty()) {
+					List<AnomalyComponent> rolled = AnomalyComponent.roll(
 							AnomalyClass.byId(anomaly.cls),
 							new Random(anomaly.id * 0x9E3779B97F4A7C15L),
-							config, anomaly.r0));
-					migrated = true;
+							config, anomaly.r0);
+					// пустой пул (всё выключено) не должен переписывать файл на каждом старте
+					if (!rolled.isEmpty()) {
+						anomaly.components = AnomalyComponent.ids(rolled);
+						migrated = true;
+					}
 				}
+			}
+			if (AnomalyComponent.allowed(AnomalyClass.DANGER, config).isEmpty()) {
+				AnomalyMod.LOGGER.warn("Anomaly: все компоненты выключены в конфиге — зоны будут без набора");
 			}
 		}
 		// выключенный мод не должен ни сеять население, ни писать файл в мир

@@ -41,12 +41,13 @@ public final class AnomalyEffects {
 	}
 
 	/** Видимое: и внутри, и у края — в пределах {@code view_range} от границы. */
-	public static void ambience(ServerLevel level, ServerPlayer player, Zone zone, AnomalyConfig config) {
+	public static void ambience(ServerLevel level, ServerPlayer player, Zone zone, AnomalyConfig config,
+			AnomalyState state) {
 		if (zone.signedDistance(player.getX(), player.getZ()) > config.view_range) {
 			return;
 		}
 		for (AnomalyComponent component : zone.components()) {
-			component.pulse(level, player, zone, config);
+			component.pulse(level, player, zone, config, state);
 		}
 	}
 
@@ -61,6 +62,10 @@ public final class AnomalyEffects {
 	 * помнит, что было плохо, но уже не знает, от чего именно.
 	 */
 	public static void lingering(ServerLevel level, ServerPlayer player, AnomalyState state, AnomalyConfig config) {
+		// в креативе игрок не болеет: после края зоны строителю не нужна слепота
+		if (player.isCreative()) {
+			return;
+		}
 		int amplifier = state.dose >= 0.5 ? 1 : 0;
 		player.addEffect(new net.minecraft.world.effect.MobEffectInstance(
 				net.minecraft.world.effect.MobEffects.SLOWNESS, 40, amplifier, false, true, true));
@@ -87,7 +92,8 @@ public final class AnomalyEffects {
 		double length = Math.hypot(dx, dz);
 		if (length < 0.5) {
 			// в самом ядре нечего делить — толкаем в случайную сторону
-			shove(player, force, 0.0);
+			double angle = player.getRandom().nextDouble() * Math.PI * 2.0;
+			shove(player, Math.cos(angle) * force, Math.sin(angle) * force);
 			return;
 		}
 		shove(player, dx / length * force, dz / length * force);
