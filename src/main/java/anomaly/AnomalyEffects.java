@@ -8,6 +8,7 @@ import net.minecraft.sounds.SoundSource;
 import net.minecraft.world.entity.EntitySpawnReason;
 import net.minecraft.world.entity.EntityTypes;
 import net.minecraft.world.entity.LightningBolt;
+import net.minecraft.world.level.levelgen.Heightmap;
 
 import java.util.List;
 
@@ -46,21 +47,46 @@ public final class AnomalyEffects {
 		if (zone.signedDistance(player.getX(), player.getZ()) > config.view_range) {
 			return;
 		}
-		// край видно у любой зоны: слабая пыль цвета зоны; light_wall потом делает её плотной
-		edgeBand(level, player, zone, 10, 96.0, 0.85f);
+		// край видно у любой зоны: пыль цвета зоны; light_wall потом делает её плотнее
+		edgeBand(level, player, zone, config.view_range, 2.0f);
+		mood(level, player, zone);
 		for (AnomalyComponent component : zone.components()) {
 			component.pulse(level, player, zone, config, state);
 		}
 	}
 
-	/** Дуга пыли по краю вблизи игрока: цвет — зоны, не класса. */
-	static void edgeBand(ServerLevel level, ServerPlayer player, Zone zone, int points, double reach, float scale) {
+	/**
+	 * Низкий фон внутри зоны: без него большая область ощущается только по эффектам. Играем у самого
+	 * игрока — звук с расстояния 16 блоков до него не доходит (радиус слышимости = max(16, 16·vol)).
+	 */
+	private static void mood(ServerLevel level, ServerPlayer player, Zone zone) {
+		if (zone.signedDistance(player.getX(), player.getZ()) > 0.0) {
+			return;
+		}
+		if (player.getRandom().nextInt(32) != 0) {
+			return;
+		}
+		level.playSound(null, player.getX(), player.getY(), player.getZ(), SoundEvents.AMBIENT_CAVE.value(),
+				SoundSource.AMBIENT, 0.9f, 0.7f + player.getRandom().nextFloat() * 0.3f);
+	}
+
+	/**
+	 * Дуга пыли по краю вблизи игрока: цвет — зоны, не класса.
+	 * <p>
+	 * Шаг ~4 блока (10 точек на дугу 192 блока — это пунктир, а не стена), высота каждой точки —
+	 * по рельефу: на склоне дуга иначе уходит в землю или висит в воздухе. `count` разбрасывает
+	 * частицы по вертикали, получается полоса стены. Chunk-и не грузим: в незагруженном чанке
+	 * {@code getHeight} отдаёт дно мира, а косметика не стоит генерации.
+	 */
+	static void edgeBand(ServerLevel level, ServerPlayer player, Zone zone, double reach, float scale) {
 		double radius = zone.radius();
 		if (radius < 1.0) {
 			return;
 		}
 		double toPlayer = Math.atan2(player.getZ() - zone.z(), player.getX() - zone.x());
 		double half = radius <= reach ? Math.PI : Math.asin(Math.min(1.0, reach / radius));
+		double arc = 2.0 * half * radius;
+		int points = Math.max(24, Math.min(96, (int) (arc / 4.0)));
 		var color = new net.minecraft.core.particles.DustParticleOptions(zone.edgeColor(), scale);
 		var rnd = player.getRandom();
 		for (int i = 0; i < points; i++) {
@@ -69,7 +95,13 @@ public final class AnomalyEffects {
 			if (Math.hypot(point[0] - player.getX(), point[1] - player.getZ()) > reach) {
 				continue;
 			}
-			level.sendParticles(color, true, false, point[0], player.getY() + 1.0, point[1], 1, 0.0, 0.0, 0.0, 0.0);
+			int bx = (int) Math.floor(point[0]);
+			int bz = (int) Math.floor(point[1]);
+			if (!level.getChunkSource().hasChunk(bx >> 4, bz >> 4)) {
+				continue;
+			}
+			double y = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, bx, bz) + 0.6;
+			level.sendParticles(color, true, true, point[0], y, point[1], 3, 0.0, 1.5, 0.0, 0.0);
 		}
 	}
 

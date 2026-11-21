@@ -77,7 +77,7 @@ public class AnomalyConfig {
 	public double dose_decay_per_second = 0.02;
 	public double lingering_floor = 0.1;
 
-	public int view_range = 48;
+	public int view_range = 128;
 	/** Период серверного тика эффектов (10 = 0.5 с). Поле тикает раз в секунду отдельно. */
 	public int tick_period = 10;
 
@@ -149,8 +149,9 @@ public class AnomalyConfig {
 		chunks_per_tick = Math.max(1, Math.min(16, chunks_per_tick));
 		blocks_per_tick = Math.max(100, Math.min(20_000, blocks_per_tick));
 		mspt_limit = Math.max(1.0, Math.min(1000.0, mspt_limit));
-		if (view_range < 1) {
-			view_range = 1;
+		if (view_range < 64) {
+			// 0.2.0-alpha2 писал сюда 48: с такой дальностью зону не видно вообще
+			view_range = 128;
 		}
 		if (danger_from < spawn_min_radius) {
 			danger_from = spawn_min_radius;

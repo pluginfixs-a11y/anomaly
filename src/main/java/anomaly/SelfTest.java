@@ -525,6 +525,47 @@ public final class SelfTest {
 						+ " была " + iceSurface + ")",
 				level.getBlockState(new BlockPos(ix, iceSurface - 1, bz)).is(Blocks.ICE));
 		restore(level, iceBefore);
+
+		// снег слоем над льдом: guard видит SNOW, а не ICE — трещина не должна прорезать лёд в воду
+		int sx2 = bx + 96;
+		level.getChunk(sx2 >> 4, bz >> 4);
+		int snowSurface = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, sx2, bz);
+		Map<BlockPos, BlockState> snowBefore = snapshot(level, sx2, bz, 2, snowSurface - 2, snowSurface + 2);
+		level.setBlock(new BlockPos(sx2, snowSurface - 1, bz), Blocks.ICE.defaultBlockState(), Block.UPDATE_ALL);
+		level.setBlock(new BlockPos(sx2, snowSurface, bz), Blocks.SNOW.defaultBlockState(), Block.UPDATE_ALL);
+		AnomalyScars.applyColumn(level, ScarOp.line("crack", sx2, bz, 0.0, 12, 1, 4, 29L), sx2, bz);
+		report(result, "снег на льду не прорезается",
+				level.getBlockState(new BlockPos(sx2, snowSurface - 1, bz)).is(Blocks.ICE)
+						&& level.getBlockState(new BlockPos(sx2, snowSurface, bz)).is(Blocks.SNOW));
+		restore(level, snowBefore);
+
+		// дерево: ствол и крона — иначе на мёртвой земле висит зелёный навес
+		int tx = bx + 112;
+		level.getChunk(tx >> 4, bz >> 4);
+		int treeSurface = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, tx, bz);
+		Map<BlockPos, BlockState> treeBefore = snapshot(level, tx, bz, 4, treeSurface - 1, treeSurface + 12);
+		for (int y = 0; y < 5; y++) {
+			level.setBlock(new BlockPos(tx, treeSurface + y, bz), Blocks.OAK_LOG.defaultBlockState(), Block.UPDATE_ALL);
+		}
+		for (int dx = -2; dx <= 2; dx++) {
+			for (int dz = -2; dz <= 2; dz++) {
+				level.setBlock(new BlockPos(tx + dx, treeSurface + 5, bz + dz),
+						Blocks.OAK_LEAVES.defaultBlockState(), Block.UPDATE_ALL);
+			}
+		}
+		AnomalyScars.applyColumn(level, ScarOp.disk("dead_soil", tx, treeSurface + 5, bz, 23L), tx, bz);
+		boolean noLogs = true;
+		boolean noLeaves = true;
+		for (int y = 0; y < 5; y++) {
+			noLogs &= level.getBlockState(new BlockPos(tx, treeSurface + y, bz)).isAir();
+		}
+		for (int dx = -2; dx <= 2; dx++) {
+			for (int dz = -2; dz <= 2; dz++) {
+				noLeaves &= level.getBlockState(new BlockPos(tx + dx, treeSurface + 5, bz + dz)).isAir();
+			}
+		}
+		report(result, "дерево снесено вместе с кроной", noLogs && noLeaves);
+		restore(level, treeBefore);
 	}
 
 	private static Map<BlockPos, BlockState> snapshot(ServerLevel level, int cx, int cz, int radius,

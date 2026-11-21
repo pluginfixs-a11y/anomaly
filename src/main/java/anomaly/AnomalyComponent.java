@@ -350,11 +350,19 @@ public enum AnomalyComponent {
 		switch (this) {
 			case LIGHT_WALL -> lightWall(level, player, zone, rnd);
 			case ASH_FALL -> {
-				for (int i = 0; i < 3; i++) {
-					level.sendParticles(ParticleTypes.ASH, true, false,
-							player.getX() + (rnd.nextDouble() - 0.5) * 12.0,
-							player.getY() + 4.0 + rnd.nextDouble() * 4.0,
-							player.getZ() + (rnd.nextDouble() - 0.5) * 12.0,
+				// пепел падает сверху и виден только под открытым небом: в пещере он появлялся бы
+				// в камне над головой, где его никто не увидит
+				double ceiling = level.getHeight(
+						net.minecraft.world.level.levelgen.Heightmap.Types.MOTION_BLOCKING_NO_LEAVES,
+						(int) Math.floor(player.getX()), (int) Math.floor(player.getZ()));
+				if (ceiling > player.getY() + 2.0) {
+					break;
+				}
+				for (int i = 0; i < 6; i++) {
+					level.sendParticles(ParticleTypes.ASH, true, true,
+							player.getX() + (rnd.nextDouble() - 0.5) * 8.0,
+							player.getY() + 3.0 + rnd.nextDouble() * 3.0,
+							player.getZ() + (rnd.nextDouble() - 0.5) * 8.0,
 							1, 0.0, -0.02, 0.0, 0.0);
 				}
 			}
@@ -362,15 +370,17 @@ public enum AnomalyComponent {
 				if (rnd.nextInt(24) == 0) {
 					double x = player.getX() + (rnd.nextDouble() - 0.5) * 24.0;
 					double z = player.getZ() + (rnd.nextDouble() - 0.5) * 24.0;
-					level.sendParticles(ParticleTypes.EXPLOSION, true, false, x, player.getY() + 1.0, z, 1, 0.0, 0.0, 0.0, 0.0);
-					level.playSound(null, x, player.getY(), z, SoundEvents.GENERIC_EXPLODE.value(), SoundSource.AMBIENT, 0.35f, 1.6f);
+					double y = surfaceOr(level, x, z, player.getY()) + 1.0;
+					level.sendParticles(ParticleTypes.EXPLOSION, true, true, x, y, z, 1, 0.0, 0.0, 0.0, 0.0);
+					// радиус слышимости ванильного звука = max(16, 16·vol): 0.35 до игрока не доходил
+					level.playSound(null, x, y, z, SoundEvents.GENERIC_EXPLODE.value(), SoundSource.AMBIENT, 1.6f, 1.6f);
 				}
 			}
 			case STORM_CORE -> {
 				if (rnd.nextInt(40) == 0) {
 					double x = player.getX() + (rnd.nextDouble() - 0.5) * 32.0;
 					double z = player.getZ() + (rnd.nextDouble() - 0.5) * 32.0;
-					AnomalyEffects.visualBolt(level, x, player.getY(), z);
+					AnomalyEffects.visualBolt(level, x, surfaceOr(level, x, z, player.getY()), z);
 				}
 			}
 			case GLOW_ALL -> {
@@ -408,7 +418,7 @@ public enum AnomalyComponent {
 				// холод видно: редкие снежинки вокруг того, кто внутри
 				if (zone.signedDistance(player.getX(), player.getZ()) <= 0.0) {
 					for (int i = 0; i < 2; i++) {
-						level.sendParticles(ParticleTypes.SNOWFLAKE, true, false,
+						level.sendParticles(ParticleTypes.SNOWFLAKE, true, true,
 								player.getX() + (rnd.nextDouble() - 0.5) * 8.0,
 								player.getY() + rnd.nextDouble() * 3.0,
 								player.getZ() + (rnd.nextDouble() - 0.5) * 8.0,
@@ -417,11 +427,12 @@ public enum AnomalyComponent {
 				}
 			}
 			case PRESSURE -> {
-				if (rnd.nextInt(20) == 0) {
-					level.sendParticles(ParticleTypes.CRIT, true, false,
+				// 1/8 при 2 Гц — раз в 4 с; 2 искры раз в 10 с на глаз не читались
+				if (rnd.nextInt(8) == 0) {
+					level.sendParticles(ParticleTypes.CRIT, true, true,
 							player.getX() + (rnd.nextDouble() - 0.5) * 6.0,
 							player.getY() + 1.0 + rnd.nextDouble() * 2.0,
-							player.getZ() + (rnd.nextDouble() - 0.5) * 6.0, 2, 0.0, 0.0, 0.0, 0.05);
+							player.getZ() + (rnd.nextDouble() - 0.5) * 6.0, 6, 0.0, 0.0, 0.0, 0.15);
 				}
 			}
 			default -> {
@@ -432,7 +443,18 @@ public enum AnomalyComponent {
 	/** Стена по краю: плотная дуга из пыли цвета зоны (базовая есть у всех, эта — ярче и гуще). */
 	private static void lightWall(ServerLevel level, ServerPlayer player, Zone zone,
 			net.minecraft.util.RandomSource rnd) {
-		AnomalyEffects.edgeBand(level, player, zone, 28, 120.0, 1.1f);
+		AnomalyEffects.edgeBand(level, player, zone, 128.0, 2.6f);
+	}
+
+	/** Высота рельефа для точки или запасное значение, если чанк не загружен. */
+	private static double surfaceOr(ServerLevel level, double x, double z, double fallback) {
+		int bx = (int) Math.floor(x);
+		int bz = (int) Math.floor(z);
+		if (!level.getChunkSource().hasChunk(bx >> 4, bz >> 4)) {
+			return fallback;
+		}
+		return level.getHeight(
+				net.minecraft.world.level.levelgen.Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, bx, bz);
 	}
 
 	private static List<LivingEntity> nearby(ServerLevel level, ServerPlayer player, double range) {

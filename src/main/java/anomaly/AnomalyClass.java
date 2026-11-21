@@ -5,9 +5,9 @@ package anomaly;
  * три вещи: силу действия на игрока, бюджет разрушения мира и допустимые компоненты.
  */
 public enum AnomalyClass {
-	SAFE("safe", "безопасная", 0x6F8F6A, 0.6),
-	DANGER("danger", "опасная", 0xC8863C, 0.8),
-	DEADLY("deadly", "смертельная", 0xA33A2F, 1.0);
+	SAFE("safe", "безопасная", 0x9BE07F, 0.6),
+	DANGER("danger", "опасная", 0xFFB24A, 0.8),
+	DEADLY("deadly", "смертельная", 0xFF5A43, 1.0);
 
 	/** Радиус → бюджет разрушения в блоках. Мелкие почти не рушат, гиганты — катастрофа. */
 	private static final double[][] BUDGET = {

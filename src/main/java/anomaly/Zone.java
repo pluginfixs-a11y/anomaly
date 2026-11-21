@@ -51,11 +51,28 @@ public record Zone(Anomaly anomaly, long now, double x, double z, double radius,
 		int mixed = 0;
 		for (AnomalyComponent component : components()) {
 			if (component.color != 0 && mixed < 2) {
-				color = blend(color, component.color, 0.35);
+				color = blend(color, component.color, 0.25);
 				mixed++;
 			}
 		}
-		return color;
+		// ваниль сама множит цвет пыли на 0.6–1.0: тёмный край на светлом небе просто исчезает,
+		// поэтому после подмешивания поднимаем самый яркий канал хотя бы до 190
+		return brighten(color, 190);
+	}
+
+	private static int brighten(int color, int floor) {
+		int r = (color >> 16) & 0xFF;
+		int g = (color >> 8) & 0xFF;
+		int b = color & 0xFF;
+		int max = Math.max(r, Math.max(g, b));
+		if (max >= floor || max == 0) {
+			return color;
+		}
+		double k = floor / (double) max;
+		r = Math.min(255, (int) Math.round(r * k));
+		g = Math.min(255, (int) Math.round(g * k));
+		b = Math.min(255, (int) Math.round(b * k));
+		return (r << 16) | (g << 8) | b;
 	}
 
 	private static int blend(int base, int tint, double k) {

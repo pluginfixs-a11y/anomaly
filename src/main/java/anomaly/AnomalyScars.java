@@ -209,7 +209,7 @@ public final class AnomalyScars {
 		// heightmap считает воду и лёд грунтом. В холодном океане на льдине вырос бы каменный шип,
 		// а обломки заменили бы лёд булыжником: такие поверхности не трогаем вовсе.
 		BlockState ground = level.getBlockState(new BlockPos(x, surface - 1, z));
-		if (!ground.getFluidState().isEmpty() || isFragileSurface(ground)) {
+		if (!ground.getFluidState().isEmpty() || isFragileSurface(ground) || builtBlock(ground)) {
 			return 0;
 		}
 		return switch (op.type) {
@@ -226,19 +226,45 @@ public final class AnomalyScars {
 		int changed = 0;
 		BlockPos ground = new BlockPos(x, surface - 1, z);
 		BlockState state = level.getBlockState(ground);
-		if (!protectedBlock(state) && (state.is(Blocks.GRASS_BLOCK) || state.is(Blocks.DIRT)
-				|| state.is(Blocks.PODZOL) || state.is(Blocks.MOSS_BLOCK))) {
+		if (!protectedBlock(state) && soil(state)) {
 			level.setBlock(ground, Blocks.COARSE_DIRT.defaultBlockState(), Block.UPDATE_ALL);
 			changed++;
 		}
-		BlockPos above = new BlockPos(x, surface, z);
-		BlockState plant = level.getBlockState(above);
-		if (!plant.isAir() && !protectedBlock(plant) && !plant.blocksMotion() && plant.getFluidState().isEmpty()) {
-			level.setBlock(above, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
-			changed++;
-		}
+		changed += clearPlant(level, x, surface, z);
 		// выжженная земля не может стоять под зелёной кроной: дерево над следом сносим
 		changed += deforest(level, x, surface, z);
+		return changed;
+	}
+
+	/** Грунт, который выгорает: трава, земля, подзол, мицелий, мох, грязь. */
+	private static boolean soil(BlockState state) {
+		return state.is(Blocks.GRASS_BLOCK) || state.is(Blocks.DIRT) || state.is(Blocks.PODZOL)
+				|| state.is(Blocks.MOSS_BLOCK) || state.is(Blocks.MYCELIUM) || state.is(Blocks.ROOTED_DIRT)
+				|| state.is(Blocks.MUD) || state.is(Blocks.CLAY);
+	}
+
+	/**
+	 * Сносит растения в колонке и всё, что растёт над ними: бамбук и тростник стоят стеной,
+	 * и оставленная верхушка падает дропом на мёртвую землю.
+	 */
+	private static int clearPlant(ServerLevel level, int x, int surface, int z) {
+		int changed = 0;
+		BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
+		int top = Math.min(level.getMaxY() - 2, surface + 12);
+		for (int y = surface; y <= top; y++) {
+			BlockState plant = level.getBlockState(pos.set(x, y, z));
+			if (plant.isAir()) {
+				if (changed > 0) {
+					break;
+				}
+				continue;
+			}
+			if (protectedBlock(plant) || plant.blocksMotion() || !plant.getFluidState().isEmpty()) {
+				break;
+			}
+			level.setBlock(pos, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
+			changed++;
+		}
 		return changed;
 	}
 
@@ -247,7 +273,8 @@ public final class AnomalyScars {
 	 * Сначала дешёвая проверка ствола: в лесу это редкость, и платить за 25 колонок каждый раз незачем.
 	 */
 	private static int deforest(ServerLevel level, int x, int surface, int z) {
-		if (!isLog(level, x, surface, z) && !isLog(level, x, surface + 1, z)) {
+		// heightmap не считает листву, поэтому верх ствола — это surface-1, а не surface
+		if (!isTreePart(level.getBlockState(new BlockPos(x, surface - 1, z)))) {
 			return 0;
 		}
 		int changed = 0;
@@ -259,18 +286,31 @@ public final class AnomalyScars {
 		return changed;
 	}
 
-	private static boolean isLog(ServerLevel level, int x, int y, int z) {
-		return level.getBlockState(new BlockPos(x, y, z)).is(BlockTags.LOGS);
+	/** Ствол и всё, что считается деревом: грибная ножка, бамбук, корни мангров не входят в #logs. */
+	private static boolean isTreePart(BlockState state) {
+		return state.is(BlockTags.LOGS) || state.is(Blocks.MUSHROOM_STEM) || state.is(Blocks.BAMBOO_BLOCK)
+				|| state.is(Blocks.MANGROVE_ROOTS);
 	}
 
 	private static int clearTreeColumn(ServerLevel level, int x, int surface, int z) {
 		BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
+		// низ ствола: heightmap даёт верхушку дерева, а не землю, поэтому идём вниз до первого не-дерева
+		int bottom = surface;
+		while (bottom > level.getMinY() + 1) {
+			BlockState below = level.getBlockState(pos.set(x, bottom - 1, z));
+			if (!isTreePart(below) && !below.is(BlockTags.LEAVES)) {
+				break;
+			}
+			bottom--;
+		}
 		int changed = 0;
 		int top = Math.min(level.getMaxY() - 2, surface + 48);
 		boolean sawTree = false;
-		for (int y = surface; y <= top; y++) {
+		for (int y = bottom; y <= top; y++) {
 			BlockState state = level.getBlockState(pos.set(x, y, z));
-			if (state.is(BlockTags.LOGS) || state.is(BlockTags.LEAVES)) {
+			// азалия — не листва: после сноса ствола куст остаётся висеть в воздухе
+			if (isTreePart(state) || state.is(BlockTags.LEAVES) || state.is(Blocks.AZALEA)
+					|| state.is(Blocks.FLOWERING_AZALEA)) {
 				if (protectedBlock(state)) {
 					break;
 				}
@@ -288,20 +328,48 @@ public final class AnomalyScars {
 	}
 
 	private static int rubble(ServerLevel level, int x, int surface, int z, long seed) {
-		Block[] palette = {Blocks.COBBLESTONE, Blocks.GRAVEL, Blocks.ANDESITE, Blocks.COARSE_DIRT,
-				Blocks.TUFF, Blocks.COBBLED_DEEPSLATE};
 		int hash = (int) ((x * 73856093L) ^ (z * 19349663L) ^ seed);
-		Block block = palette[Math.floorMod(hash, palette.length)];
 		BlockPos ground = new BlockPos(x, surface - 1, z);
 		BlockState state = level.getBlockState(ground);
 		if (protectedBlock(state) || state.isAir()) {
 			return 0;
 		}
+		Block block = rubbleBlock(state, hash);
+		clearPlant(level, x, surface, z);
 		level.setBlock(ground, block.defaultBlockState(), Block.UPDATE_ALL);
 		return 1 + deforest(level, x, surface, z);
 	}
 
+	/** Обломки из того же материала, что и грунт: булыжник посреди песка или терракоты — клякса. */
+	private static Block rubbleBlock(BlockState ground, int hash) {
+		if (ground.is(BlockTags.SAND)) {
+			return pick(hash, Blocks.SANDSTONE, Blocks.SANDSTONE, Blocks.GRAVEL);
+		}
+		if (ground.is(BlockTags.TERRACOTTA)) {
+			return pick(hash, Blocks.TERRACOTTA, Blocks.GRAVEL);
+		}
+		if (ground.is(Blocks.GRAVEL)) {
+			return pick(hash, Blocks.GRAVEL, Blocks.COBBLESTONE);
+		}
+		if (ground.is(Blocks.CLAY) || ground.is(Blocks.MUD)) {
+			return pick(hash, Blocks.CLAY, Blocks.GRAVEL);
+		}
+		if (ground.is(Blocks.MOSS_BLOCK)) {
+			return pick(hash, Blocks.MOSS_BLOCK, Blocks.TUFF);
+		}
+		return pick(hash, Blocks.COBBLESTONE, Blocks.GRAVEL, Blocks.ANDESITE, Blocks.TUFF,
+				Blocks.COBBLED_DEEPSLATE);
+	}
+
+	private static Block pick(int hash, Block... blocks) {
+		return blocks[Math.floorMod(hash, blocks.length)];
+	}
+
 	private static int trench(ServerLevel level, int x, int surface, int z, int depth, boolean lava) {
+		// у воды лава гаснет в камень, а траншея заливается сбоку: там нужна обычная трещина
+		if (lava && fluidNear(level, x, surface, z)) {
+			lava = false;
+		}
 		int changed = 0;
 		BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
 		for (int i = 0; i < depth; i++) {
@@ -320,6 +388,18 @@ public final class AnomalyScars {
 		}
 		// разлом посреди леса тоже оставляет мёртвую землю, а не живую крону над щелью
 		return changed + deforest(level, x, surface, z);
+	}
+
+	/** Вода или лава рядом с колонкой на уровне грунта. */
+	private static boolean fluidNear(ServerLevel level, int x, int surface, int z) {
+		for (int dx = -1; dx <= 1; dx++) {
+			for (int dz = -1; dz <= 1; dz++) {
+				if (!level.getBlockState(new BlockPos(x + dx, surface - 1, z + dz)).getFluidState().isEmpty()) {
+					return true;
+				}
+			}
+		}
+		return false;
 	}
 
 	private static int spike(ServerLevel level, ScarOp op, int x, int surface, int z) {
@@ -342,7 +422,8 @@ public final class AnomalyScars {
 				break;
 			}
 			if (!state.isAir() && state.blocksMotion()) {
-				continue;
+				// столб растёт только по воздуху: раньше он перепрыгивал крону и торчал из неё
+				break;
 			}
 			level.setBlock(pos.set(x, y, z), block.defaultBlockState(), Block.UPDATE_ALL);
 			changed++;
@@ -356,7 +437,16 @@ public final class AnomalyScars {
 	 */
 	private static boolean isFragileSurface(BlockState state) {
 		return state.is(Blocks.ICE) || state.is(Blocks.PACKED_ICE) || state.is(Blocks.BLUE_ICE)
-				|| state.is(Blocks.FROSTED_ICE) || state.is(Blocks.SNOW_BLOCK);
+				|| state.is(Blocks.FROSTED_ICE) || state.is(Blocks.SNOW_BLOCK) || state.is(Blocks.SNOW)
+				|| state.is(Blocks.POWDER_SNOW);
+	}
+
+	/** Чужие постройки — не рельеф: доски, кирпич, стекло, бетон, шерсть не трогаем. */
+	private static boolean builtBlock(BlockState state) {
+		return state.is(BlockTags.PLANKS) || state.is(BlockTags.STONE_BRICKS) || state.is(BlockTags.WOOL)
+				|| state.is(BlockTags.CONCRETE) || state.is(BlockTags.CONCRETE_POWDERS)
+				|| state.is(Blocks.BRICKS) || state.is(Blocks.GLASS) || state.is(Blocks.GLASS_PANE)
+				|| state.is(Blocks.TINTED_GLASS);
 	}
 
 	static boolean protectedBlock(BlockState state) {
@@ -368,6 +458,7 @@ public final class AnomalyScars {
 				|| state.is(Blocks.BARRIER) || state.is(Blocks.END_PORTAL_FRAME)
 				|| state.is(Blocks.NETHER_PORTAL) || state.is(Blocks.END_PORTAL) || state.is(Blocks.END_GATEWAY)
 				|| state.is(Blocks.RESPAWN_ANCHOR) || state.is(Blocks.LODESTONE)
+				|| state.is(Blocks.BUDDING_AMETHYST)
 				|| state.is(Blocks.BEACON) || state.is(Blocks.SPAWNER);
 	}
 
