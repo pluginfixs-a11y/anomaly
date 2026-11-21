@@ -65,6 +65,12 @@ public final class Anomaly {
 	 */
 	public boolean pinned;
 
+	/** План следов разрушения. Хранится правилами, а не списком блоков. */
+	public List<ScarOp> scars = new ArrayList<>();
+	/** Номер следующего следа и колонка внутри него: по ним видно, сколько уже сделано. */
+	public int scar_next;
+	public int scar_cursor;
+
 	public Anomaly() {
 	}
 
@@ -257,6 +263,12 @@ public final class Anomaly {
 		if (components == null) {
 			components = new ArrayList<>();
 		}
+		if (scars == null) {
+			scars = new ArrayList<>();
+		}
+		scars.removeIf(op -> op == null || op.blocks < 0 || !Double.isFinite(op.x) || !Double.isFinite(op.z));
+		scar_next = Math.max(0, Math.min(scar_next, scars.size()));
+		scar_cursor = Math.max(0, scar_cursor);
 		if (!(Double.isFinite(shrink) && shrink > 0.0 && shrink <= 4.0)) {
 			shrink = 1.0;
 		}

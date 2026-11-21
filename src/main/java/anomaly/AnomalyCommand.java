@@ -42,6 +42,16 @@ public final class AnomalyCommand {
 						.then(Commands.literal("here").executes(context -> here(context.getSource())))
 						.then(Commands.literal("stats").executes(context -> stats(context.getSource())))
 						.then(Commands.literal("components").executes(context -> components(context.getSource())))
+						.then(Commands.literal("scar")
+								.then(Commands.argument("target", StringArgumentType.greedyString())
+										.executes(context -> scar(context.getSource(),
+												StringArgumentType.getString(context, "target")))))
+						.then(Commands.literal("probe")
+								.then(Commands.argument("x", IntegerArgumentType.integer(-30_000_000, 30_000_000))
+										.then(Commands.argument("z", IntegerArgumentType.integer(-30_000_000, 30_000_000))
+												.executes(context -> probe(context.getSource(),
+														IntegerArgumentType.getInteger(context, "x"),
+														IntegerArgumentType.getInteger(context, "z"))))))
 						.then(Commands.literal("spawn")
 								.executes(context -> spawn(context.getSource(), null, null))
 								.then(Commands.argument("radius", DoubleArgumentType.doubleArg(10.0, 5000.0))
@@ -100,6 +110,49 @@ public final class AnomalyCommand {
 		return 1;
 	}
 
+	private static int scar(CommandSourceStack source, String target) {
+		ServerPlayer player = source.getPlayer();
+		double px = player != null ? player.getX() : source.getPosition().x;
+		double pz = player != null ? player.getZ() : source.getPosition().z;
+		Anomaly anomaly = AnomalyField.find(target, px, pz);
+		if (anomaly == null) {
+			reply(source, "Не нашёл аномалию «" + target + "»", ChatFormatting.RED);
+			return 0;
+		}
+		reply(source, "Следы #" + anomaly.id + ": " + (anomaly.scars == null ? 0 : anomaly.scars.size())
+				+ ", сделано " + anomaly.scar_next + ", курсор " + anomaly.scar_cursor
+				+ ", в очереди " + thousands(AnomalyScars.pendingBlocks(anomaly)) + " блоков");
+		if (anomaly.scars != null) {
+			int shown = 0;
+			for (ScarOp op : anomaly.scars) {
+				if (shown++ >= 12) {
+					reply(source, "  …и ещё " + (anomaly.scars.size() - 12));
+					break;
+				}
+				reply(source, "  " + op.describe() + " @ " + Math.round(op.x) + ", " + Math.round(op.z)
+						+ " (бюджет " + op.blocks + ")");
+			}
+		}
+		return 1;
+	}
+
+	/** Что сейчас в колонке: для проверки следов и «почему тут камень». */
+	private static int probe(CommandSourceStack source, int x, int z) {
+		ServerLevel level = source.getLevel();
+		level.getChunk(x >> 4, z >> 4);
+		int surface = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, x, z);
+		BlockPos pos = new BlockPos(x, surface - 1, z);
+		reply(source, "Колонка " + x + ", " + z + ": поверхность y=" + surface
+				+ ", под ней " + level.getBlockState(pos).getBlock().getName().getString()
+				+ ", над ней " + level.getBlockState(pos.above()).getBlock().getName().getString());
+		Anomaly nearest = AnomalyField.nearest(x, z);
+		if (nearest != null) {
+			Zone zone = nearest.zone(AnomalyClock.now());
+			reply(source, "Ближайшая #" + nearest.id + ", до края " + blocks(Math.abs(zone.signedDistance(x, z))));
+		}
+		return 1;
+	}
+
 	private static int stats(CommandSourceStack source) {
 		AnomalyField.Stats stats = AnomalyField.stats();
 		reply(source, "Зон " + stats.total() + ": безопасных " + stats.safe()
@@ -107,6 +160,12 @@ public final class AnomalyCommand {
 				+ (stats.pinned() > 0 ? ", тестовых " + stats.pinned() : ""));
 		reply(source, String.format("Покрыто %.1f %% площади мира, суммарный бюджет разрушения %s блоков",
 				stats.coveragePercent(), thousands(stats.budget())));
+		int pending = 0;
+		for (Anomaly anomaly : AnomalyField.all()) {
+			pending += AnomalyScars.pendingBlocks(anomaly);
+		}
+		reply(source, "Следов в очереди: " + thousands(pending) + " блоков"
+				+ (AnomalyMod.config.scar_enabled ? "" : " (разрушения выключены)"));
 		reply(source, "Время поля " + String.format("%.1f", AnomalyClock.fieldMs() / 3_600_000.0)
 				+ " ч, множитель ×" + trim(AnomalyClock.scale()));
 		return 1;
@@ -167,7 +226,26 @@ public final class AnomalyCommand {
 		reply(source, "Компоненты: " + AnomalyComponent.titles(zone.components()));
 		reply(source, "Бюджет разрушения " + thousands(zone.budget()) + " блоков"
 				+ (zone.cls().damages() ? "" : " (безопасная не рушит)"));
+		reply(source, "Следы: " + scarText(anomaly));
 		return 1;
+	}
+
+	private static String scarText(Anomaly anomaly) {
+		if (anomaly.scars == null || anomaly.scars.isEmpty()) {
+			return "нет (мелкая или тестовая зона)";
+		}
+		int done = Math.min(anomaly.scar_next, anomaly.scars.size());
+		StringBuilder first = new StringBuilder();
+		for (int i = 0; i < Math.min(3, anomaly.scars.size()); i++) {
+			if (i > 0) {
+				first.append(", ");
+			}
+			first.append(anomaly.scars.get(i).describe());
+		}
+		return done + "/" + anomaly.scars.size() + " (" + first + ")"
+				+ (anomaly.scar_next < anomaly.scars.size()
+						? ", в очереди " + thousands(AnomalyScars.pendingBlocks(anomaly)) + " блоков"
+						: ", всё сделано");
 	}
 
 	// --- создание и удаление ---

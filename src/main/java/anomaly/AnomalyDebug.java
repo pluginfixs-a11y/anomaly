@@ -79,8 +79,8 @@ public final class AnomalyDebug {
 		if (radius <= 0.5) {
 			return;
 		}
-		DustParticleOptions edge = new DustParticleOptions(zone.cls().color, 1.3f);
-		DustParticleOptions core = new DustParticleOptions(lighter(zone.cls().color), 1.8f);
+		DustParticleOptions edge = new DustParticleOptions(zone.edgeColor(), 1.3f);
+		DustParticleOptions core = new DustParticleOptions(lighter(zone.edgeColor()), 1.8f);
 		double y = player.getY() + 0.6;
 		// клиент видит частицы максимум в ~512 блоках: точки дальше — впустую посчитанные пакеты
 		double visible = 480.0;

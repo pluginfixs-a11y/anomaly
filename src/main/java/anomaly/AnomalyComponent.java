@@ -31,26 +31,26 @@ import java.util.Random;
  */
 public enum AnomalyComponent {
 	// --- пассивные ---
-	HUNGER_DRAIN("hunger_drain", "голод", Kind.PASSIVE, AnomalyClass.SAFE, 1, "food"),
-	SATURATION_BURN("saturation_burn", "пустая еда", Kind.PASSIVE, AnomalyClass.DANGER, 2, "food"),
-	XP_LEAK("xp_leak", "утечка опыта", Kind.PASSIVE, AnomalyClass.SAFE, 1, null),
-	COLD_CREEP("cold_creep", "холод", Kind.PASSIVE, AnomalyClass.DANGER, 2, "damage"),
-	AIR_DRAIN("air_drain", "удушье", Kind.PASSIVE, AnomalyClass.DANGER, 2, null),
-	PRESSURE("pressure", "давление", Kind.PASSIVE, AnomalyClass.DANGER, 2, "damage"),
-	NIGHT_TOLL("night_toll", "ночной сбор", Kind.PASSIVE, AnomalyClass.DANGER, 2, null),
-	DRIP("drip", "капель", Kind.PASSIVE, AnomalyClass.SAFE, 1, "sound"),
+	HUNGER_DRAIN("hunger_drain", "голод", Kind.PASSIVE, AnomalyClass.SAFE, 1, "food", 0x8FA36B),
+	SATURATION_BURN("saturation_burn", "пустая еда", Kind.PASSIVE, AnomalyClass.DANGER, 2, "food", 0x9C8A5A),
+	XP_LEAK("xp_leak", "утечка опыта", Kind.PASSIVE, AnomalyClass.SAFE, 1, null, 0x7FCF7A),
+	COLD_CREEP("cold_creep", "холод", Kind.PASSIVE, AnomalyClass.DANGER, 2, "damage", 0xBFE3FF),
+	AIR_DRAIN("air_drain", "удушье", Kind.PASSIVE, AnomalyClass.DANGER, 2, null, 0x6FB8C8),
+	PRESSURE("pressure", "давление", Kind.PASSIVE, AnomalyClass.DANGER, 2, "damage", 0xB85C5C),
+	NIGHT_TOLL("night_toll", "ночной сбор", Kind.PASSIVE, AnomalyClass.DANGER, 2, null, 0x3A3F55),
+	DRIP("drip", "капель", Kind.PASSIVE, AnomalyClass.SAFE, 1, "sound", 0x7E8A96),
 	/** Тянет к ядру: идти против течения дорого, у края не отсидеться. */
-	TRACTION("traction", "тяга", Kind.PASSIVE, AnomalyClass.DANGER, 2, "motion"),
+	TRACTION("traction", "тяга", Kind.PASSIVE, AnomalyClass.DANGER, 2, "motion", 0x9AA0A6),
 	/** Отталкивает от ядра: выйти можно, но не по прямой. */
-	REPULSION("repulsion", "отторжение", Kind.PASSIVE, AnomalyClass.DANGER, 2, "motion"),
+	REPULSION("repulsion", "отторжение", Kind.PASSIVE, AnomalyClass.DANGER, 2, "motion", 0xB0A6C0),
 
 	// --- видимые ---
-	LIGHT_WALL("light_wall", "световая стена", Kind.VISIBLE, AnomalyClass.SAFE, 1, "show"),
-	ASH_FALL("ash_fall", "пепел", Kind.VISIBLE, AnomalyClass.SAFE, 1, "show"),
-	ECHO_BURSTS("echo_bursts", "хлопки", Kind.VISIBLE, AnomalyClass.SAFE, 1, "show"),
-	STORM_CORE("storm_core", "грозовое ядро", Kind.VISIBLE, AnomalyClass.DANGER, 2, "show"),
-	GLOW_ALL("glow_all", "подсветка", Kind.VISIBLE, AnomalyClass.DANGER, 2, null),
-	FLOAT_ALL("float_all", "невесомость", Kind.VISIBLE, AnomalyClass.DANGER, 3, null);
+	LIGHT_WALL("light_wall", "световая стена", Kind.VISIBLE, AnomalyClass.SAFE, 1, "show", 0),
+	ASH_FALL("ash_fall", "пепел", Kind.VISIBLE, AnomalyClass.SAFE, 1, "show", 0x8A8578),
+	ECHO_BURSTS("echo_bursts", "хлопки", Kind.VISIBLE, AnomalyClass.SAFE, 1, "show", 0xC8C0B0),
+	STORM_CORE("storm_core", "грозовое ядро", Kind.VISIBLE, AnomalyClass.DANGER, 2, "show", 0xFFF07A),
+	GLOW_ALL("glow_all", "подсветка", Kind.VISIBLE, AnomalyClass.DANGER, 2, null, 0xA8E6CF),
+	FLOAT_ALL("float_all", "невесомость", Kind.VISIBLE, AnomalyClass.DANGER, 3, null, 0xD8C8FF);
 
 	public enum Kind {
 		PASSIVE, VISIBLE
@@ -70,14 +70,17 @@ public enum AnomalyComponent {
 	public final int cost;
 	/** Группа взаимоисключения: не больше одного из группы (у «шоу» и «урона» лимит выше). */
 	public final String group;
+	/** Оттенок компонента для края и частиц; 0 — не подмешивать (край остаётся цвета класса). */
+	public final int color;
 
-	AnomalyComponent(String id, String title, Kind kind, AnomalyClass minClass, int cost, String group) {
+	AnomalyComponent(String id, String title, Kind kind, AnomalyClass minClass, int cost, String group, int color) {
 		this.id = id;
 		this.title = title;
 		this.kind = kind;
 		this.minClass = minClass;
 		this.cost = cost;
 		this.group = group;
+		this.color = color;
 	}
 
 	public static AnomalyComponent byId(String id) {
@@ -401,25 +404,45 @@ public enum AnomalyComponent {
 							SoundEvents.BEEHIVE_DRIP, SoundSource.AMBIENT, 0.5f, 0.7f);
 				}
 			}
+			case COLD_CREEP -> {
+				// холод видно: редкие снежинки вокруг того, кто внутри
+				if (zone.signedDistance(player.getX(), player.getZ()) <= 0.0) {
+					for (int i = 0; i < 2; i++) {
+						level.sendParticles(ParticleTypes.SNOWFLAKE, true, false,
+								player.getX() + (rnd.nextDouble() - 0.5) * 8.0,
+								player.getY() + rnd.nextDouble() * 3.0,
+								player.getZ() + (rnd.nextDouble() - 0.5) * 8.0,
+								1, 0.0, -0.01, 0.0, 0.0);
+					}
+				}
+			}
+			case PRESSURE -> {
+				if (rnd.nextInt(20) == 0) {
+					level.sendParticles(ParticleTypes.CRIT, true, false,
+							player.getX() + (rnd.nextDouble() - 0.5) * 6.0,
+							player.getY() + 1.0 + rnd.nextDouble() * 2.0,
+							player.getZ() + (rnd.nextDouble() - 0.5) * 6.0, 2, 0.0, 0.0, 0.0, 0.05);
+				}
+			}
 			default -> {
 			}
 		}
 	}
 
-	/** Стена по краю вблизи игрока: короткая дуга из пыли цвета класса. */
+	/** Стена по краю вблизи игрока: дуга из пыли цвета зоны, а не класса. */
 	private static void lightWall(ServerLevel level, ServerPlayer player, Zone zone, net.minecraft.util.RandomSource rnd) {
 		double radius = zone.radius();
 		if (radius < 1.0) {
 			return;
 		}
 		double toPlayer = Math.atan2(player.getZ() - zone.z(), player.getX() - zone.x());
-		double half = radius <= 96.0 ? Math.PI : Math.asin(Math.min(1.0, 96.0 / radius));
-		var color = new net.minecraft.core.particles.DustParticleOptions(zone.cls().color, 1.0f);
-		int points = 8;
+		double half = radius <= 120.0 ? Math.PI : Math.asin(Math.min(1.0, 120.0 / radius));
+		var color = new net.minecraft.core.particles.DustParticleOptions(zone.edgeColor(), 1.1f);
+		int points = 28;
 		for (int i = 0; i < points; i++) {
-			double angle = toPlayer - half + 2.0 * half * rnd.nextDouble();
+			double angle = toPlayer - half + 2.0 * half * (i + rnd.nextDouble()) / points;
 			double[] point = zone.anomaly().boundaryPoint(angle, zone.ageHours(), radius);
-			if (Math.hypot(point[0] - player.getX(), point[1] - player.getZ()) > 96.0) {
+			if (Math.hypot(point[0] - player.getX(), point[1] - player.getZ()) > 120.0) {
 				continue;
 			}
 			level.sendParticles(color, true, false, point[0], player.getY() + 1.0, point[1], 1, 0.0, 0.0, 0.0, 0.0);

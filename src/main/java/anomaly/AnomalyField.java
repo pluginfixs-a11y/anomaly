@@ -89,6 +89,16 @@ public final class AnomalyField {
 						migrated = true;
 					}
 				}
+				// зоны, рождённые до 0.2.0-alpha3, приходят без плана следов — планируем на загрузке
+				if (!anomaly.pinned && (anomaly.scars == null || anomaly.scars.isEmpty())
+						&& anomaly.scar_next == 0 && anomaly.scar_cursor == 0) {
+					List<ScarOp> planned = AnomalyScars.plan(anomaly, AnomalyClass.byId(anomaly.cls),
+							new Random(anomaly.id * 0x2545F4914F6CDD1DL));
+					if (!planned.isEmpty()) {
+						anomaly.scars = planned;
+						migrated = true;
+					}
+				}
 			}
 			if (AnomalyComponent.allowed(AnomalyClass.DANGER, config).isEmpty()
 					|| AnomalyComponent.allowed(AnomalyClass.DANGER, config).stream()
@@ -131,6 +141,7 @@ public final class AnomalyField {
 		lastTickFieldMs = now;
 
 		boolean changed = tickData(data, config, random, now, hours);
+		changed |= AnomalyScars.tick(server, server.overworld(), data, config);
 		if (changed) {
 			dirty = true;
 		}
@@ -553,6 +564,8 @@ public final class AnomalyField {
 		anomaly.core_angle = rnd.nextDouble() * Math.PI * 2.0;
 		anomaly.core_spin = (rnd.nextDouble() * 2.0 - 1.0) * 0.03;
 		anomaly.components = AnomalyComponent.ids(AnomalyComponent.roll(cls, rnd, config, anomaly.r0));
+		// следы планируются сразу: они применяются лениво, по 1–2 чанка в секунду
+		anomaly.scars = AnomalyScars.plan(anomaly, cls, new Random(anomaly.id * 0x9E3779B97F4A7C15L));
 		return anomaly;
 	}
 

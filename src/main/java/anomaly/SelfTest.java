@@ -57,6 +57,7 @@ public final class SelfTest {
 		runGroup(result, "жизнь", () -> checkLife(result, config, rnd));
 		runGroup(result, "доза", () -> checkDose(result, config));
 		runGroup(result, "компоненты", () -> checkComponents(result, config, rnd));
+		runGroup(result, "следы", () -> checkScars(result, config, rnd));
 		runGroup(result, "классы", () -> checkClasses(result, config, rnd));
 		runGroup(result, "бюджет", () -> checkBudget(result));
 		runGroup(result, "рассеивание", () -> checkSuppression(result, config));
@@ -376,8 +377,79 @@ public final class SelfTest {
 		report(result, "аномалия рождается с компонентами", !anomaly.componentList().isEmpty());
 	}
 
-	private static boolean groupsOk(List<AnomalyComponent> set, AnomalyClass cls) {
-		java.util.Map<String, Integer> counts = new java.util.HashMap<>();
+	// --- следы разрушения ---
+
+	private static void checkScars(Result result, AnomalyConfig config, Random rnd) {
+		AnomalyFieldData field = new AnomalyFieldData();
+		Anomaly small = AnomalyField.create(field, config, rnd, 0L, 12000, 0, 60.0, AnomalyClass.DANGER, false);
+		report(result, "мелкая зона не оставляет следов", AnomalyScars.plan(small,
+				AnomalyClass.DANGER, new Random(1L)).isEmpty());
+
+		Anomaly deadly = AnomalyField.create(field, config, rnd, 0L, 16000, 0, 1800.0, AnomalyClass.DEADLY, false);
+		List<ScarOp> plan = AnomalyScars.plan(deadly, AnomalyClass.DEADLY, new Random(2L));
+		report(result, "у большой смертельной есть следы", !plan.isEmpty());
+		int total = 0;
+		boolean inBudget = true;
+		boolean insideZone = true;
+		boolean kinds = false;
+		double budget = AnomalyClass.damageBudget(deadly.r0, AnomalyClass.DEADLY);
+		for (ScarOp op : plan) {
+			total += op.blocks;
+			if (total > budget) {
+				inBudget = false;
+			}
+			double distance = Math.hypot(op.x - deadly.x0, op.z - deadly.z0);
+			if (distance > deadly.r0 * 0.4) {
+				insideZone = false;
+			}
+			kinds |= "spike".equals(op.type);
+		}
+		report(result, "следы не превышают бюджет (" + total + " из " + Math.round(budget) + ")", inBudget);
+		report(result, "следы в ядре, а не по всему краю", insideZone);
+		report(result, "у смертельной бывают пики", kinds);
+
+		List<ScarOp> safePlan = AnomalyScars.plan(
+				AnomalyField.create(new AnomalyFieldData(), config, rnd, 0L, 12000, 0, 1500.0,
+						AnomalyClass.SAFE, false),
+				AnomalyClass.SAFE, new Random(3L));
+		boolean noSpikes = true;
+		for (ScarOp op : safePlan) {
+			noSpikes &= !"spike".equals(op.type) && !"lava_fault".equals(op.type);
+		}
+		report(result, "безопасная не получает пиков и лавы", noSpikes);
+
+		List<ScarOp> first = AnomalyScars.plan(deadly, AnomalyClass.DEADLY, new Random(2L));
+		List<ScarOp> second = AnomalyScars.plan(deadly, AnomalyClass.DEADLY, new Random(2L));
+		boolean same = first.size() == second.size();
+		for (int i = 0; same && i < first.size(); i++) {
+			same = first.get(i).type.equals(second.get(i).type) && first.get(i).blocks == second.get(i).blocks;
+		}
+		report(result, "план следов детерминирован", same);
+
+		boolean columnsOk = true;
+		for (ScarOp op : first) {
+			int count = op.columnCount();
+			if (count <= 0) {
+				columnsOk = false;
+				continue;
+			}
+			double reach = op.radius + op.length + op.width + 8.0;
+			for (int i = 0; i < Math.min(count, 128); i++) {
+				int[] column = op.column(i);
+				if (column != null && (Math.abs(column[0] - op.x) > reach || Math.abs(column[1] - op.z) > reach)) {
+					columnsOk = false;
+				}
+			}
+		}
+		report(result, "колонки следов считаются в своих границах", columnsOk);
+
+		Anomaly pinned = AnomalyField.create(new AnomalyFieldData(), config, rnd, 0L, 0, 0, 900.0,
+				AnomalyClass.DEADLY, true);
+		report(result, "тестовая зона не рушит мир", AnomalyScars.plan(pinned,
+				AnomalyClass.DEADLY, new Random(4L)).isEmpty());
+	}
+
+	private static boolean groupsOk(List<AnomalyComponent> set, AnomalyClass cls) {		java.util.Map<String, Integer> counts = new java.util.HashMap<>();
 		for (AnomalyComponent component : set) {
 			if (component.group != null) {
 				counts.merge(component.group, 1, Integer::sum);

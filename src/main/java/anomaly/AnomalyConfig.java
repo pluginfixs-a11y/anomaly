@@ -63,6 +63,15 @@ public class AnomalyConfig {
 	/** Ниже этого радиуса аномалия в подавленной полосе просто удаляется. */
 	public double dissipate_min_radius = 20.0;
 
+	// --- разрушения ---
+	public boolean scar_enabled = true;
+	/** Чанков за тик: 2 — это 40 в секунду, но только когда mspt ниже порога. */
+	public int chunks_per_tick = 2;
+	/** Блоков за тик: потолок работы разрушений, чтобы не вешать сервер. */
+	public int blocks_per_tick = 2000;
+	/** Порог mspt: выше него разрушения ждут следующего тика. */
+	public double mspt_limit = 45.0;
+
 	// --- доза и обратная связь ---
 	public double dose_gain_per_second = 0.05;
 	public double dose_decay_per_second = 0.02;
@@ -137,6 +146,9 @@ public class AnomalyConfig {
 		if (tick_period < 1) {
 			tick_period = 1;
 		}
+		chunks_per_tick = Math.max(0, Math.min(16, chunks_per_tick));
+		blocks_per_tick = Math.max(100, Math.min(20_000, blocks_per_tick));
+		mspt_limit = Math.max(1.0, Math.min(1000.0, mspt_limit));
 		if (view_range < 1) {
 			view_range = 1;
 		}

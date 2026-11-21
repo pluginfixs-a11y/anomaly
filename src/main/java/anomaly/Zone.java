@@ -45,6 +45,26 @@ public record Zone(Anomaly anomaly, long now, double x, double z, double radius,
 		return AnomalyClass.damageBudget(anomaly.r0, cls());
 	}
 
+	/** Цвет края: класс задаёт базу, компоненты подмешивают свой оттенок — зоны перестают быть на одно лицо. */
+	public int edgeColor() {
+		int color = cls().color;
+		int mixed = 0;
+		for (AnomalyComponent component : components()) {
+			if (component.color != 0 && mixed < 2) {
+				color = blend(color, component.color, 0.35);
+				mixed++;
+			}
+		}
+		return color;
+	}
+
+	private static int blend(int base, int tint, double k) {
+		int r = (int) Math.round(((base >> 16) & 0xFF) * (1 - k) + ((tint >> 16) & 0xFF) * k);
+		int g = (int) Math.round(((base >> 8) & 0xFF) * (1 - k) + ((tint >> 8) & 0xFF) * k);
+		int b = (int) Math.round((base & 0xFF) * (1 - k) + (tint & 0xFF) * k);
+		return (r << 16) | (g << 8) | b;
+	}
+
 	/** Разобранный набор компонентов: считается один раз при создании зоны. */
 	public List<AnomalyComponent> components() {
 		return components;
