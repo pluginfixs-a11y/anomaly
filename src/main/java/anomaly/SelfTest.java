@@ -615,6 +615,19 @@ public final class SelfTest {
 							&& !level.getBlockState(new BlockPos(mx, microSurface - 2, bz)).isAir());
 			restore(level, microBefore);
 
+			// контейнер под грунтом не выкапывается: дно воронки не затирает block entity
+			int nx = bx + 224;
+			level.getChunk(nx >> 4, bz >> 4);
+			int chestSurface = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, nx, bz);
+			Map<BlockPos, BlockState> chestBefore = snapshot(level, nx, bz, 3, chestSurface - 4, chestSurface + 14);
+			snapshots.add(chestBefore);
+			level.setBlock(new BlockPos(nx, chestSurface - 1, bz), Blocks.STONE.defaultBlockState(), Block.UPDATE_ALL);
+			level.setBlock(new BlockPos(nx, chestSurface - 2, bz), Blocks.CHEST.defaultBlockState(), Block.UPDATE_ALL);
+			AnomalyScars.microCrater(level, nx, bz, 0.6, 2, chestSurface);
+			report(result, "сундук под воронкой остаётся сундуком",
+					level.getBlockState(new BlockPos(nx, chestSurface - 2, bz)).is(Blocks.CHEST));
+			restore(level, chestBefore);
+
 			int fx = bx + 192;
 			level.getChunk(fx >> 4, bz >> 4);
 			int frostSurface = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, fx, bz);
