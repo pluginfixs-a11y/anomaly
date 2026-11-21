@@ -356,11 +356,15 @@ public final class AnomalyEffects {
 		if (player.isCreative()) {
 			return;
 		}
-		int amplifier = state.dose >= 0.5 ? 1 : 0;
+		// одно «послевкусие» на выход, а не обновление каждые полсекунды: иначе после любого
+		// касания зоны игрок полминуты идёт вслепую и это читается как баг, а не как атмосфера
+		int amplifier = state.dose >= 0.6 ? 1 : 0;
+		int slow = (int) Math.round(40 + 100 * state.dose);
+		int dark = (int) Math.round(20 + 40 * state.dose);
 		player.addEffect(new net.minecraft.world.effect.MobEffectInstance(
-				net.minecraft.world.effect.MobEffects.SLOWNESS, 40, amplifier, false, true, true));
+				net.minecraft.world.effect.MobEffects.SLOWNESS, slow, amplifier, false, true, true));
 		player.addEffect(new net.minecraft.world.effect.MobEffectInstance(
-				net.minecraft.world.effect.MobEffects.DARKNESS, 40, 0, false, true, true));
+				net.minecraft.world.effect.MobEffects.DARKNESS, dark, 0, false, true, true));
 	}
 
 	// --- движение ---
@@ -400,6 +404,11 @@ public final class AnomalyEffects {
 	 * прибавляется тяга.
 	 */
 	private static void shove(ServerPlayer player, double dx, double dz, AnomalyState state) {
+		// на элитре скорость клиента выше порога «телепорт», и любой motion-пакет её обнуляет:
+		// тяга/отторжение элитру не трогают вовсе (иначе она встаёт колом)
+		if (player.isFallFlying()) {
+			return;
+		}
 		long now = System.currentTimeMillis();
 		double vx;
 		double vy;

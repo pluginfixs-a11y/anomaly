@@ -36,7 +36,7 @@ public enum AnomalyComponent {
 	// --- пассивные ---
 	HUNGER_DRAIN("hunger_drain", "голод", Kind.PASSIVE, AnomalyClass.SAFE, 1, "food", 0x8FA36B),
 	SATURATION_BURN("saturation_burn", "пустая еда", Kind.PASSIVE, AnomalyClass.DANGER, 2, "food", 0x9C8A5A),
-	XP_LEAK("xp_leak", "утечка опыта", Kind.PASSIVE, AnomalyClass.SAFE, 1, null, 0x7FCF7A),
+	XP_LEAK("xp_leak", "утечка опыта", Kind.PASSIVE, AnomalyClass.DANGER, 1, null, 0x7FCF7A),
 	COLD_CREEP("cold_creep", "холод", Kind.PASSIVE, AnomalyClass.DANGER, 2, "damage", 0xBFE3FF),
 	AIR_DRAIN("air_drain", "удушье", Kind.PASSIVE, AnomalyClass.DANGER, 2, null, 0x6FB8C8),
 	PRESSURE("pressure", "давление", Kind.PASSIVE, AnomalyClass.DANGER, 2, "damage", 0xB85C5C),
@@ -367,11 +367,13 @@ public enum AnomalyComponent {
 	 */
 	public void pulse(ServerLevel level, ServerPlayer player, Zone zone, AnomalyConfig config, AnomalyState state) {
 		var rnd = player.getRandom();
+		double sd = zone.signedDistance(player.getX(), player.getZ());
 		// пассивные компоненты действуют внутри зоны: их звуки и пыль снаружи вводили бы в
-		// заблуждение («еда утекает» там, где ничего не утекает)
-		if ((this == HUNGER_DRAIN || this == SATURATION_BURN || this == XP_LEAK || this == AIR_DRAIN
-				|| this == TRACTION || this == REPULSION || this == MOB_EARS)
-				&& zone.signedDistance(player.getX(), player.getZ()) > 0.0) {
+		// заблуждение («еда утекает» там, где ничего не утекает). Взрывы, молнии и проломы —
+		// тоже внутри: за краем игрок должен видеть только косметику, а не воронки у себя под ногами.
+		if (sd > 0.0 && (this == HUNGER_DRAIN || this == SATURATION_BURN || this == XP_LEAK
+				|| this == AIR_DRAIN || this == TRACTION || this == REPULSION || this == MOB_EARS
+				|| this == ECHO_BURSTS || this == STORM_CORE || this == PRESSURE)) {
 			return;
 		}
 		switch (this) {
@@ -405,7 +407,7 @@ public enum AnomalyComponent {
 					// радиус слышимости ванильного звука = max(16, 16·vol): 0.35 до игрока не доходил
 					level.playSound(null, x, y, z, SoundEvents.GENERIC_EXPLODE.value(), SoundSource.AMBIENT, 1.6f, 1.6f);
 					// хлопок — не только картинка: маленькая воронка на 1–2 блока
-					if (canMark(level)) {
+					if (canMark(level, x, z)) {
 						AnomalyScars.microCrater(level, x, z, 0.8 + rnd.nextDouble() * 0.8, 1 + rnd.nextInt(2), player.getY());
 					}
 				}
@@ -416,7 +418,7 @@ public enum AnomalyComponent {
 					double z = player.getZ() + (rnd.nextDouble() - 0.5) * 32.0;
 					AnomalyEffects.visualBolt(level, x, surfaceOr(level, x, z, player.getY()), z);
 					// молния оставляет гарь, а иногда и воронку: следы, которые видно потом
-					if (canMark(level)) {
+					if (canMark(level, x, z)) {
 						AnomalyScars.scorch(level, x, z, 1.5 + rnd.nextDouble(), player.getY());
 						if (rnd.nextInt(3) == 0) {
 							AnomalyScars.microCrater(level, x, z, 0.7, 1, player.getY());
@@ -466,7 +468,7 @@ public enum AnomalyComponent {
 								1, 0.0, -0.01, 0.0, 0.0);
 					}
 					// наледь остаётся на земле: раз в ~20 с маленькое пятно снега
-					if (canMark(level) && rnd.nextInt(40) == 0) {
+					if (canMark(level, player.getX(), player.getZ()) && rnd.nextInt(40) == 0) {
 						AnomalyScars.frost(level,
 								player.getX() + (rnd.nextDouble() - 0.5) * 8.0,
 								player.getZ() + (rnd.nextDouble() - 0.5) * 8.0, 2.5, player.getY());
@@ -511,7 +513,7 @@ public enum AnomalyComponent {
 							player.getZ() + (rnd.nextDouble() - 0.5) * 6.0, 6, 0.0, 0.0, 0.0, 0.15);
 				}
 				// давление проламывает пол на один блок: раз в ~20 с
-				if (canMark(level) && rnd.nextInt(40) == 0) {
+				if (canMark(level, player.getX(), player.getZ()) && rnd.nextInt(40) == 0) {
 					AnomalyScars.microCrater(level,
 							player.getX() + (rnd.nextDouble() - 0.5) * 6.0,
 							player.getZ() + (rnd.nextDouble() - 0.5) * 6.0, 0.6, 1, player.getY());
@@ -522,10 +524,15 @@ public enum AnomalyComponent {
 		}
 	}
 
-	/** Разрешены ли правки мира микрособытиями: включены разрушения и сервер не задыхается. */
-	private static boolean canMark(ServerLevel level) {
-		return AnomalyMod.config.scar_enabled
-				&& level.getServer().getAverageTickTimeNanos() / 1_000_000.0 <= AnomalyMod.config.mspt_limit;
+	/**
+	 * Разрешены ли правки мира микрособытиями: включены разрушения, точка не в полосе подавления
+	 * (ближе 6к мир не трогаем даже микрособытием) и сервер не задыхается.
+	 */
+	private static boolean canMark(ServerLevel level, double x, double z) {
+		AnomalyConfig config = AnomalyMod.config;
+		return config.scar_enabled
+				&& Math.hypot(x, z) >= config.suppress_until
+				&& level.getServer().getAverageTickTimeNanos() / 1_000_000.0 <= config.mspt_limit;
 	}
 
 	/** Пыль между игроком и ядром: тяга и отторжение перестают быть невидимыми. */

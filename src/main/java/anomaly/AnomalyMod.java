@@ -150,8 +150,11 @@ public class AnomalyMod implements ModInitializer {
 			}
 		} else {
 			state.leave(seconds, config);
-			if (state.zoneId != 0L && state.dose >= config.lingering_floor) {
+			// послевкусие только от опасной/смертельной зоны и только один раз за выход
+			if (state.zoneId != 0L && state.lastHazard && !state.lingered
+					&& state.dose >= Math.max(config.lingering_floor, 0.35)) {
 				AnomalyEffects.lingering(level, player, state, config);
+				state.lingered = true;
 			}
 		}
 	}

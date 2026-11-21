@@ -22,6 +22,10 @@ public final class AnomalyState {
 	public int lastStep = 10;
 	/** Накопитель для урона давлением: бьёт раз в 20 с, а не раз в вызов. */
 	public int damageTicks;
+	/** Последняя зона была опасной: «послевкусие» после безопасной не включаем. */
+	public boolean lastHazard;
+	/** Послевкусие уже выдано за этот выход: иначе тьма обновлялась каждые 0.5 с. */
+	public boolean lingered;
 	/** Последняя позиция и время: по ним восстанавливается реальная скорость игрока перед толчком. */
 	public double lastX;
 	public double lastY;
@@ -43,6 +47,8 @@ public final class AnomalyState {
 		// перескок между перекрывающимися зонами дозу не срезает
 		dose = Math.min(FULL, dose + config.dose_gain_per_second * zone.strength() * seconds);
 		zoneId = zone.id();
+		lastHazard = zone.cls().damages();
+		lingered = false;
 		ticksInside += stepTicks(seconds);
 	}
 

@@ -447,7 +447,8 @@ public final class AnomalyScars {
 				break;
 			}
 			BlockState state = level.getBlockState(pos.set(x, y, z));
-			if (protectedBlock(state)) {
+			// трещина не режет полы и стены: тёсаный камень и доски останавливают её так же, как контейнеры
+			if (protectedBlock(state) || builtBlock(state)) {
 				return changed;
 			}
 			boolean bottom = i == depth - 1;
