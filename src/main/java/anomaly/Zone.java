@@ -1,5 +1,7 @@
 package anomaly;
 
+import java.util.List;
+
 /**
  * Аномалия в конкретный момент: где она, какая у неё граница, где ядро.
  * <p>
@@ -11,10 +13,6 @@ public record Zone(Anomaly anomaly, long now, double x, double z, double radius,
 
 	public long id() {
 		return anomaly.id;
-	}
-
-	public AnomalyType type() {
-		return AnomalyType.byId(anomaly.type);
 	}
 
 	public AnomalyClass cls() {
@@ -45,6 +43,11 @@ public record Zone(Anomaly anomaly, long now, double x, double z, double radius,
 
 	public double budget() {
 		return AnomalyClass.damageBudget(anomaly.r0, cls());
+	}
+
+	/** Разобранный набор компонентов: пустой только у старых файлов до миграции. */
+	public List<AnomalyComponent> components() {
+		return AnomalyComponent.parse(anomaly.components);
 	}
 
 	/** Полный поворот траектории за жизнь, градусы. По концепции не больше 10. */

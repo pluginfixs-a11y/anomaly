@@ -55,6 +55,8 @@ public final class SelfTest {
 		runGroup(result, "форма", () -> checkShape(result, config, rnd));
 		runGroup(result, "дрейф", () -> checkDrift(result, config, rnd));
 		runGroup(result, "жизнь", () -> checkLife(result, config, rnd));
+		runGroup(result, "доза", () -> checkDose(result, config));
+		runGroup(result, "компоненты", () -> checkComponents(result, config, rnd));
 		runGroup(result, "классы", () -> checkClasses(result, config, rnd));
 		runGroup(result, "бюджет", () -> checkBudget(result));
 		runGroup(result, "рассеивание", () -> checkSuppression(result, config));
@@ -214,6 +216,146 @@ public final class SelfTest {
 		anomaly.born = now - (long) (100.0 * 3_600_000L);
 		report(result, "после срока жизни не живёт", !anomaly.alive(now));
 		report(result, "за час до конца ещё жива", anomaly.alive(now - 3_600_000L));
+	}
+
+	// --- доза ---
+
+	private static void checkDose(Result result, AnomalyConfig config) {
+		Anomaly anomaly = new Anomaly();
+		anomaly.id = 1L;
+		anomaly.r0 = 500;
+		anomaly.life_hours = 24;
+		anomaly.cls = AnomalyClass.DEADLY.id;
+		Zone zone = anomaly.zone(0L);
+
+		AnomalyState state = new AnomalyState();
+		state.enter(zone, 10.0, config);
+		check(result, "10 с внутри → доза 0.5", 0.5, state.dose, 1e-9);
+		state.enter(zone, 100.0, config);
+		check(result, "доза не выше 1.0", 1.0, state.dose, 1e-9);
+		state.leave(25.0, config);
+		check(result, "25 с снаружи → 0.5", 0.5, state.dose, 1e-9);
+		state.leave(100.0, config);
+		check(result, "доза до нуля", 0.0, state.dose, 1e-9);
+		report(result, "на нуле зона забыта", state.zoneId == 0L);
+
+		AnomalyState amp = new AnomalyState();
+		amp.dose = 0.2;
+		check(result, "доза 0.2 → усилитель 0", 0, amp.amplifier(), 0);
+		amp.dose = 0.5;
+		check(result, "доза 0.5 → усилитель 1", 1, amp.amplifier(), 0);
+		amp.dose = 0.9;
+		check(result, "доза 0.9 → усилитель 2", 2, amp.amplifier(), 0);
+
+		// смена набора не тащит чужую дозу: вход в другую зону срезает её до 30 %
+		Anomaly other = new Anomaly();
+		other.id = 2L;
+		other.r0 = 500;
+		other.life_hours = 24;
+		other.cls = AnomalyClass.DEADLY.id;
+		AnomalyState switching = new AnomalyState();
+		switching.dose = 1.0;
+		switching.zoneId = 1L;
+		switching.enter(other.zone(0L), 0.0, config);
+		check(result, "вход в другую зону срезает дозу до 0.3", 0.3, switching.dose, 1e-9);
+	}
+
+	// --- компоненты ---
+
+	private static void checkComponents(Result result, AnomalyConfig config, Random rnd) {
+		boolean counts = true;
+		boolean budgets = true;
+		boolean allowed = true;
+		boolean groups = true;
+		boolean safeNoDamage = true;
+		boolean visible = true;
+
+		for (AnomalyClass cls : AnomalyClass.values()) {
+			for (int i = 0; i < 200; i++) {
+				double radius = 100.0 + rnd.nextDouble() * 2900.0;
+				List<AnomalyComponent> set = AnomalyComponent.roll(cls, rnd, config, radius);
+				int bonus = radius >= 800.0 ? 1 : 0;
+				if (set.size() < AnomalyComponent.minCount(cls)
+						|| set.size() > AnomalyComponent.maxCount(cls) + bonus) {
+					counts = false;
+				}
+				int cost = 0;
+				for (AnomalyComponent component : set) {
+					cost += component.cost;
+					if (!component.allows(cls)) {
+						allowed = false;
+					}
+					if (cls == AnomalyClass.SAFE && component.minClass != AnomalyClass.SAFE) {
+						safeNoDamage = false;
+					}
+				}
+				if (cost > AnomalyComponent.budgetCap(cls) + 2) {
+					budgets = false;
+				}
+				if (!groupsOk(set, cls)) {
+					groups = false;
+				}
+				boolean hasVisible = false;
+				for (AnomalyComponent component : set) {
+					hasVisible |= component.isVisible();
+				}
+				if (!hasVisible) {
+					visible = false;
+				}
+			}
+		}
+		report(result, "компонентов в наборе по классу и размеру", counts);
+		report(result, "бюджет смертоносности не превышен", budgets);
+		report(result, "в наборе только разрешённые классу компоненты", allowed);
+		report(result, "запрещённые пары не встречаются", groups);
+		report(result, "безопасная не получает урон", safeNoDamage);
+		report(result, "у каждой зоны есть видимый компонент", visible);
+
+		List<AnomalyComponent> first = AnomalyComponent.roll(AnomalyClass.DEADLY, new Random(77L), config, 900);
+		List<AnomalyComponent> second = AnomalyComponent.roll(AnomalyClass.DEADLY, new Random(77L), config, 900);
+		report(result, "набор детерминирован по сиду", first.equals(second));
+
+		int synergies = 0;
+		for (int i = 0; i < 200; i++) {
+			List<AnomalyComponent> set = AnomalyComponent.roll(AnomalyClass.DEADLY, new Random(i), config, 1400);
+			if (AnomalyComponent.synergyCount(set) > 0) {
+				synergies++;
+			}
+		}
+		report(result, "синергии иногда выпадают (" + synergies + " из 200)", synergies > 0);
+		report(result, "синергия поднимает силу на 25 %",
+				Math.abs(AnomalyComponent.intensity(List.of(AnomalyComponent.COLD_CREEP,
+						AnomalyComponent.ASH_FALL)) - 1.25) < 1e-9);
+
+		report(result, "незнакомый id в файле игнорируется",
+				AnomalyComponent.parse(List.of("no_such", "cold_creep", "cold_creep")).size() == 1);
+		report(result, "пустой список компонентов разбирается в пустой",
+				AnomalyComponent.parse(null).isEmpty());
+
+		AnomalyFieldData field = new AnomalyFieldData();
+		Anomaly anomaly = AnomalyField.create(field, config, rnd, 0L, 12000, 0, null, null, false);
+		report(result, "аномалия рождается с компонентами", !anomaly.componentList().isEmpty());
+	}
+
+	private static boolean groupsOk(List<AnomalyComponent> set, AnomalyClass cls) {
+		java.util.Map<String, Integer> counts = new java.util.HashMap<>();
+		for (AnomalyComponent component : set) {
+			if (component.group != null) {
+				counts.merge(component.group, 1, Integer::sum);
+			}
+		}
+		for (var entry : counts.entrySet()) {
+			int limit = switch (entry.getKey()) {
+				case "food", "motion" -> 1;
+				case "damage" -> cls == AnomalyClass.DEADLY ? 2 : 1;
+				case "show" -> cls == AnomalyClass.DEADLY ? 3 : 2;
+				default -> 1;
+			};
+			if (entry.getValue() > limit) {
+				return false;
+			}
+		}
+		return true;
 	}
 
 	// --- классы ---
@@ -386,6 +528,9 @@ public final class SelfTest {
 						copy.id == original.id && copy.r0 == original.r0
 								&& copy.life_hours == original.life_hours && copy.arc == original.arc
 								&& copy.harmonics.size() == original.harmonics.size());
+				report(result, "компоненты пережили файл",
+						!copy.componentList().isEmpty()
+								&& copy.componentList().equals(original.componentList()));
 				double[] before = original.position(3.0);
 				double[] after = copy.position(3.0);
 				report(result, "после круга через файл траектория та же",

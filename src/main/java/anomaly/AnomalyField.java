@@ -73,10 +73,27 @@ public final class AnomalyField {
 		random = new Random(server.overworld().getSeed() ^ 0x9E3779B97F4A7C15L ^ System.nanoTime());
 
 		AnomalyConfig config = AnomalyMod.config;
+		// файл 0.2.0-alpha1 не знал компонентов: раскатываем набор по id — детерминированно, без хаоса
+		boolean migrated = false;
+		if (config != null) {
+			for (Anomaly anomaly : data.anomalies) {
+				if (anomaly.componentList().isEmpty()) {
+					anomaly.components = AnomalyComponent.ids(AnomalyComponent.roll(
+							AnomalyClass.byId(anomaly.cls),
+							new Random(anomaly.id * 0x9E3779B97F4A7C15L),
+							config, anomaly.r0));
+					migrated = true;
+				}
+			}
+		}
 		// выключенный мод не должен ни сеять население, ни писать файл в мир
-		if (config != null && config.enabled && (fresh || data.anomalies.isEmpty())) {
-			seedPopulation(data, config, random, AnomalyClock.now());
-			saveNow();
+		if (config != null && config.enabled) {
+			if (fresh || data.anomalies.isEmpty()) {
+				seedPopulation(data, config, random, AnomalyClock.now());
+				saveNow();
+			} else if (migrated) {
+				saveNow();
+			}
 		}
 		AnomalyMod.LOGGER.info("Anomaly: поле загружено — {} аномалий, население {}, время поля {} ч{}",
 				data.anomalies.size(), config == null ? 0 : config.population,
@@ -525,7 +542,7 @@ public final class AnomalyField {
 		anomaly.core_offset = 0.12 + rnd.nextDouble() * 0.25;
 		anomaly.core_angle = rnd.nextDouble() * Math.PI * 2.0;
 		anomaly.core_spin = (rnd.nextDouble() * 2.0 - 1.0) * 0.03;
-		anomaly.type = pickType(config, cls, rnd).id;
+		anomaly.components = AnomalyComponent.ids(AnomalyComponent.roll(cls, rnd, config, anomaly.r0));
 		return anomaly;
 	}
 
@@ -577,23 +594,6 @@ public final class AnomalyField {
 			hours = 96.0 + rnd.nextDouble() * 72.0;
 		}
 		return Math.max(0.2, Math.min(config.lifetime_max_hours, hours));
-	}
-
-	private static AnomalyType pickType(AnomalyConfig config, AnomalyClass cls, Random rnd) {
-		List<AnomalyType> allowed = new ArrayList<>(4);
-		for (AnomalyType type : cls.types()) {
-			if (config.isEnabled(type)) {
-				allowed.add(type);
-			}
-		}
-		if (allowed.isEmpty()) {
-			for (AnomalyType type : AnomalyType.values()) {
-				if (config.isEnabled(type)) {
-					allowed.add(type);
-				}
-			}
-		}
-		return allowed.isEmpty() ? AnomalyType.SHADOW : allowed.get(rnd.nextInt(allowed.size()));
 	}
 }
 

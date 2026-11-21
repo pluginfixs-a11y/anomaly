@@ -24,7 +24,7 @@ public class AnomalyConfig {
 	private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
 	private static final Path PATH = FabricLoader.getInstance().getConfigDir().resolve("anomaly.json");
 	/** Текущая версия формата конфига. */
-	public static final int VERSION = 2;
+	public static final int VERSION = 3;
 
 	public int config_version = 0;
 
@@ -73,8 +73,8 @@ public class AnomalyConfig {
 	/** Период серверного тика эффектов (10 = 0.5 с). Поле тикает раз в секунду отдельно. */
 	public int tick_period = 10;
 
-	/** Типы, которые не используются при генерации: gravity, vortex, frost, shadow, static. */
-	public List<String> disabled_types = new ArrayList<>();
+	/** Компоненты, которые не используются при генерации: id из {@link AnomalyComponent}. */
+	public List<String> disabled_components = new ArrayList<>();
 
 	public static AnomalyConfig load() {
 		AnomalyConfig config = new AnomalyConfig();
@@ -101,8 +101,8 @@ public class AnomalyConfig {
 
 	/** Приведение чисел в разумные рамки: конфиг правят руками, и там бывает что угодно. */
 	public void sanitize() {
-		if (disabled_types == null) {
-			disabled_types = new ArrayList<>();
+		if (disabled_components == null) {
+			disabled_components = new ArrayList<>();
 		}
 		// NaN и бесконечность проходят мимо сравнений вида «x <= 0», поэтому сначала чиним их
 		radius_min = finite(radius_min, 100.0);
@@ -158,6 +158,8 @@ public class AnomalyConfig {
 		world_radius = 20000;
 		population = 250;
 		lifetime_max_hours = 168.0;
+		// в 0.2.0-alpha1 не было компонентов: старый список выключенных «типов» больше не значит ничего
+		disabled_components = new ArrayList<>();
 		sanitize();
 		config_version = VERSION;
 		if (existed) {
@@ -195,8 +197,8 @@ public class AnomalyConfig {
 		return Math.max(min, Math.min(max, speed));
 	}
 
-	public boolean isEnabled(AnomalyType type) {
-		return disabled_types == null || !disabled_types.contains(type.id);
+	public boolean isEnabled(AnomalyComponent component) {
+		return disabled_components == null || !disabled_components.contains(component.id);
 	}
 
 	private static double finite(double value, double fallback) {

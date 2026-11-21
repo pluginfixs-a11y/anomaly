@@ -41,6 +41,7 @@ public final class AnomalyCommand {
 												IntegerArgumentType.getInteger(context, "count")))))
 						.then(Commands.literal("here").executes(context -> here(context.getSource())))
 						.then(Commands.literal("stats").executes(context -> stats(context.getSource())))
+						.then(Commands.literal("components").executes(context -> components(context.getSource())))
 						.then(Commands.literal("spawn")
 								.executes(context -> spawn(context.getSource(), null, null))
 								.then(Commands.argument("radius", DoubleArgumentType.doubleArg(10.0, 5000.0))
@@ -90,8 +91,16 @@ public final class AnomalyCommand {
 		return 1;
 	}
 
-	private static int stats(CommandSourceStack source) {
-		AnomalyField.Stats stats = AnomalyField.stats();
+	private static int components(CommandSourceStack source) {
+		AnomalyComponent[] all = AnomalyComponent.values();
+		reply(source, "Компонентов " + all.length + "; в скобках — вид, минимальный класс, стоимость бюджета");
+		for (AnomalyComponent component : all) {
+			reply(source, "  " + component.describe());
+		}
+		return 1;
+	}
+
+	private static int stats(CommandSourceStack source) {		AnomalyField.Stats stats = AnomalyField.stats();
 		reply(source, "Зон " + stats.total() + ": безопасных " + stats.safe()
 				+ ", опасных " + stats.danger() + ", смертельных " + stats.deadly()
 				+ (stats.pinned() > 0 ? ", тестовых " + stats.pinned() : ""));
@@ -126,6 +135,7 @@ public final class AnomalyCommand {
 					+ " · " + String.format("%.1f", zone.ageHours()) + "/" + String.format("%.1f", anomaly.life_hours) + " ч"
 					+ " · дрейф " + Math.round(anomaly.speed) + " бл/ч"
 					+ " · дуга " + String.format("%.1f", zone.turnDegrees()) + "°"
+					+ " · " + zone.components().size() + " комп."
 					+ " · " + blocks(distance) + " от точки");
 		}
 		return 1;
@@ -152,7 +162,8 @@ public final class AnomalyCommand {
 		reply(source, "Центр " + coord(zone.x(), zone.z()) + " · от центра мира " + blocks(Math.hypot(zone.x(), zone.z()))
 				+ " · ядро " + blocks(Math.hypot(zone.coreX() - zone.x(), zone.coreZ() - zone.z())) + " от центра");
 		reply(source, "Дрейф " + Math.round(anomaly.speed) + " бл/ч, дуга " + String.format("%.1f", zone.turnDegrees())
-				+ "°, прошла " + blocks(drift) + " от рождения; тип " + zone.type().title.toLowerCase());
+				+ "°, прошла " + blocks(drift) + " от рождения");
+		reply(source, "Компоненты: " + AnomalyComponent.titles(zone.components()));
 		reply(source, "Бюджет разрушения " + thousands(zone.budget()) + " блоков"
 				+ (zone.cls().damages() ? "" : " (безопасная не рушит)"));
 		return 1;
@@ -175,6 +186,7 @@ public final class AnomalyCommand {
 		Zone zone = anomaly.zone(AnomalyClock.now());
 		reply(source, "Тестовая аномалия #" + anomaly.id + " " + classTag(zone.cls())
 				+ " r " + Math.round(anomaly.r0) + " под ногами. Приколота: не дрейфует, не гаснет, не умирает.");
+		reply(source, "Компоненты: " + AnomalyComponent.titles(zone.components()));
 		reply(source, "/anomaly show — контур частицами, /anomaly edge #" + anomaly.id
 				+ " — встать у края, /anomaly timescale 600 — ускорить форму");
 		return 1;

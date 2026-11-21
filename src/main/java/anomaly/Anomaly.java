@@ -54,8 +54,8 @@ public final class Anomaly {
 	 */
 	public double shrink = 1.0;
 
-	/** Временный «вкус» до появления компонентов: shadow, gravity, vortex, frost, static. */
-	public String type = "shadow";
+	/** Набор компонентов: id из {@link AnomalyComponent}. Пустой — только у старых файлов до 0.2.0. */
+	public List<String> components = new ArrayList<>();
 	/** Класс: safe, danger, deadly. */
 	public String cls = "safe";
 
@@ -213,8 +213,12 @@ public final class Anomaly {
 		return new double[]{pos[0] + lx * cos - lz * sin, pos[1] + lx * sin + lz * cos};
 	}
 
-	/** Пригодность записи из файла: битые строки выбрасываются, а не роняют поле. */
-	public boolean valid() {
+	/** Разобранный набор компонентов; пустой у старых файлов до миграции. */
+	public java.util.List<AnomalyComponent> componentList() {
+		return AnomalyComponent.parse(components);
+	}
+
+	/** Пригодность записи из файла: битые строки выбрасываются, а не роняют поле. */	public boolean valid() {
 		if (!(Double.isFinite(x0) && Double.isFinite(z0) && Double.isFinite(r0) && r0 > 0.0)) {
 			return false;
 		}
@@ -238,6 +242,9 @@ public final class Anomaly {
 			harmonics = new ArrayList<>();
 		}
 		harmonics.removeIf(h -> h == null || !h.valid());
+		if (components == null) {
+			components = new ArrayList<>();
+		}
 		if (!(Double.isFinite(shrink) && shrink > 0.0 && shrink <= 4.0)) {
 			shrink = 1.0;
 		}

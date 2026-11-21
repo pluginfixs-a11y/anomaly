@@ -47,18 +47,6 @@ public enum AnomalyClass {
 	}
 
 	/**
-	 * Временный набор «типов» на класс, пока компонентов нет (этап 3–4 плана).
-	 * Безопасные — только мрак: он пугает и ничего не отнимает.
-	 */
-	public AnomalyType[] types() {
-		return switch (this) {
-			case SAFE -> new AnomalyType[]{AnomalyType.SHADOW};
-			case DANGER -> new AnomalyType[]{AnomalyType.GRAVITY, AnomalyType.VORTEX};
-			case DEADLY -> new AnomalyType[]{AnomalyType.FROST, AnomalyType.STATIC};
-		};
-	}
-
-	/**
 	 * Сколько блоков мира аномалия вправе испортить. Ноль у безопасных и у всего мельче 100,
 	 * дальше квадратичный рост между ступенями: радиус — это масса.
 	 */
