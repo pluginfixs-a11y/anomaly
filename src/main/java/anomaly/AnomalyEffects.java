@@ -188,6 +188,14 @@ public final class AnomalyEffects {
 				vy = (player.getY() - state.lastY) / ticks;
 				vz = (player.getZ() - state.lastZ) / ticks;
 			}
+			// телепорт, респавн, портал, возврат в зону после долгой прогулки: смещение в сотни
+			// блоков — это не скорость. Без сброса пакет задал бы клиенту рывок на 10–50 бл/тик.
+			boolean jumped = Math.hypot(vx, vz) > 1.5 || Math.abs(vy) > 5.0;
+			if (jumped) {
+				vx = 0.0;
+				vy = 0.0;
+				vz = 0.0;
+			}
 			state.lastX = player.getX();
 			state.lastY = player.getY();
 			state.lastZ = player.getZ();
@@ -195,13 +203,14 @@ public final class AnomalyEffects {
 			state.velX = vx;
 			state.velY = vy;
 			state.velZ = vz;
-			state.hasLast = true;
+			// после прыжка замер пропускается: следующий тик начнёт счёт с новой позиции
+			state.hasLast = !jumped;
 		}
 
 		double nx = vx + dx;
 		double nz = vz + dz;
-		// потолок: не больше 1.2 блока за тик (24 м/с) и не больше +0.3 к текущей скорости —
-		// так бег сохраняется, элитры не тормозят, а накопления «тяга + тяга» не бывает
+		// не больше +0.3 к текущей скорости и не больше 1.2 блока за тик для медленных:
+		// бег сохраняется, элитры не тормозят, накопления «тяга + тяга» не бывает
 		double base = Math.hypot(vx, vz);
 		double speed = Math.hypot(nx, nz);
 		double cap = Math.max(base + 0.3, 1.2);

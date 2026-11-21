@@ -378,8 +378,8 @@ public enum AnomalyComponent {
 					// радиус слышимости ванильного звука = max(16, 16·vol): 0.35 до игрока не доходил
 					level.playSound(null, x, y, z, SoundEvents.GENERIC_EXPLODE.value(), SoundSource.AMBIENT, 1.6f, 1.6f);
 					// хлопок — не только картинка: маленькая воронка на 1–2 блока
-					if (AnomalyMod.config.scar_enabled) {
-						AnomalyScars.microCrater(level, x, z, 0.8 + rnd.nextDouble() * 0.8, 1 + rnd.nextInt(2));
+					if (canMark(level)) {
+						AnomalyScars.microCrater(level, x, z, 0.8 + rnd.nextDouble() * 0.8, 1 + rnd.nextInt(2), player.getY());
 					}
 				}
 			}
@@ -389,10 +389,10 @@ public enum AnomalyComponent {
 					double z = player.getZ() + (rnd.nextDouble() - 0.5) * 32.0;
 					AnomalyEffects.visualBolt(level, x, surfaceOr(level, x, z, player.getY()), z);
 					// молния оставляет гарь, а иногда и воронку: следы, которые видно потом
-					if (AnomalyMod.config.scar_enabled) {
-						AnomalyScars.scorch(level, x, z, 1.5 + rnd.nextDouble());
+					if (canMark(level)) {
+						AnomalyScars.scorch(level, x, z, 1.5 + rnd.nextDouble(), player.getY());
 						if (rnd.nextInt(3) == 0) {
-							AnomalyScars.microCrater(level, x, z, 0.7, 1);
+							AnomalyScars.microCrater(level, x, z, 0.7, 1, player.getY());
 						}
 					}
 				}
@@ -439,10 +439,10 @@ public enum AnomalyComponent {
 								1, 0.0, -0.01, 0.0, 0.0);
 					}
 					// наледь остаётся на земле: раз в ~20 с маленькое пятно снега
-					if (AnomalyMod.config.scar_enabled && rnd.nextInt(40) == 0) {
+					if (canMark(level) && rnd.nextInt(40) == 0) {
 						AnomalyScars.frost(level,
 								player.getX() + (rnd.nextDouble() - 0.5) * 8.0,
-								player.getZ() + (rnd.nextDouble() - 0.5) * 8.0, 2.5);
+								player.getZ() + (rnd.nextDouble() - 0.5) * 8.0, 2.5, player.getY());
 					}
 				}
 			}
@@ -455,15 +455,21 @@ public enum AnomalyComponent {
 							player.getZ() + (rnd.nextDouble() - 0.5) * 6.0, 6, 0.0, 0.0, 0.0, 0.15);
 				}
 				// давление проламывает пол на один блок: раз в ~20 с
-				if (AnomalyMod.config.scar_enabled && rnd.nextInt(40) == 0) {
+				if (canMark(level) && rnd.nextInt(40) == 0) {
 					AnomalyScars.microCrater(level,
 							player.getX() + (rnd.nextDouble() - 0.5) * 6.0,
-							player.getZ() + (rnd.nextDouble() - 0.5) * 6.0, 0.6, 1);
+							player.getZ() + (rnd.nextDouble() - 0.5) * 6.0, 0.6, 1, player.getY());
 				}
 			}
 			default -> {
 			}
 		}
+	}
+
+	/** Разрешены ли правки мира микрособытиями: включены разрушения и сервер не задыхается. */
+	private static boolean canMark(ServerLevel level) {
+		return AnomalyMod.config.scar_enabled
+				&& level.getServer().getAverageTickTimeNanos() / 1_000_000.0 <= AnomalyMod.config.mspt_limit;
 	}
 
 	/** Высота рельефа для точки или запасное значение, если чанк не загружен. */
