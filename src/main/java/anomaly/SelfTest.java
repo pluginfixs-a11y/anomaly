@@ -634,9 +634,9 @@ public final class SelfTest {
 			Map<BlockPos, BlockState> frostBefore = snapshot(level, fx, bz, 3, frostSurface - 2, frostSurface + 14);
 			snapshots.add(frostBefore);
 			level.setBlock(new BlockPos(fx, frostSurface - 1, bz), Blocks.GRASS_BLOCK.defaultBlockState(), Block.UPDATE_ALL);
-			level.setBlock(new BlockPos(fx, frostSurface, bz), Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
+			level.setBlock(new BlockPos(fx, frostSurface, bz), Blocks.SHORT_GRASS.defaultBlockState(), Block.UPDATE_ALL);
 			AnomalyScars.frost(level, fx, bz, 1.5, frostSurface);
-			report(result, "холод оставляет наледь",
+			report(result, "холод снимает траву и кладёт наледь",
 					level.getBlockState(new BlockPos(fx, frostSurface, bz)).is(Blocks.SNOW));
 			restore(level, frostBefore);
 
