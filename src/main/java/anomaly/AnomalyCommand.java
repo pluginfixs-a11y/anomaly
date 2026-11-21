@@ -83,6 +83,15 @@ public final class AnomalyCommand {
 														.executes(context -> event(context.getSource(), "burst",
 																DoubleArgumentType.getDouble(context, "radius"),
 																IntegerArgumentType.getInteger(context, "depth"))))))
+								.then(Commands.literal("sinkhole")
+										.executes(context -> event(context.getSource(), "sinkhole", 4.0, 4))
+										.then(Commands.argument("radius", DoubleArgumentType.doubleArg(1.0, 10.0))
+												.executes(context -> event(context.getSource(), "sinkhole",
+														DoubleArgumentType.getDouble(context, "radius"), 4))
+												.then(Commands.argument("depth", IntegerArgumentType.integer(1, 10))
+														.executes(context -> event(context.getSource(), "sinkhole",
+																DoubleArgumentType.getDouble(context, "radius"),
+																IntegerArgumentType.getInteger(context, "depth"))))))
 								.then(Commands.literal("bolt")
 										.executes(context -> event(context.getSource(), "bolt", 2.0, 1))
 										.then(Commands.argument("radius", DoubleArgumentType.doubleArg(0.4, 10.0))
@@ -202,9 +211,9 @@ public final class AnomalyCommand {
 	// --- микрособытия ---
 
 	private static int eventList(CommandSourceStack source) {
-		reply(source, "Микрособытия (по умолчанию): crater 1.0×1 · scorch 2.0 · frost 2.5 · burst 1.2×1 · bolt 2.0");
+		reply(source, "Микрособытия (по умолчанию): crater 1.0×1 · scorch 2.0 · frost 2.5 · burst 1.2×1 · bolt 2.0 · sinkhole 4×4");
 		reply(source, "Цель — блок, на который смотришь (до 32 блоков), иначе точка под ногами.");
-		reply(source, "Пример: /anomaly event crater 3 2 · /anomaly event bolt · /anomaly event frost 4");
+		reply(source, "Пример: /anomaly event crater 3 2 · /anomaly event sinkhole 6 5 · /anomaly event frost 4");
 		return 1;
 	}
 
@@ -268,11 +277,24 @@ public final class AnomalyCommand {
 				n += AnomalyScars.microCrater(level, x, z, 0.7, depth, nearY);
 				yield n;
 			}
+			case "sinkhole" -> {
+				ScarOp op = ScarOp.sinkhole(x, z, radius, depth, System.nanoTime());
+				int n = 0;
+				for (int i = 0; i < op.columnCount(); i++) {
+					int[] column = op.column(i);
+					if (column == null || !level.getChunkSource().hasChunk(column[0] >> 4, column[1] >> 4)) {
+						continue;
+					}
+					n += AnomalyScars.applyColumn(level, op, column[0], column[1]);
+				}
+				yield n;
+			}
 			default -> 0;
 		};
 		reply(source, "Событие «" + type + "»: изменено " + changed + " блоков в " + bx + ", " + bz
 				+ " (радиус " + trim(radius)
-				+ (type.equals("crater") || type.equals("burst") || type.equals("bolt") ? ", глубина " + depth : "")
+				+ (type.equals("crater") || type.equals("burst") || type.equals("bolt")
+						|| type.equals("sinkhole") ? ", глубина " + depth : "")
 				+ ")");
 		if (!AnomalyMod.config.scar_enabled) {
 			reply(source, "Разрушения в конфиге выключены — команда всё равно сработала (это отладка)");

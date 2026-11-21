@@ -79,6 +79,9 @@ public final class SelfTest {
 				List<Anomaly> live = AnomalyField.all();
 				boolean withComponents = true;
 				for (Anomaly anomaly : live) {
+					if (anomaly.remnant) {
+						continue;
+					}
 					withComponents &= !anomaly.componentList().isEmpty();
 				}
 				report(result, "у всех зон живого поля есть компоненты (" + live.size() + ")", withComponents);
@@ -671,7 +674,8 @@ public final class SelfTest {
 					level.getBlockState(new BlockPos(fx, frostSurface, bz)).is(Blocks.SNOW));
 			restore(level, frostBefore);
 
-			int gx = bx + 208;			level.getChunk(gx >> 4, bz >> 4);
+			int gx = bx + 208;
+			level.getChunk(gx >> 4, bz >> 4);
 			int scorchSurface = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, gx, bz);
 			Map<BlockPos, BlockState> scorchBefore = snapshot(level, gx, bz, 3, scorchSurface - 2, scorchSurface + 14);
 			snapshots.add(scorchBefore);
@@ -854,6 +858,20 @@ public final class SelfTest {
 				&& first.components.contains("ash_fall")
 				&& !first.components.contains("storm_core")
 				&& !first.components.contains("hunger_drain"));
+
+		// осколок остаётся там, где зона умерла, а не в точке рождения
+		AnomalyFieldData field2 = new AnomalyFieldData();
+		Anomaly mover = AnomalyField.create(field2, local, rnd, 0L, 12000, 0, 900.0, AnomalyClass.DEADLY, false);
+		mover.speed = 60.0;
+		mover.born = -50L * 3_600_000L;
+		mover.life_hours = 1.0;
+		double[] death = mover.position(mover.ageHours(0L));
+		field2.anomalies.add(mover);
+		AnomalyField.tickData(field2, local, rnd, 0L, 1.0);
+		Anomaly scar = field2.anomalies.isEmpty() ? null : field2.anomalies.get(0);
+		report(result, "осколок стоит там, где зона умерла",
+				scar != null && Math.hypot(scar.x0 - death[0], scar.z0 - death[1]) < 50.0);
+		report(result, "осколок не даёт дозы", scar != null && scar.zone(0L).strength() == 0.0);
 	}
 
 	// --- рассеивание у центра ---

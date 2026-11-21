@@ -55,10 +55,10 @@ public final class AnomalyEffects {
 		// light_wall не рисует вторую дугу поверх первой: он делает стену выше и добавляет
 		// внутренний контур, чтобы большая зона читалась как область, а не как забор
 		boolean wall = zone.components().contains(AnomalyComponent.LIGHT_WALL);
-		edgeBand(level, player, zone, config.view_range, wall ? 2.6f : 2.0f, wall ? 8 : 5,
+		edgeBand(level, player, zone, config.view_range, wall ? 2.6f : 2.0f, wall ? 6 : 4,
 				wall ? 5.0 : 3.0, 1.0);
 		if (wall) {
-			edgeBand(level, player, zone, config.view_range, 2.0f, 4, 3.0, 0.82);
+			edgeBand(level, player, zone, config.view_range, 2.0f, 3, 3.0, 0.82);
 		}
 		anchors(level, player, zone);
 		coreBeacon(level, player, zone);
@@ -115,10 +115,11 @@ public final class AnomalyEffects {
 		}
 		int bx = (int) Math.floor(zone.coreX());
 		int bz = (int) Math.floor(zone.coreZ());
-		double base = player.getY();
-		if (level.getChunkSource().hasChunk(bx >> 4, bz >> 4)) {
-			base = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, bx, bz);
+		// в незагруженном чанке высоты нет: столб от высоты игрока висел бы в воздухе
+		if (!level.getChunkSource().hasChunk(bx >> 4, bz >> 4)) {
+			return;
 		}
+		double base = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, bx, bz);
 		for (int i = 2; i <= 40; i += 4) {
 			level.sendParticles(player, net.minecraft.core.particles.ParticleTypes.END_ROD,
 					true, true, zone.coreX(), base + i, zone.coreZ(), 2, 0.15, 0.15, 0.15, 0.0);
@@ -180,7 +181,7 @@ public final class AnomalyEffects {
 		// при шаге 4 блока — это 10–30 блоков между точками и «пунктир», а лишние пакеты не видны
 		half = Math.min(half, 128.0 / radius);
 		double arc = 2.0 * half * radius;
-		int points = Math.max(16, Math.min(96, (int) (arc / 3.0)));
+		int points = Math.max(16, Math.min(64, (int) (arc / 4.0)));
 		var color = new net.minecraft.core.particles.DustParticleOptions(zone.edgeColor(), scale);
 		var rnd = player.getRandom();
 		for (int i = 0; i < points; i++) {

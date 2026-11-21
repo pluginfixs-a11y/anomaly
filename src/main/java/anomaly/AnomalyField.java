@@ -77,6 +77,10 @@ public final class AnomalyField {
 		boolean migrated = false;
 		if (config != null) {
 			for (Anomaly anomaly : data.anomalies) {
+				// осколок — уже готовый шрам: ни компонентов, ни следов ему заново не роллим
+				if (anomaly.remnant) {
+					continue;
+				}
 				if (anomaly.components == null || anomaly.components.isEmpty()) {
 					List<AnomalyComponent> rolled = AnomalyComponent.roll(
 							AnomalyClass.byId(anomaly.cls),
@@ -243,6 +247,13 @@ public final class AnomalyField {
 	 * Компоненты остаются только видимые и безвредные — по ним видно, что здесь было.
 	 */
 	private static void makeRemnant(Anomaly anomaly, long now, Random rnd) {
+		// сначала переносим точку рождения туда, где зона умерла: иначе осколок всплывёт за
+		// километры от места смерти, потому что дрейф считается от x0/z0
+		double[] death = anomaly.position(anomaly.ageHours(now));
+		if (Double.isFinite(death[0]) && Double.isFinite(death[1])) {
+			anomaly.x0 = death[0];
+			anomaly.z0 = death[1];
+		}
 		anomaly.remnant = true;
 		anomaly.r0 = Math.max(60.0, anomaly.r0 * (0.25 + rnd.nextDouble() * 0.15));
 		anomaly.born = now;
@@ -452,6 +463,11 @@ public final class AnomalyField {
 		double budget = 0.0;
 		for (Anomaly anomaly : data.anomalies) {
 			Zone zone = anomaly.zone(now);
+			if (anomaly.remnant) {
+				// осколок не зона: он идёт отдельным счётчиком и не раздувает покрытие с бюджетом
+				remnants++;
+				continue;
+			}
 			AnomalyClass cls = zone.cls();
 			switch (cls) {
 				case SAFE -> safe++;
@@ -460,9 +476,6 @@ public final class AnomalyField {
 			}
 			if (anomaly.pinned) {
 				pinned++;
-			}
-			if (anomaly.remnant) {
-				remnants++;
 			}
 			// площадь эллипса, а не круга: вытянутость 0.45..2.6 заметно меняет покрытие
 			area += Math.PI * zone.radius() * zone.radius() * Math.max(0.2, anomaly.stretch);

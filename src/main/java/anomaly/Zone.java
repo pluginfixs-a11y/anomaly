@@ -20,7 +20,8 @@ public record Zone(Anomaly anomaly, long now, double x, double z, double radius,
 	}
 
 	public double strength() {
-		return cls().strength;
+		// осколок — память, а не угроза: дозу он не набирает и чужие зоны не перебивает
+		return remnant() ? 0.0 : cls().strength;
 	}
 
 	public boolean pinned() {

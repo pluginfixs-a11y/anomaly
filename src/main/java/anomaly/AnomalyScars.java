@@ -178,6 +178,12 @@ public final class AnomalyScars {
 						anomaly.scar_cursor++;
 						continue;
 					}
+					// ближе полосы подавления мир не трогаем даже случайно задрейфовавшей зоной.
+					// Проверка до загрузки чанка: иначе подавленный план всё равно генерирует мир.
+					if (Math.hypot(column[0], column[1]) < config.suppress_until) {
+						anomaly.scar_cursor++;
+						continue;
+					}
 					int chunkX = column[0] >> 4;
 					int chunkZ = column[1] >> 4;
 					if (!level.getChunkSource().hasChunk(chunkX, chunkZ)) {
@@ -191,10 +197,6 @@ public final class AnomalyScars {
 					// курсор двигаем только после проверок: иначе колонка на стыке бюджета чанков теряется
 					anomaly.scar_cursor++;
 					columnsThisTick++;
-					// ближе полосы подавления мир не трогаем даже случайно задрейфовавшей зоной
-					if (Math.hypot(column[0], column[1]) < config.suppress_until) {
-						continue;
-					}
 					try {
 						blocksThisTick += applyColumn(level, op, column[0], column[1]);
 					} catch (RuntimeException e) {

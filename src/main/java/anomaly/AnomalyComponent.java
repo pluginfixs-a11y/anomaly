@@ -370,7 +370,7 @@ public enum AnomalyComponent {
 		// пассивные компоненты действуют внутри зоны: их звуки и пыль снаружи вводили бы в
 		// заблуждение («еда утекает» там, где ничего не утекает)
 		if ((this == HUNGER_DRAIN || this == SATURATION_BURN || this == XP_LEAK || this == AIR_DRAIN
-				|| this == TRACTION || this == REPULSION)
+				|| this == TRACTION || this == REPULSION || this == MOB_EARS)
 				&& zone.signedDistance(player.getX(), player.getZ()) > 0.0) {
 			return;
 		}
