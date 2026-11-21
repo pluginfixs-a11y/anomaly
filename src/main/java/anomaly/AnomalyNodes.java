@@ -50,6 +50,8 @@ public final class AnomalyNodes {
 	/** Сколько уровней стоит один обмен на алтаре. */
 	private static final int ALTAR_LEVELS = 5;
 	private static final long ALTAR_COOLDOWN_MS = 1500L;
+	/** Максимальная плата за обмен, часы остатка: под потолком должно оставаться место на неё. */
+	private static final double PAY_MAX = 3.0;
 
 	/** Последний обмен на алтаре: только чтобы двойной клик не съел уровни дважды. Карта не растёт бесконечно. */
 	private static final java.util.Map<java.util.UUID, Long> ALTAR_LAST = new java.util.LinkedHashMap<>(64, 0.75f, true) {
@@ -66,7 +68,7 @@ public final class AnomalyNodes {
 		// Алтарь: правый клик по якорю-алтарю — обмен. Ваниль этот блок так не использует
 		// (заряженный якорь взрывается), поэтому отменять ничего не ломаем.
 		UseBlockCallback.EVENT.register((player, level, hand, hit) -> {
-			if (!AnomalyMod.config.nodes_enabled) {
+			if (!AnomalyMod.config.enabled || !AnomalyMod.config.nodes_enabled) {
 				return InteractionResult.PASS;
 			}
 			if (!(player instanceof ServerPlayer serverPlayer) || hand != net.minecraft.world.InteractionHand.MAIN_HAND) {
@@ -77,7 +79,7 @@ public final class AnomalyNodes {
 				return InteractionResult.PASS;
 			}
 			BlockPos pos = hit.getBlockPos();
-			if (!level.getBlockState(pos).is(Blocks.SCULK_CATALYST)) {
+			if (!level.getBlockState(pos).is(Blocks.LODESTONE)) {
 				return InteractionResult.PASS;
 			}
 			Anomaly anomaly = altarAt(serverLevel, pos);
@@ -90,7 +92,7 @@ public final class AnomalyNodes {
 
 		// Якоря: сломал третий — зона схлопывается.
 		PlayerBlockBreakEvents.AFTER.register((level, player, pos, state, blockEntity) -> {
-			if (!AnomalyMod.config.nodes_enabled) {
+			if (!AnomalyMod.config.enabled || !AnomalyMod.config.nodes_enabled) {
 				return;
 			}
 			if (!(level instanceof ServerLevel serverLevel)
@@ -176,10 +178,13 @@ public final class AnomalyNodes {
 		}
 		if (!anomaly.node_altar_ok) {
 			double[] altar = nodePos(anomaly, baseAngle(anomaly), 0.32);
-			BlockPos altarPos = surface(level, altar[0], altar[1]);
+			BlockPos altarPos = adoptOrSpot(level, altar[0], altar[1], Blocks.LODESTONE);
 			if (altarPos != null) {
-				level.setBlock(altarPos, Blocks.SCULK_CATALYST.defaultBlockState(), Block.UPDATE_ALL);
+				if (!level.getBlockState(altarPos).is(Blocks.LODESTONE)) {
+					level.setBlock(altarPos, Blocks.LODESTONE.defaultBlockState(), Block.UPDATE_ALL);
+				}
 				anomaly.node_altar_ok = true;
+				anomaly.node_altar_cy = altarPos.getY();
 				changed = true;
 			}
 		}
@@ -189,10 +194,16 @@ public final class AnomalyNodes {
 				continue;
 			}
 			double[] anchor = nodePos(anomaly, baseAngle(anomaly) + i * Math.PI * 2.0 / 3.0, 0.62);
-			BlockPos anchorPos = surface(level, anchor[0], anchor[1]);
+			BlockPos anchorPos = adoptOrSpot(level, anchor[0], anchor[1], Blocks.CRYING_OBSIDIAN);
 			if (anchorPos != null) {
-				level.setBlock(anchorPos, Blocks.CRYING_OBSIDIAN.defaultBlockState(), Block.UPDATE_ALL);
+				if (!level.getBlockState(anchorPos).is(Blocks.CRYING_OBSIDIAN)) {
+					level.setBlock(anchorPos, Blocks.CRYING_OBSIDIAN.defaultBlockState(), Block.UPDATE_ALL);
+				}
 				anomaly.anchors_placed |= bit;
+				if (anomaly.anchor_ys == null || anomaly.anchor_ys.length != 3) {
+					anomaly.anchor_ys = new int[3];
+				}
+				anomaly.anchor_ys[i] = anchorPos.getY();
 				changed = true;
 			}
 		}
@@ -260,10 +271,28 @@ public final class AnomalyNodes {
 		BlockState above = level.getBlockState(pos);
 		// под лавой узлы не ставим: сундук, который нельзя открыть, — не награда;
 		// вода — можно: в океане узлы стоят на дне, и это лучше, чем зона без рейда
-		boolean water = above.getFluidState().is(net.minecraft.tags.FluidTags.WATER);
+		boolean water = above.is(Blocks.WATER);
 		if (above.getFluidState().is(net.minecraft.tags.FluidTags.LAVA)
 				|| !(above.canBeReplaced() || water)) {
 			return null;
+		}
+		return pos;
+	}
+
+	/**
+	 * Место для узла: если блок этого типа уже стоит в колонке (±2 по высоте), усыновляем его —
+	 * так узлы, поставленные до появления записи высот, не задваиваются. Иначе берём поверхность.
+	 */
+	private static BlockPos adoptOrSpot(ServerLevel level, double x, double z, Block block) {
+		BlockPos pos = surface(level, x, z);
+		if (pos == null) {
+			return null;
+		}
+		for (int dy = -2; dy <= 2; dy++) {
+			BlockPos near = pos.offset(0, dy, 0);
+			if (level.getBlockState(near).is(block)) {
+				return near;
+			}
 		}
 		return pos;
 	}
@@ -296,30 +325,15 @@ public final class AnomalyNodes {
 	}
 
 	private static void fillChest(ServerLevel level, Anomaly anomaly, BlockPos pos, double multiplier) {
-		fillChest(level, anomaly, pos, multiplier, true);
-	}
-
-	/** @param clear стирать ли содержимое: награда за рейд не должна съедать вещи игрока */
-	private static void fillChest(ServerLevel level, Anomaly anomaly, BlockPos pos, double multiplier, boolean clear) {
 		if (!(level.getBlockEntity(pos) instanceof ChestBlockEntity chest)) {
 			return;
 		}
-		if (clear) {
-			chest.clearContent();
-		}
+		chest.clearContent();
 		Random rnd = new Random(anomaly.id * 0x2545F4914F6CDD1DL ^ (long) (multiplier * 1000));
 		int slot = 0;
 		for (ItemStack stack : lootFor(AnomalyClass.byId(anomaly.cls), rnd)) {
 			if (slot >= chest.getContainerSize()) {
 				break;
-			}
-			if (!clear) {
-				while (slot < chest.getContainerSize() && !chest.getItem(slot).isEmpty()) {
-					slot++;
-				}
-				if (slot >= chest.getContainerSize()) {
-					break;
-				}
 			}
 			int count = Math.max(1, (int) Math.round(stack.getCount() * multiplier));
 			chest.setItem(slot++, new ItemStack(stack.getItem(), count));
@@ -372,7 +386,8 @@ public final class AnomalyNodes {
 		}
 		// плата — остаток; на потолке она нулевая, и алтарь закрывается,
 		// иначе тотемы льются за опыт без предела
-		if (!canTrade(AnomalyResidue.hours(player.getUUID()), AnomalyMod.config.residue_cap_hours)) {
+		boolean residue = AnomalyMod.config.residue_enabled;
+		if (residue && !canTrade(AnomalyResidue.hours(player.getUUID()), AnomalyMod.config.residue_cap_hours)) {
 			level.playSound(null, player.getX(), player.getY(), player.getZ(),
 					SoundEvents.VILLAGER_NO, SoundSource.BLOCKS, 0.8f, 0.5f);
 			return;
@@ -393,7 +408,9 @@ public final class AnomalyNodes {
 		}
 		player.getInventory().placeItemBackInInventory(prize);
 		// алтарь берёт своё: риск превращается в часы остатка
-		AnomalyResidue.add(player.getUUID(), 1.5 + rnd.nextDouble() * 1.5);
+		if (residue) {
+			AnomalyResidue.add(player.getUUID(), 1.5 + rnd.nextDouble() * 1.5);
+		}
 		level.playSound(null, player.getX(), player.getY(), player.getZ(),
 				SoundEvents.BEACON_ACTIVATE, SoundSource.BLOCKS, 0.9f, 0.6f);
 		level.sendParticles(player, ParticleTypes.ENCHANT, true, true,
@@ -439,12 +456,10 @@ public final class AnomalyNodes {
 			reward = surface(level, zone.coreX(), zone.coreZ());
 		}
 		if (reward != null) {
-			boolean fresh = !level.getBlockState(reward).is(Blocks.CHEST);
-			if (fresh) {
-				level.setBlock(reward, Blocks.CHEST.defaultBlockState()
-						.setValue(ChestBlock.FACING, Direction.SOUTH), Block.UPDATE_ALL);
-			}
-			fillChest(level, anomaly, reward, 1.6, fresh);
+			// surface() не отдаёт место с сундуком, так что это всегда свежая точка
+			level.setBlock(reward, Blocks.CHEST.defaultBlockState()
+					.setValue(ChestBlock.FACING, Direction.SOUTH), Block.UPDATE_ALL);
+			fillChest(level, anomaly, reward, 1.6);
 		}
 		int coreY = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES,
 				(int) Math.floor(zone.coreX()), (int) Math.floor(zone.coreZ()));
@@ -460,11 +475,12 @@ public final class AnomalyNodes {
 
 	private static Anomaly altarAt(ServerLevel level, BlockPos pos) {
 		for (Anomaly anomaly : AnomalyField.all()) {
-			if (!anomaly.nodes_placed || anomaly.remnant) {
+			if (!anomaly.node_altar_ok || anomaly.remnant) {
 				continue;
 			}
 			double[] altar = nodePos(anomaly, baseAngle(anomaly), 0.32);
-			if ((int) Math.floor(altar[0]) == pos.getX() && (int) Math.floor(altar[1]) == pos.getZ()) {
+			if ((int) Math.floor(altar[0]) == pos.getX() && (int) Math.floor(altar[1]) == pos.getZ()
+					&& (int) Math.round(anomaly.node_altar_cy) == pos.getY()) {
 				return anomaly;
 			}
 		}
@@ -484,7 +500,13 @@ public final class AnomalyNodes {
 	}
 
 	private static int anchorIndex(Anomaly anomaly, BlockPos pos) {
+		if (anomaly.anchor_ys == null || anomaly.anchor_ys.length != 3) {
+			return -1;
+		}
 		for (int i = 0; i < 3; i++) {
+			if (anomaly.anchor_ys[i] != pos.getY()) {
+				continue;
+			}
 			double[] anchor = nodePos(anomaly, baseAngle(anomaly) + i * Math.PI * 2.0 / 3.0, 0.62);
 			if ((int) Math.floor(anchor[0]) == pos.getX() && (int) Math.floor(anchor[1]) == pos.getZ()) {
 				return i;
@@ -544,12 +566,16 @@ public final class AnomalyNodes {
 		return spots;
 	}
 
-	/** Отладочная команда: обрушить зону так же, как третий сломанный якорь. Возвращает точку награды. */
-	public static BlockPos collapseNow(ServerLevel level, Anomaly anomaly) {
+	/** Итог коллапса: сработал ли он и где награда (null — места не нашлось). */
+	public record Collapse(boolean done, BlockPos reward) {
+	}
+
+	/** Отладочная команда: обрушить зону так же, как третий сломанный якорь. */
+	public static Collapse collapseNow(ServerLevel level, Anomaly anomaly) {
 		if (anomaly.remnant || !anomaly.nodes_placed) {
-			return null;
+			return new Collapse(false, null);
 		}
-		return collapse(level, anomaly);
+		return new Collapse(true, collapse(level, anomaly));
 	}
 
 	/**
@@ -595,11 +621,11 @@ public final class AnomalyNodes {
 	}
 
 	/**
-	 * Алтарь берёт плату остатком, поэтому у потолка он закрыт: иначе фиксированная «плата»
-	 * ничего не стоит и редкое льётся без предела.
+	 * Алтарь берёт плату остатком, поэтому у потолка он закрыт: иначе плата упирается в потолок,
+	 * стоит ноль и редкое льётся без предела. Оставляем место на полную плату (до 3 ч).
 	 */
 	static boolean canTrade(double hours, double cap) {
-		return Double.isFinite(hours) && Double.isFinite(cap) && cap > 0.0 && hours < cap - 0.01;
+		return Double.isFinite(hours) && Double.isFinite(cap) && cap > PAY_MAX && hours <= cap - PAY_MAX;
 	}
 
 	/** ✓ стоит, × на месте узла другой блок, ? чанк не загружен — проверять нечего. */

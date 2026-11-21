@@ -580,9 +580,8 @@ public final class AnomalyScars {
 				|| state.is(Blocks.ANCIENT_DEBRIS) || state.is(Blocks.REINFORCED_DEEPSLATE)
 				|| state.is(Blocks.BARRIER) || state.is(Blocks.END_PORTAL_FRAME)
 				|| state.is(Blocks.NETHER_PORTAL) || state.is(Blocks.END_PORTAL) || state.is(Blocks.END_GATEWAY)
+				// lodestone — алтарь рейда: следы не должны съедать его, иначе рейд невозможен
 				|| state.is(Blocks.RESPAWN_ANCHOR) || state.is(Blocks.LODESTONE)
-				// алтарь рейда: следы не должны съедать его, иначе рейд невозможен
-				|| state.is(Blocks.SCULK_CATALYST)
 				|| state.is(Blocks.BUDDING_AMETHYST)
 				|| state.is(Blocks.BEACON) || state.is(Blocks.SPAWNER);
 	}

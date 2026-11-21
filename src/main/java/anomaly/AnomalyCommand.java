@@ -392,13 +392,16 @@ public final class AnomalyCommand {
 			reply(source, "Не нашёл зону для коллапса", ChatFormatting.RED);
 			return 0;
 		}
-		BlockPos reward = AnomalyNodes.collapseNow(source.getLevel(), anomaly);
-		if (reward == null) {
+		AnomalyNodes.Collapse collapse = AnomalyNodes.collapseNow(source.getLevel(), anomaly);
+		if (!collapse.done()) {
 			reply(source, "Не вышло: зона уже мертва или узлов нет", ChatFormatting.RED);
 			return 0;
 		}
-		reply(source, "Зона #" + anomaly.id + " схлопнута — мобы вокруг, награда "
-				+ reward.getX() + ", " + reward.getY() + ", " + reward.getZ());
+		BlockPos reward = collapse.reward();
+		reply(source, reward != null
+				? "Зона #" + anomaly.id + " схлопнута — мобы вокруг, награда "
+						+ reward.getX() + ", " + reward.getY() + ", " + reward.getZ()
+				: "Зона #" + anomaly.id + " схлопнута, но места под награду рядом нет");
 		return 1;
 	}
 

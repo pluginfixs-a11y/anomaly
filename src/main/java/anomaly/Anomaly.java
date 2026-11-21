@@ -82,8 +82,11 @@ public final class Anomaly {
 	public double node_r;
 	/** Кладовая поставлена: если её разобрали, раз в 10 минут она возвращается. */
 	public boolean node_cache_ok;
-	/** Алтарь поставлен. */
+	/** Алтарь поставлен и его высота: без y любой lodestone в той же колонке считался бы алтарём. */
 	public boolean node_altar_ok;
+	public double node_altar_cy;
+	/** Высоты поставленных якорей: сверка идёт по x, z и y. */
+	public int[] anchor_ys = new int[3];
 	/** Биты поставленных якорей: каждый появляется сам, когда загружен его чанк. */
 	public int anchors_placed;
 	/** Когда кладовая была поставлена: раз в 10 минут её можно восстановить, если зона жива. */
@@ -316,12 +319,32 @@ public final class Anomaly {
 			anchors_placed = 0;
 		}
 		anchors_broken &= 0x7;
+		if (anchor_ys == null || anchor_ys.length != 3) {
+			anchor_ys = new int[3];
+		}
 		// сломанный якорь обратно не ставим, даже если файл писали до появления anchors_placed
 		anchors_placed |= anchors_broken;
+		// файлы до появления высот: узлы стоят, но какой именно блок — не записано.
+		// Сбрасываем флаги, постановка найдёт блок на месте и усыновит его (новый не появится).
+		if (node_altar_ok && node_altar_cy <= 0.0) {
+			node_altar_ok = false;
+		}
+		if (anchors_placed != 0 && !anyAnchorY()) {
+			anchors_placed = 0;
+		}
 		if (anchors_placed != 0) {
 			nodes_placed = true;
 		}
 		return true;
+	}
+
+	private boolean anyAnchorY() {
+		for (int y : anchor_ys) {
+			if (y != 0) {
+				return true;
+			}
+		}
+		return false;
 	}
 }
 

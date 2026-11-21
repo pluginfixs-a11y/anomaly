@@ -537,32 +537,58 @@ public final class SelfTest {
 			report(result, "тестовая зона для узлов создаётся", false);
 			return;
 		}
+		boolean placed = false;
 		try {
 			AnomalyNodes.placeNow(level, zone);
 			java.util.List<double[]> spots = AnomalyNodes.nodeSpots(zone, zone.node_cx, zone.node_cz, zone.node_r);
-			boolean cache = zone.node_cache_ok && level.getBlockState(
-					new BlockPos((int) Math.floor(spots.get(0)[0]), (int) Math.round(zone.node_cy),
-							(int) Math.floor(spots.get(0)[1]))).is(Blocks.CHEST);
+			BlockPos cachePos = new BlockPos((int) Math.floor(spots.get(0)[0]), (int) Math.round(zone.node_cy),
+					(int) Math.floor(spots.get(0)[1]));
+			boolean cache = zone.node_cache_ok && level.getBlockState(cachePos).is(Blocks.CHEST);
 
 			double[] altar = spots.get(1);
 			int ax = (int) Math.floor(altar[0]);
 			int az = (int) Math.floor(altar[1]);
-			int ay = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, ax, az);
-			boolean catalyst = level.getBlockState(new BlockPos(ax, ay - 1, az)).is(Blocks.SCULK_CATALYST);
+			boolean altarBlock = zone.node_altar_ok && level.getBlockState(
+					new BlockPos(ax, (int) Math.round(zone.node_altar_cy), az)).is(Blocks.LODESTONE);
 
 			int anchors = 0;
-			for (int i = 2; i < spots.size(); i++) {
-				int x = (int) Math.floor(spots.get(i)[0]);
-				int z = (int) Math.floor(spots.get(i)[1]);
-				int y = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, x, z);
-				boolean obsidian = level.getBlockState(new BlockPos(x, y - 1, z)).is(Blocks.CRYING_OBSIDIAN)
-						|| level.getBlockState(new BlockPos(x, y, z)).is(Blocks.CRYING_OBSIDIAN);
-				if (obsidian) {
+			for (int i = 0; i < 3; i++) {
+				double[] spot = spots.get(i + 2);
+				int x = (int) Math.floor(spot[0]);
+				int z = (int) Math.floor(spot[1]);
+				int y = zone.anchor_ys != null && zone.anchor_ys.length == 3 ? zone.anchor_ys[i] : 0;
+				if (y != 0 && level.getBlockState(new BlockPos(x, y, z)).is(Blocks.CRYING_OBSIDIAN)) {
 					anchors++;
 				}
 			}
-			report(result, "кладовая, алтарь и три якоря встали на места", cache && catalyst && anchors == 3);
+			placed = cache && altarBlock && anchors == 3;
+			report(result, "кладовая, алтарь и три якоря встали на места", placed);
 		} finally {
+			// за собой убираем: иначе в тестовом мире остаются сундук, алтарь и три обсидиана
+			java.util.List<double[]> spots = AnomalyNodes.nodeSpots(zone, zone.node_cx, zone.node_cz, zone.node_r);
+			java.util.List<BlockPos> touched = new java.util.ArrayList<>(5);
+			if (zone.node_cache_ok) {
+				touched.add(new BlockPos((int) Math.floor(spots.get(0)[0]), (int) Math.round(zone.node_cy),
+						(int) Math.floor(spots.get(0)[1])));
+			}
+			if (zone.node_altar_ok) {
+				touched.add(new BlockPos((int) Math.floor(spots.get(1)[0]),
+						(int) Math.round(zone.node_altar_cy), (int) Math.floor(spots.get(1)[1])));
+			}
+			for (int i = 0; i < 3 && zone.anchor_ys != null && zone.anchor_ys.length == 3; i++) {
+				if (zone.anchor_ys[i] != 0) {
+					touched.add(new BlockPos((int) Math.floor(spots.get(i + 2)[0]), zone.anchor_ys[i],
+							(int) Math.floor(spots.get(i + 2)[1])));
+				}
+			}
+			for (BlockPos pos : touched) {
+				level.setBlock(pos, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
+			}
+			boolean clean = true;
+			for (BlockPos pos : touched) {
+				clean &= level.getBlockState(pos).isAir();
+			}
+			report(result, "за собой узлы убираются", clean && !touched.isEmpty());
 			AnomalyField.remove(zone.id);
 		}
 	}
@@ -1099,10 +1125,12 @@ public final class SelfTest {
 		report(result, "лут есть у всех трёх классов", allLoot);
 
 		// плата алтаря — остаток: на потолке обмен закрыт
-		report(result, "алтарь закрыт на потолке остатка",
-				AnomalyNodes.canTrade(0.0, 24.0) && AnomalyNodes.canTrade(23.5, 24.0)
-						&& !AnomalyNodes.canTrade(24.0, 24.0) && !AnomalyNodes.canTrade(24.1, 24.0)
-						&& !AnomalyNodes.canTrade(Double.NaN, 24.0) && !AnomalyNodes.canTrade(1.0, 0.0));
+		report(result, "алтарь закрыт, когда плата упрётся в потолок",
+				AnomalyNodes.canTrade(0.0, 24.0) && AnomalyNodes.canTrade(20.9, 24.0)
+						&& AnomalyNodes.canTrade(21.0, 24.0) && !AnomalyNodes.canTrade(21.5, 24.0)
+						&& !AnomalyNodes.canTrade(23.9, 24.0)
+						&& !AnomalyNodes.canTrade(24.0, 24.0) && !AnomalyNodes.canTrade(Double.NaN, 24.0)
+						&& !AnomalyNodes.canTrade(1.0, 0.0) && !AnomalyNodes.canTrade(1.0, 2.0));
 
 		// сломанный якорь не ставится заново после рестарта
 		Anomaly raided = new Anomaly();
@@ -1110,6 +1138,7 @@ public final class SelfTest {
 		raided.node_cz = 10.0;
 		raided.node_r = 100.0;
 		raided.anchors_broken = 0b101;
+		raided.anchor_ys = new int[]{40, 0, 44};
 		report(result, "сломанные якоря остаются сломанными", raided.valid()
 				&& raided.anchors_placed == 0b101 && raided.nodes_placed);
 	}
