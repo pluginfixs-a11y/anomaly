@@ -22,6 +22,12 @@ public final class AnomalyState {
 	public int lastStep = 10;
 	/** Накопитель для урона давлением: бьёт раз в 20 с, а не раз в вызов. */
 	public int damageTicks;
+	/** Последняя позиция и время: по ним восстанавливается реальная скорость игрока перед толчком. */
+	public double lastX;
+	public double lastY;
+	public double lastZ;
+	public long lastMoveMs;
+	public boolean hasLast;
 
 	/** Шаг внутрь аномалии: прирост пропорционален силе аномалии и времени. */
 	public void enter(Zone zone, double seconds, AnomalyConfig config) {

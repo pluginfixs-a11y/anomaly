@@ -507,6 +507,134 @@ public final class AnomalyScars {
 				|| state.is(Blocks.BEACON) || state.is(Blocks.SPAWNER);
 	}
 
+	// --- микрособытия: то, что делает мир живым между большими следами ---
+
+	/**
+	 * Маленький кратер от хлопка или молнии: 1–2 блока в глубину, обломки на дне.
+	 * Живёт только возле игрока, где чанк уже загружен, и подчиняется тем же запретам, что следы.
+	 */
+	public static int microCrater(ServerLevel level, double x, double z, double radius, int depth) {
+		int bx = (int) Math.floor(x);
+		int bz = (int) Math.floor(z);
+		if (!level.getChunkSource().hasChunk(bx >> 4, bz >> 4)) {
+			return 0;
+		}
+		BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
+		int side = (int) Math.ceil(radius);
+		int changed = 0;
+		for (int dx = -side; dx <= side; dx++) {
+			for (int dz = -side; dz <= side; dz++) {
+				if (dx * dx + dz * dz > radius * radius) {
+					continue;
+				}
+				int x0 = bx + dx;
+				int z0 = bz + dz;
+				if (!level.getChunkSource().hasChunk(x0 >> 4, z0 >> 4)) {
+					continue;
+				}
+				int surface = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, x0, z0);
+				if (surface <= level.getMinY() + 3 || surface >= level.getMaxY() - 2) {
+					continue;
+				}
+				BlockState ground = level.getBlockState(pos.set(x0, surface - 1, z0));
+				if (protectedBlock(ground) || builtBlock(ground) || isFragileSurface(ground)
+						|| !ground.getFluidState().isEmpty()) {
+					continue;
+				}
+				clearPlant(level, x0, surface, z0);
+				for (int i = 0; i < depth; i++) {
+					int y = surface - 1 - i;
+					if (y <= level.getMinY() + 2) {
+						break;
+					}
+					BlockState state = level.getBlockState(pos.set(x0, y, z0));
+					if (protectedBlock(state)) {
+						break;
+					}
+					level.setBlock(pos, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
+					changed++;
+				}
+				// дно воронки: обломки, а не дыра в темноту
+				int floorY = Math.max(level.getMinY() + 1, surface - depth - 1);
+				level.setBlock(pos.set(x0, floorY, z0), Blocks.COBBLESTONE.defaultBlockState(), Block.UPDATE_ALL);
+				changed++;
+			}
+		}
+		return changed;
+	}
+
+	/** Гарь от молнии: мёртвая земля и снесённые растения в маленьком пятне. */
+	public static int scorch(ServerLevel level, double x, double z, double radius) {
+		int bx = (int) Math.floor(x);
+		int bz = (int) Math.floor(z);
+		if (!level.getChunkSource().hasChunk(bx >> 4, bz >> 4)) {
+			return 0;
+		}
+		int side = (int) Math.ceil(radius);
+		int changed = 0;
+		for (int dx = -side; dx <= side; dx++) {
+			for (int dz = -side; dz <= side; dz++) {
+				if (dx * dx + dz * dz > radius * radius) {
+					continue;
+				}
+				int x0 = bx + dx;
+				int z0 = bz + dz;
+				if (!level.getChunkSource().hasChunk(x0 >> 4, z0 >> 4)) {
+					continue;
+				}
+				int surface = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, x0, z0);
+				if (surface <= level.getMinY() + 3 || surface >= level.getMaxY() - 2) {
+					continue;
+				}
+				BlockState ground = level.getBlockState(new BlockPos(x0, surface - 1, z0));
+				if (protectedBlock(ground) || builtBlock(ground) || isFragileSurface(ground)
+						|| !ground.getFluidState().isEmpty()) {
+					continue;
+				}
+				changed += deadSoil(level, x0, surface, z0);
+			}
+		}
+		return changed;
+	}
+
+	/** Наледь от холода: слой снега на твёрдой земле. Тает от прикосновения, как всё остальное. */
+	public static int frost(ServerLevel level, double x, double z, double radius) {
+		int bx = (int) Math.floor(x);
+		int bz = (int) Math.floor(z);
+		if (!level.getChunkSource().hasChunk(bx >> 4, bz >> 4)) {
+			return 0;
+		}
+		int side = (int) Math.ceil(radius);
+		int changed = 0;
+		for (int dx = -side; dx <= side; dx++) {
+			for (int dz = -side; dz <= side; dz++) {
+				if (dx * dx + dz * dz > radius * radius) {
+					continue;
+				}
+				int x0 = bx + dx;
+				int z0 = bz + dz;
+				if (!level.getChunkSource().hasChunk(x0 >> 4, z0 >> 4)) {
+					continue;
+				}
+				int surface = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, x0, z0);
+				if (surface <= level.getMinY() + 3 || surface >= level.getMaxY() - 2) {
+					continue;
+				}
+				BlockState ground = level.getBlockState(new BlockPos(x0, surface - 1, z0));
+				if (protectedBlock(ground) || builtBlock(ground) || isFragileSurface(ground)
+						|| !ground.getFluidState().isEmpty() || !ground.blocksMotion()) {
+					continue;
+				}
+				if (level.getBlockState(new BlockPos(x0, surface, z0)).isAir()) {
+					level.setBlock(new BlockPos(x0, surface, z0), Blocks.SNOW.defaultBlockState(),
+							Block.UPDATE_ALL);
+					changed++;
+				}
+			}
+		}
+		return changed;
+	}
+
 	/** Сколько блоков ещё в очереди: для команды и для тестов. */
 	public static int pendingBlocks(Anomaly anomaly) {
 		if (anomaly.scars == null || anomaly.scar_next >= anomaly.scars.size()) {

@@ -333,8 +333,8 @@ public enum AnomalyComponent {
 					player.hurt(level.damageSources().magic(), (float) (0.5 * dose * intensity));
 				}
 			}
-			case TRACTION -> AnomalyEffects.shoveTowards(player, zone, 0.02 + 0.05 * dose);
-			case REPULSION -> AnomalyEffects.shoveAway(player, zone, 0.02 + 0.05 * dose);
+			case TRACTION -> AnomalyEffects.shoveTowards(player, zone, 0.02 + 0.05 * dose, state);
+			case REPULSION -> AnomalyEffects.shoveAway(player, zone, 0.02 + 0.05 * dose, state);
 			default -> {
 				// видимые в apply ничего не делают; DRIP и NIGHT_TOLL работают через pulse/множитель
 			}
@@ -377,6 +377,10 @@ public enum AnomalyComponent {
 					level.sendParticles(player, ParticleTypes.EXPLOSION, true, true, x, y, z, 1, 0.0, 0.0, 0.0, 0.0);
 					// радиус слышимости ванильного звука = max(16, 16·vol): 0.35 до игрока не доходил
 					level.playSound(null, x, y, z, SoundEvents.GENERIC_EXPLODE.value(), SoundSource.AMBIENT, 1.6f, 1.6f);
+					// хлопок — не только картинка: маленькая воронка на 1–2 блока
+					if (AnomalyMod.config.scar_enabled) {
+						AnomalyScars.microCrater(level, x, z, 0.8 + rnd.nextDouble() * 0.8, 1 + rnd.nextInt(2));
+					}
 				}
 			}
 			case STORM_CORE -> {
@@ -384,6 +388,13 @@ public enum AnomalyComponent {
 					double x = player.getX() + (rnd.nextDouble() - 0.5) * 32.0;
 					double z = player.getZ() + (rnd.nextDouble() - 0.5) * 32.0;
 					AnomalyEffects.visualBolt(level, x, surfaceOr(level, x, z, player.getY()), z);
+					// молния оставляет гарь, а иногда и воронку: следы, которые видно потом
+					if (AnomalyMod.config.scar_enabled) {
+						AnomalyScars.scorch(level, x, z, 1.5 + rnd.nextDouble());
+						if (rnd.nextInt(3) == 0) {
+							AnomalyScars.microCrater(level, x, z, 0.7, 1);
+						}
+					}
 				}
 			}
 			case GLOW_ALL -> {
@@ -427,6 +438,12 @@ public enum AnomalyComponent {
 								player.getZ() + (rnd.nextDouble() - 0.5) * 8.0,
 								1, 0.0, -0.01, 0.0, 0.0);
 					}
+					// наледь остаётся на земле: раз в ~20 с маленькое пятно снега
+					if (AnomalyMod.config.scar_enabled && rnd.nextInt(40) == 0) {
+						AnomalyScars.frost(level,
+								player.getX() + (rnd.nextDouble() - 0.5) * 8.0,
+								player.getZ() + (rnd.nextDouble() - 0.5) * 8.0, 2.5);
+					}
 				}
 			}
 			case PRESSURE -> {
@@ -436,6 +453,12 @@ public enum AnomalyComponent {
 							player.getX() + (rnd.nextDouble() - 0.5) * 6.0,
 							player.getY() + 1.0 + rnd.nextDouble() * 2.0,
 							player.getZ() + (rnd.nextDouble() - 0.5) * 6.0, 6, 0.0, 0.0, 0.0, 0.15);
+				}
+				// давление проламывает пол на один блок: раз в ~20 с
+				if (AnomalyMod.config.scar_enabled && rnd.nextInt(40) == 0) {
+					AnomalyScars.microCrater(level,
+							player.getX() + (rnd.nextDouble() - 0.5) * 6.0,
+							player.getZ() + (rnd.nextDouble() - 0.5) * 6.0, 0.6, 1);
 				}
 			}
 			default -> {

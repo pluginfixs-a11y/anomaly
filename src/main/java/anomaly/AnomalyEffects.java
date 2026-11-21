@@ -133,37 +133,72 @@ public final class AnomalyEffects {
 	// --- движение ---
 
 	/** Тяга: к ядру, а не к геометрическому центру — ядро смещено и ползёт. */
-	static void shoveTowards(ServerPlayer player, Zone zone, double force) {
+	static void shoveTowards(ServerPlayer player, Zone zone, double force, AnomalyState state) {
 		double dx = zone.coreX() - player.getX();
 		double dz = zone.coreZ() - player.getZ();
 		double length = Math.hypot(dx, dz);
 		if (length < 0.5) {
 			return;
 		}
-		shove(player, dx / length * force, dz / length * force);
+		shove(player, dx / length * force, dz / length * force, state);
 	}
 
-	static void shoveAway(ServerPlayer player, Zone zone, double force) {
+	static void shoveAway(ServerPlayer player, Zone zone, double force, AnomalyState state) {
 		double dx = player.getX() - zone.coreX();
 		double dz = player.getZ() - zone.coreZ();
 		double length = Math.hypot(dx, dz);
 		if (length < 0.5) {
 			// в самом ядре нечего делить — толкаем в случайную сторону
 			double angle = player.getRandom().nextDouble() * Math.PI * 2.0;
-			shove(player, Math.cos(angle) * force, Math.sin(angle) * force);
+			shove(player, Math.cos(angle) * force, Math.sin(angle) * force, state);
 			return;
 		}
-		shove(player, dx / length * force, dz / length * force);
+		shove(player, dx / length * force, dz / length * force, state);
 	}
 
 	/**
-	 * Толчок игрока. Одного {@code push} мало: клиент — хозяин своей позиции, а
-	 * {@code ChunkMap$TrackedEntity.updatePlayer} для самого игрока выходит сразу
-	 * ({@code if (player == entity) return}), поэтому скорость надо отправить пакетом —
-	 * ровно так же, как это делает ванильный взрыв.
+	 * Толчок, который **не обнуляет** скорость.
+	 * <p>
+	 * Сервер не знает реальную скорость игрока: позицией владеет клиент, а
+	 * {@code ClientboundSetEntityMotionPacket} задаёт вектор движения целиком. Прошлая версия
+	 * прибавляла тягу к почти нулевому серверному вектору и отправляла его — бегущий игрок каждые
+	 * полсекунды останавливался и получал пинок. Поэтому скорость восстанавливается по смещению
+	 * с прошлого эффектного тика (позиция на сервере всё-таки точная) и только потом к ней
+	 * прибавляется тяга.
 	 */
-	private static void shove(ServerPlayer player, double dx, double dz) {
-		player.push(dx, 0.0, dz);
+	private static void shove(ServerPlayer player, double dx, double dz, AnomalyState state) {
+		long now = System.currentTimeMillis();
+		double vx = 0.0;
+		double vy = 0.0;
+		double vz = 0.0;
+		if (state.hasLast) {
+			long elapsed = now - state.lastMoveMs;
+			// от 1 до 20 тиков: минутный разрыв не должен превращаться в реактивный старт
+			double ticks = Math.max(1.0, Math.min(20.0, elapsed / 50.0));
+			vx = (player.getX() - state.lastX) / ticks;
+			vy = (player.getY() - state.lastY) / ticks;
+			vz = (player.getZ() - state.lastZ) / ticks;
+		}
+		state.lastX = player.getX();
+		state.lastY = player.getY();
+		state.lastZ = player.getZ();
+		state.lastMoveMs = now;
+		state.hasLast = true;
+
+		double nx = vx + dx;
+		double nz = vz + dz;
+		// потолок: не больше 1.2 блока за тик (24 м/с) и не больше +0.3 к текущей скорости —
+		// так бег сохраняется, элитры не тормозят, а накопления «тяга + тяга» не бывает
+		double base = Math.hypot(vx, vz);
+		double speed = Math.hypot(nx, nz);
+		double cap = Math.max(base + 0.3, 1.2);
+		if (speed > cap) {
+			nx = nx / speed * cap;
+			nz = nz / speed * cap;
+		}
+		// вертикаль оставляем как была (в разумных пределах): иначе прыжок и падение рвутся
+		double ny = Math.max(-4.0, Math.min(0.6, vy));
+		player.setDeltaMovement(nx, ny, nz);
 		if (player.connection != null) {
 			player.connection.send(new ClientboundSetEntityMotionPacket(player));
 		}

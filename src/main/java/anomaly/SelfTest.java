@@ -601,6 +601,41 @@ public final class SelfTest {
 			report(result, "трещина валит дерево, а не копает ствол",
 					treeGone(level, tx2, tree2Surface, bz));
 			restore(level, tree2Before);
+
+			// микрособытия: воронка от хлопка, наледь от холода, гарь от молнии
+			int mx = bx + 176;
+			level.getChunk(mx >> 4, bz >> 4);
+			int microSurface = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, mx, bz);
+			Map<BlockPos, BlockState> microBefore = snapshot(level, mx, bz, 3, microSurface - 4, microSurface + 2);
+			snapshots.add(microBefore);
+			level.setBlock(new BlockPos(mx, microSurface - 1, bz), Blocks.STONE.defaultBlockState(), Block.UPDATE_ALL);
+			AnomalyScars.microCrater(level, mx, bz, 0.6, 1);
+			report(result, "хлопок проламывает землю на блок",
+					level.getBlockState(new BlockPos(mx, microSurface - 1, bz)).isAir()
+							&& level.getBlockState(new BlockPos(mx, microSurface - 2, bz)).is(Blocks.COBBLESTONE));
+			restore(level, microBefore);
+
+			int fx = bx + 192;
+			level.getChunk(fx >> 4, bz >> 4);
+			int frostSurface = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, fx, bz);
+			Map<BlockPos, BlockState> frostBefore = snapshot(level, fx, bz, 3, frostSurface - 2, frostSurface + 2);
+			snapshots.add(frostBefore);
+			level.setBlock(new BlockPos(fx, frostSurface - 1, bz), Blocks.GRASS_BLOCK.defaultBlockState(), Block.UPDATE_ALL);
+			AnomalyScars.frost(level, fx, bz, 1.5);
+			report(result, "холод оставляет наледь",
+					level.getBlockState(new BlockPos(fx, frostSurface, bz)).is(Blocks.SNOW));
+			restore(level, frostBefore);
+
+			int gx = bx + 208;
+			level.getChunk(gx >> 4, bz >> 4);
+			int scorchSurface = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, gx, bz);
+			Map<BlockPos, BlockState> scorchBefore = snapshot(level, gx, bz, 3, scorchSurface - 2, scorchSurface + 2);
+			snapshots.add(scorchBefore);
+			level.setBlock(new BlockPos(gx, scorchSurface - 1, bz), Blocks.GRASS_BLOCK.defaultBlockState(), Block.UPDATE_ALL);
+			AnomalyScars.scorch(level, gx, bz, 1.5);
+			report(result, "молния выжигает землю",
+					level.getBlockState(new BlockPos(gx, scorchSurface - 1, bz)).is(Blocks.COARSE_DIRT));
+			restore(level, scorchBefore);
 		} finally {
 			// исключение внутри кейса не должно оставить тестовые блоки в мире
 			for (Map<BlockPos, BlockState> states : snapshots) {
