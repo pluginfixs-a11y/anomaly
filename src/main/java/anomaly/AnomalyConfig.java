@@ -152,6 +152,7 @@ public class AnomalyConfig {
 		if (view_range < 64) {
 			// 0.2.0-alpha2 писал сюда 48: с такой дальностью зону не видно вообще
 			view_range = 128;
+			AnomalyMod.LOGGER.info("Anomaly: view_range < 64, поднят до 128 — иначе край зоны не виден");
 		}
 		if (danger_from < spawn_min_radius) {
 			danger_from = spawn_min_radius;

@@ -47,8 +47,9 @@ public final class AnomalyEffects {
 		if (zone.signedDistance(player.getX(), player.getZ()) > config.view_range) {
 			return;
 		}
-		// край видно у любой зоны: пыль цвета зоны; light_wall потом делает её плотнее
-		edgeBand(level, player, zone, config.view_range, 2.0f);
+		// light_wall не рисует вторую дугу поверх первой: он просто делает ту же стену выше и ярче
+		boolean wall = zone.components().contains(AnomalyComponent.LIGHT_WALL);
+		edgeBand(level, player, zone, config.view_range, wall ? 2.6f : 2.0f, wall ? 6 : 3, wall ? 4.0 : 1.5);
 		mood(level, player, zone);
 		for (AnomalyComponent component : zone.components()) {
 			component.pulse(level, player, zone, config, state);
@@ -75,10 +76,12 @@ public final class AnomalyEffects {
 	 * <p>
 	 * Шаг ~4 блока (10 точек на дугу 192 блока — это пунктир, а не стена), высота каждой точки —
 	 * по рельефу: на склоне дуга иначе уходит в землю или висит в воздухе. `count` разбрасывает
-	 * частицы по вертикали, получается полоса стены. Chunk-и не грузим: в незагруженном чанке
-	 * {@code getHeight} отдаёт дно мира, а косметика не стоит генерации.
+	 * частицы по вертикали, получается полоса стены. Пакет адресован одному игроку: общая рассылка
+	 * уходила бы всем в измерении, а `overrideLimiter` ещё и на 512 блоков. Chunk-и не грузим:
+	 * в незагруженном чанке {@code getHeight} отдаёт дно мира, а косметика не стоит генерации.
 	 */
-	static void edgeBand(ServerLevel level, ServerPlayer player, Zone zone, double reach, float scale) {
+	static void edgeBand(ServerLevel level, ServerPlayer player, Zone zone, double reach, float scale,
+			int count, double spread) {
 		double radius = zone.radius();
 		if (radius < 1.0) {
 			return;
@@ -86,7 +89,7 @@ public final class AnomalyEffects {
 		double toPlayer = Math.atan2(player.getZ() - zone.z(), player.getX() - zone.x());
 		double half = radius <= reach ? Math.PI : Math.asin(Math.min(1.0, reach / radius));
 		double arc = 2.0 * half * radius;
-		int points = Math.max(24, Math.min(96, (int) (arc / 4.0)));
+		int points = Math.max(24, Math.min(64, (int) (arc / 4.0)));
 		var color = new net.minecraft.core.particles.DustParticleOptions(zone.edgeColor(), scale);
 		var rnd = player.getRandom();
 		for (int i = 0; i < points; i++) {
@@ -101,7 +104,7 @@ public final class AnomalyEffects {
 				continue;
 			}
 			double y = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, bx, bz) + 0.6;
-			level.sendParticles(color, true, true, point[0], y, point[1], 3, 0.0, 1.5, 0.0, 0.0);
+			level.sendParticles(player, color, true, true, point[0], y, point[1], count, 0.0, spread, 0.0, 0.0);
 		}
 	}
 

@@ -100,10 +100,10 @@ public final class AnomalyDebug {
 			if (Double.isNaN(y)) {
 				continue;
 			}
-			level.sendParticles(edge, true, true, point[0], y + 0.6, point[1], 2, 0.0, 1.2, 0.0, 0.0);
+			level.sendParticles(player, edge, true, true, point[0], y + 0.6, point[1], 2, 0.0, 1.2, 0.0, 0.0);
 			if ((i & 7) == 0) {
 				// редкие точки выше — чтобы край читался как стена, а не как линия на земле
-				level.sendParticles(edge, true, true, point[0], y + 3.0, point[1], 1, 0.0, 0.0, 0.0, 0.0);
+				level.sendParticles(player, edge, true, true, point[0], y + 3.0, point[1], 1, 0.0, 0.0, 0.0, 0.0);
 			}
 		}
 
@@ -114,7 +114,7 @@ public final class AnomalyDebug {
 			double y = surfaceY(level, zone.coreX(), zone.coreZ());
 			if (!Double.isNaN(y)) {
 				for (int i = 0; i < 4; i++) {
-					level.sendParticles(core, true, true, zone.coreX(), y + 0.6 + i, zone.coreZ(),
+					level.sendParticles(player, core, true, true, zone.coreX(), y + 0.6 + i, zone.coreZ(),
 							1, 0.0, 0.0, 0.0, 0.0);
 				}
 			}
@@ -122,7 +122,7 @@ public final class AnomalyDebug {
 			double y = surfaceY(level, zone.coreX(), zone.coreZ());
 			if (!Double.isNaN(y)) {
 				for (int i = 2; i <= 26; i += 3) {
-					level.sendParticles(net.minecraft.core.particles.ParticleTypes.END_ROD, true, true,
+					level.sendParticles(player, net.minecraft.core.particles.ParticleTypes.END_ROD, true, true,
 							zone.coreX(), y + i, zone.coreZ(), 1, 0.0, 0.0, 0.0, 0.0);
 				}
 			}
@@ -149,15 +149,15 @@ public final class AnomalyDebug {
 			if (Double.isNaN(y)) {
 				continue;
 			}
-			level.sendParticles(edge, true, true, x, y + 1.2, z, 2, 0.0, 0.8, 0.0, 0.0);
+			level.sendParticles(player, edge, true, true, x, y + 1.2, z, 2, 0.0, 0.8, 0.0, 0.0);
 			if (i == 8) {
 				// перекладина у острия: без неё стрелка читается как ещё одна линия контура
 				double leftX = x + Math.cos(heading + Math.PI * 0.75) * 4.0;
 				double leftZ = z + Math.sin(heading + Math.PI * 0.75) * 4.0;
 				double rightX = x + Math.cos(heading - Math.PI * 0.75) * 4.0;
 				double rightZ = z + Math.sin(heading - Math.PI * 0.75) * 4.0;
-				level.sendParticles(edge, true, true, leftX, y + 1.2, leftZ, 2, 0.0, 0.8, 0.0, 0.0);
-				level.sendParticles(edge, true, true, rightX, y + 1.2, rightZ, 2, 0.0, 0.8, 0.0, 0.0);
+				level.sendParticles(player, edge, true, true, leftX, y + 1.2, leftZ, 2, 0.0, 0.8, 0.0, 0.0);
+				level.sendParticles(player, edge, true, true, rightX, y + 1.2, rightZ, 2, 0.0, 0.8, 0.0, 0.0);
 			}
 		}
 	}

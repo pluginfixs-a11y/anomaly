@@ -348,7 +348,10 @@ public enum AnomalyComponent {
 	public void pulse(ServerLevel level, ServerPlayer player, Zone zone, AnomalyConfig config, AnomalyState state) {
 		var rnd = player.getRandom();
 		switch (this) {
-			case LIGHT_WALL -> lightWall(level, player, zone, rnd);
+			case LIGHT_WALL -> {
+				// стену рисует ambience: он знает, что у зоны есть light_wall, и делает дугу выше,
+				// а второй проход по тем же точкам — это двойные пакеты без нового вида
+			}
 			case ASH_FALL -> {
 				// пепел падает сверху и виден только под открытым небом: в пещере он появлялся бы
 				// в камне над головой, где его никто не увидит
@@ -359,7 +362,7 @@ public enum AnomalyComponent {
 					break;
 				}
 				for (int i = 0; i < 6; i++) {
-					level.sendParticles(ParticleTypes.ASH, true, true,
+					level.sendParticles(player, ParticleTypes.ASH, true, true,
 							player.getX() + (rnd.nextDouble() - 0.5) * 8.0,
 							player.getY() + 3.0 + rnd.nextDouble() * 3.0,
 							player.getZ() + (rnd.nextDouble() - 0.5) * 8.0,
@@ -371,7 +374,7 @@ public enum AnomalyComponent {
 					double x = player.getX() + (rnd.nextDouble() - 0.5) * 24.0;
 					double z = player.getZ() + (rnd.nextDouble() - 0.5) * 24.0;
 					double y = surfaceOr(level, x, z, player.getY()) + 1.0;
-					level.sendParticles(ParticleTypes.EXPLOSION, true, true, x, y, z, 1, 0.0, 0.0, 0.0, 0.0);
+					level.sendParticles(player, ParticleTypes.EXPLOSION, true, true, x, y, z, 1, 0.0, 0.0, 0.0, 0.0);
 					// радиус слышимости ванильного звука = max(16, 16·vol): 0.35 до игрока не доходил
 					level.playSound(null, x, y, z, SoundEvents.GENERIC_EXPLODE.value(), SoundSource.AMBIENT, 1.6f, 1.6f);
 				}
@@ -418,7 +421,7 @@ public enum AnomalyComponent {
 				// холод видно: редкие снежинки вокруг того, кто внутри
 				if (zone.signedDistance(player.getX(), player.getZ()) <= 0.0) {
 					for (int i = 0; i < 2; i++) {
-						level.sendParticles(ParticleTypes.SNOWFLAKE, true, true,
+						level.sendParticles(player, ParticleTypes.SNOWFLAKE, true, true,
 								player.getX() + (rnd.nextDouble() - 0.5) * 8.0,
 								player.getY() + rnd.nextDouble() * 3.0,
 								player.getZ() + (rnd.nextDouble() - 0.5) * 8.0,
@@ -429,7 +432,7 @@ public enum AnomalyComponent {
 			case PRESSURE -> {
 				// 1/8 при 2 Гц — раз в 4 с; 2 искры раз в 10 с на глаз не читались
 				if (rnd.nextInt(8) == 0) {
-					level.sendParticles(ParticleTypes.CRIT, true, true,
+					level.sendParticles(player, ParticleTypes.CRIT, true, true,
 							player.getX() + (rnd.nextDouble() - 0.5) * 6.0,
 							player.getY() + 1.0 + rnd.nextDouble() * 2.0,
 							player.getZ() + (rnd.nextDouble() - 0.5) * 6.0, 6, 0.0, 0.0, 0.0, 0.15);
@@ -438,12 +441,6 @@ public enum AnomalyComponent {
 			default -> {
 			}
 		}
-	}
-
-	/** Стена по краю: плотная дуга из пыли цвета зоны (базовая есть у всех, эта — ярче и гуще). */
-	private static void lightWall(ServerLevel level, ServerPlayer player, Zone zone,
-			net.minecraft.util.RandomSource rnd) {
-		AnomalyEffects.edgeBand(level, player, zone, 128.0, 2.6f);
 	}
 
 	/** Высота рельефа для точки или запасное значение, если чанк не загружен. */

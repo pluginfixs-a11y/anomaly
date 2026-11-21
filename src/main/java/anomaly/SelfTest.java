@@ -467,6 +467,13 @@ public final class SelfTest {
 						&& AnomalyScars.protectedBlock(Blocks.CHEST.defaultBlockState())
 						&& AnomalyScars.protectedBlock(Blocks.BEDROCK.defaultBlockState())
 						&& !AnomalyScars.protectedBlock(Blocks.STONE.defaultBlockState()));
+
+		report(result, "постройки отличаются от рельефа",
+				AnomalyScars.builtBlock(Blocks.OAK_PLANKS.defaultBlockState())
+						&& AnomalyScars.builtBlock(Blocks.STONE_BRICKS.defaultBlockState())
+						&& AnomalyScars.builtBlock(Blocks.GLASS.defaultBlockState())
+						&& !AnomalyScars.builtBlock(Blocks.STONE.defaultBlockState())
+						&& !AnomalyScars.builtBlock(Blocks.DIRT.defaultBlockState()));
 	}
 
 	// --- следы разрушения вживую (правит блоки, только при явно включённой самопроверке) ---
@@ -475,97 +482,160 @@ public final class SelfTest {
 		ServerLevel level = server.overworld();
 		int bx = 512;
 		int bz = 512;
-		level.getChunk(bx >> 4, bz >> 4);
-		level.getChunk((bx + 64) >> 4, bz >> 4);
+		List<Map<BlockPos, BlockState>> snapshots = new ArrayList<>();
+		try {
+			level.getChunk(bx >> 4, bz >> 4);
+			level.getChunk((bx + 64) >> 4, bz >> 4);
 
-		// мёртвая земля: трава становится грубой, растение уходит
-		int surface = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, bx, bz);
-		Map<BlockPos, BlockState> before = snapshot(level, bx, bz, 1, surface - 2, surface + 2);
-		level.setBlock(new BlockPos(bx, surface - 1, bz), Blocks.GRASS_BLOCK.defaultBlockState(), Block.UPDATE_ALL);
-		level.setBlock(new BlockPos(bx, surface, bz), Blocks.SHORT_GRASS.defaultBlockState(), Block.UPDATE_ALL);
-		AnomalyScars.applyColumn(level, ScarOp.disk("dead_soil", bx, surface, bz, 7L), bx, bz);
-		report(result, "мёртвая земля: трава → грубая земля",
-				level.getBlockState(new BlockPos(bx, surface - 1, bz)).is(Blocks.COARSE_DIRT));
-		report(result, "мёртвая земля: растение снесено",
-				level.getBlockState(new BlockPos(bx, surface, bz)).isAir());
-		restore(level, before);
+			// мёртвая земля: трава становится грубой, растение уходит
+			int surface = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, bx, bz);
+			Map<BlockPos, BlockState> before = snapshot(level, bx, bz, 1, surface - 2, surface + 2);
+			snapshots.add(before);
+			level.setBlock(new BlockPos(bx, surface - 1, bz), Blocks.GRASS_BLOCK.defaultBlockState(), Block.UPDATE_ALL);
+			level.setBlock(new BlockPos(bx, surface, bz), Blocks.SHORT_GRASS.defaultBlockState(), Block.UPDATE_ALL);
+			AnomalyScars.applyColumn(level, ScarOp.disk("dead_soil", bx, surface, bz, 7L), bx, bz);
+			report(result, "мёртвая земля: трава → грубая земля",
+					level.getBlockState(new BlockPos(bx, surface - 1, bz)).is(Blocks.COARSE_DIRT));
+			report(result, "мёртвая земля: растение снесено",
+					level.getBlockState(new BlockPos(bx, surface, bz)).isAir());
+			restore(level, before);
 
-		// пик поднимает колонку
-		int sx = bx + 32;
-		int spikeSurface = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, sx, bz);
-		Map<BlockPos, BlockState> spikeBefore = snapshot(level, sx, bz, 8, spikeSurface - 1, spikeSurface + 24);
-		level.setBlock(new BlockPos(sx, spikeSurface - 1, bz), Blocks.STONE.defaultBlockState(), Block.UPDATE_ALL);
-		AnomalyScars.applyColumn(level, ScarOp.spike(sx, bz, 3.0, 14, 11L), sx, bz);
-		int spikeAfter = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, sx, bz);
-		report(result, "пик поднимает колонку на " + (spikeAfter - spikeSurface) + " блоков",
-				spikeAfter >= spikeSurface + 4);
-		restore(level, spikeBefore);
+			// обломки берут материал грунта, а не булыжник посреди песка
+			int rx = bx + 16;
+			level.getChunk(rx >> 4, bz >> 4);
+			int rubbleSurface = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, rx, bz);
+			Map<BlockPos, BlockState> rubbleBefore = snapshot(level, rx, bz, 1, rubbleSurface - 2, rubbleSurface + 2);
+			snapshots.add(rubbleBefore);
+			level.setBlock(new BlockPos(rx, rubbleSurface - 1, bz), Blocks.SAND.defaultBlockState(), Block.UPDATE_ALL);
+			AnomalyScars.applyColumn(level, ScarOp.disk("rubble", rx, rubbleSurface, bz, 9L), rx, bz);
+			BlockState rubble = level.getBlockState(new BlockPos(rx, rubbleSurface - 1, bz));
+			report(result, "обломки в песке — песчаник или гравий, а не булыжник",
+					rubble.is(Blocks.SANDSTONE) || rubble.is(Blocks.GRAVEL));
+			restore(level, rubbleBefore);
 
-		// трещина выедает колонку
-		int cx = bx + 64;
-		int crackSurface = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, cx, bz);
-		Map<BlockPos, BlockState> crackBefore = snapshot(level, cx, bz, 2, crackSurface - 6, crackSurface + 2);
-		level.setBlock(new BlockPos(cx, crackSurface - 1, bz), Blocks.STONE.defaultBlockState(), Block.UPDATE_ALL);
-		AnomalyScars.applyColumn(level, ScarOp.line("crack", cx, bz, 0.0, 12, 1, 3, 13L), cx, bz);
-		report(result, "трещина выедает верхний блок",
-				level.getBlockState(new BlockPos(cx, crackSurface - 1, bz)).isAir());
-		restore(level, crackBefore);
+			// пик поднимает колонку
+			int sx = bx + 32;
+			level.getChunk(sx >> 4, bz >> 4);
+			int spikeSurface = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, sx, bz);
+			Map<BlockPos, BlockState> spikeBefore = snapshot(level, sx, bz, 8, spikeSurface - 1, spikeSurface + 24);
+			snapshots.add(spikeBefore);
+			level.setBlock(new BlockPos(sx, spikeSurface - 1, bz), Blocks.STONE.defaultBlockState(), Block.UPDATE_ALL);
+			AnomalyScars.applyColumn(level, ScarOp.spike(sx, bz, 3.0, 14, 11L), sx, bz);
+			int spikeAfter = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, sx, bz);
+			report(result, "пик поднимает колонку на " + (spikeAfter - spikeSurface) + " блоков",
+					spikeAfter >= spikeSurface + 4);
+			restore(level, spikeBefore);
 
-		// лёд не трогаем: шип на льдине холодного океана — уродство
-		int ix = bx + 80;
-		// та же ловушка, что и в боевом коде: getHeight на незагруженном чанке отдаёт дно мира
-		level.getChunk(ix >> 4, bz >> 4);
-		int iceSurface = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, ix, bz);
-		Map<BlockPos, BlockState> iceBefore = snapshot(level, ix, bz, 6, iceSurface - 2, iceSurface + 20);
-		level.setBlock(new BlockPos(ix, iceSurface - 1, bz), Blocks.ICE.defaultBlockState(), Block.UPDATE_ALL);
-		AnomalyScars.applyColumn(level, ScarOp.spike(ix, bz, 3.0, 14, 19L), ix, bz);
-		report(result, "лёд под шипом остаётся льдом (сейчас "
-						+ level.getBlockState(new BlockPos(ix, iceSurface - 1, bz)).getBlock().getName().getString()
-						+ ", высота " + level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, ix, bz)
-						+ " была " + iceSurface + ")",
-				level.getBlockState(new BlockPos(ix, iceSurface - 1, bz)).is(Blocks.ICE));
-		restore(level, iceBefore);
+			// трещина выедает колонку
+			int cx = bx + 64;
+			int crackSurface = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, cx, bz);
+			Map<BlockPos, BlockState> crackBefore = snapshot(level, cx, bz, 3, crackSurface - 6, crackSurface + 2);
+			snapshots.add(crackBefore);
+			level.setBlock(new BlockPos(cx, crackSurface - 1, bz), Blocks.STONE.defaultBlockState(), Block.UPDATE_ALL);
+			AnomalyScars.applyColumn(level, ScarOp.line("crack", cx, bz, 0.0, 12, 1, 3, 13L), cx, bz);
+			report(result, "трещина выедает верхний блок",
+					level.getBlockState(new BlockPos(cx, crackSurface - 1, bz)).isAir());
+			restore(level, crackBefore);
 
-		// снег слоем над льдом: guard видит SNOW, а не ICE — трещина не должна прорезать лёд в воду
-		int sx2 = bx + 96;
-		level.getChunk(sx2 >> 4, bz >> 4);
-		int snowSurface = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, sx2, bz);
-		Map<BlockPos, BlockState> snowBefore = snapshot(level, sx2, bz, 2, snowSurface - 2, snowSurface + 2);
-		level.setBlock(new BlockPos(sx2, snowSurface - 1, bz), Blocks.ICE.defaultBlockState(), Block.UPDATE_ALL);
-		level.setBlock(new BlockPos(sx2, snowSurface, bz), Blocks.SNOW.defaultBlockState(), Block.UPDATE_ALL);
-		AnomalyScars.applyColumn(level, ScarOp.line("crack", sx2, bz, 0.0, 12, 1, 4, 29L), sx2, bz);
-		report(result, "снег на льду не прорезается",
-				level.getBlockState(new BlockPos(sx2, snowSurface - 1, bz)).is(Blocks.ICE)
-						&& level.getBlockState(new BlockPos(sx2, snowSurface, bz)).is(Blocks.SNOW));
-		restore(level, snowBefore);
+			// лёд не трогаем: шип на льдине холодного океана — уродство
+			int ix = bx + 80;
+			// та же ловушка, что и в боевом коде: getHeight на незагруженном чанке отдаёт дно мира
+			level.getChunk(ix >> 4, bz >> 4);
+			int iceSurface = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, ix, bz);
+			Map<BlockPos, BlockState> iceBefore = snapshot(level, ix, bz, 6, iceSurface - 2, iceSurface + 20);
+			snapshots.add(iceBefore);
+			level.setBlock(new BlockPos(ix, iceSurface - 1, bz), Blocks.ICE.defaultBlockState(), Block.UPDATE_ALL);
+			AnomalyScars.applyColumn(level, ScarOp.spike(ix, bz, 3.0, 14, 19L), ix, bz);
+			report(result, "лёд под шипом остаётся льдом",
+					level.getBlockState(new BlockPos(ix, iceSurface - 1, bz)).is(Blocks.ICE));
+			restore(level, iceBefore);
 
-		// дерево: ствол и крона — иначе на мёртвой земле висит зелёный навес
-		int tx = bx + 112;
-		level.getChunk(tx >> 4, bz >> 4);
-		int treeSurface = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, tx, bz);
-		Map<BlockPos, BlockState> treeBefore = snapshot(level, tx, bz, 4, treeSurface - 1, treeSurface + 12);
+			// лавовый разлом у воды — обычная трещина: лава там гаснет в камень
+			int lx = bx + 160;
+			level.getChunk(lx >> 4, bz >> 4);
+			int lavaSurface = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, lx, bz);
+			Map<BlockPos, BlockState> lavaBefore = snapshot(level, lx, bz, 2, lavaSurface - 8, lavaSurface + 2);
+			snapshots.add(lavaBefore);
+			level.setBlock(new BlockPos(lx, lavaSurface - 1, bz), Blocks.STONE.defaultBlockState(), Block.UPDATE_ALL);
+			level.setBlock(new BlockPos(lx + 1, lavaSurface - 1, bz), Blocks.WATER.defaultBlockState(), Block.UPDATE_ALL);
+			AnomalyScars.applyColumn(level, ScarOp.line("lava_fault", lx, bz, 0.0, 12, 1, 4, 37L), lx, bz);
+			int bottomY = lavaSurface - 4;
+			report(result, "у воды разлом без лавы (дно " + bottomY + ")",
+					!level.getBlockState(new BlockPos(lx, bottomY, bz)).is(Blocks.LAVA));
+			restore(level, lavaBefore);
+
+			// снег слоем над льдом: guard видит SNOW, а не ICE — трещина не должна прорезать лёд в воду
+			int sx2 = bx + 96;
+			level.getChunk(sx2 >> 4, bz >> 4);
+			int snowSurface = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, sx2, bz);
+			Map<BlockPos, BlockState> snowBefore = snapshot(level, sx2, bz, 2, snowSurface - 2, snowSurface + 2);
+			snapshots.add(snowBefore);
+			level.setBlock(new BlockPos(sx2, snowSurface - 1, bz), Blocks.ICE.defaultBlockState(), Block.UPDATE_ALL);
+			level.setBlock(new BlockPos(sx2, snowSurface, bz), Blocks.SNOW.defaultBlockState(), Block.UPDATE_ALL);
+			AnomalyScars.applyColumn(level, ScarOp.line("crack", sx2, bz, 0.0, 12, 1, 4, 29L), sx2, bz);
+			report(result, "снег на льду не прорезается",
+					level.getBlockState(new BlockPos(sx2, snowSurface - 1, bz)).is(Blocks.ICE)
+							&& level.getBlockState(new BlockPos(sx2, snowSurface, bz)).is(Blocks.SNOW));
+			restore(level, snowBefore);
+
+			// дерево: ствол и крона — иначе на мёртвой земле висит зелёный навес
+			int tx = bx + 112;
+			level.getChunk(tx >> 4, bz >> 4);
+			int treeSurface = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, tx, bz);
+			Map<BlockPos, BlockState> treeBefore = snapshot(level, tx, bz, 4, treeSurface - 1, treeSurface + 12);
+			snapshots.add(treeBefore);
+			plantTree(level, tx, treeSurface, bz);
+			AnomalyScars.applyColumn(level, ScarOp.disk("dead_soil", tx, treeSurface + 5, bz, 23L), tx, bz);
+			report(result, "мёртвая земля валит дерево вместе с кроной",
+					treeGone(level, tx, treeSurface, bz));
+			restore(level, treeBefore);
+
+			// то же от трещины: обломки и траншея не должны пережить ствол, снесённый до проверки
+			int tx2 = bx + 144;
+			level.getChunk(tx2 >> 4, bz >> 4);
+			int tree2Surface = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, tx2, bz);
+			Map<BlockPos, BlockState> tree2Before = snapshot(level, tx2, bz, 4, tree2Surface - 1, tree2Surface + 12);
+			snapshots.add(tree2Before);
+			plantTree(level, tx2, tree2Surface, bz);
+			AnomalyScars.applyColumn(level, ScarOp.line("crack", tx2, bz, 0.0, 12, 1, 3, 31L), tx2, bz);
+			report(result, "трещина валит дерево, а не копает ствол",
+					treeGone(level, tx2, tree2Surface, bz));
+			restore(level, tree2Before);
+		} finally {
+			// исключение внутри кейса не должно оставить тестовые блоки в мире
+			for (Map<BlockPos, BlockState> states : snapshots) {
+				restore(level, states);
+			}
+		}
+	}
+
+	/** Ствол 5 блоков и крона 5×5 на верхушке. */
+	private static void plantTree(ServerLevel level, int x, int surface, int z) {
 		for (int y = 0; y < 5; y++) {
-			level.setBlock(new BlockPos(tx, treeSurface + y, bz), Blocks.OAK_LOG.defaultBlockState(), Block.UPDATE_ALL);
+			level.setBlock(new BlockPos(x, surface + y, z), Blocks.OAK_LOG.defaultBlockState(), Block.UPDATE_ALL);
 		}
 		for (int dx = -2; dx <= 2; dx++) {
 			for (int dz = -2; dz <= 2; dz++) {
-				level.setBlock(new BlockPos(tx + dx, treeSurface + 5, bz + dz),
+				level.setBlock(new BlockPos(x + dx, surface + 5, z + dz),
 						Blocks.OAK_LEAVES.defaultBlockState(), Block.UPDATE_ALL);
 			}
 		}
-		AnomalyScars.applyColumn(level, ScarOp.disk("dead_soil", tx, treeSurface + 5, bz, 23L), tx, bz);
-		boolean noLogs = true;
-		boolean noLeaves = true;
+	}
+
+	private static boolean treeGone(ServerLevel level, int x, int surface, int z) {
 		for (int y = 0; y < 5; y++) {
-			noLogs &= level.getBlockState(new BlockPos(tx, treeSurface + y, bz)).isAir();
+			if (!level.getBlockState(new BlockPos(x, surface + y, z)).isAir()) {
+				return false;
+			}
 		}
 		for (int dx = -2; dx <= 2; dx++) {
 			for (int dz = -2; dz <= 2; dz++) {
-				noLeaves &= level.getBlockState(new BlockPos(tx + dx, treeSurface + 5, bz + dz)).isAir();
+				if (!level.getBlockState(new BlockPos(x + dx, surface + 5, z + dz)).isAir()) {
+					return false;
+				}
 			}
 		}
-		report(result, "дерево снесено вместе с кроной", noLogs && noLeaves);
-		restore(level, treeBefore);
+		return true;
 	}
 
 	private static Map<BlockPos, BlockState> snapshot(ServerLevel level, int cx, int cz, int radius,
