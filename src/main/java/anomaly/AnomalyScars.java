@@ -284,7 +284,8 @@ public final class AnomalyScars {
 			level.setBlock(pos.set(x, y, z), target, Block.UPDATE_ALL);
 			changed++;
 		}
-		return changed;
+		// разлом посреди леса тоже оставляет мёртвую землю, а не живую крону над щелью
+		return changed + deforest(level, x, surface, z);
 	}
 
 	private static int spike(ServerLevel level, ScarOp op, int x, int surface, int z) {
