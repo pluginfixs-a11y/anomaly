@@ -6,6 +6,8 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.Items;
 import net.minecraft.world.level.levelgen.Heightmap;
 
 import java.io.IOException;
@@ -71,6 +73,7 @@ public final class SelfTest {
 		runGroup(result, "рассеивание", () -> checkSuppression(result, config));
 		runGroup(result, "осколки", () -> checkRemnants(result, config, rnd));
 		runGroup(result, "остаток", () -> checkResidue(result, config));
+		runGroup(result, "рейды", () -> checkNodes(result, config));
 		runGroup(result, "население", () -> checkPopulation(result, config, rnd));
 		runGroup(result, "сохранение", () -> checkPersistence(result, config, rnd));
 		runGroup(result, "края", () -> checkEdges(result, config, rnd));
@@ -90,6 +93,8 @@ public final class SelfTest {
 			// разрушения правят блоки: в чужом мире это делает только явно включённая самопроверка
 			if (System.getProperty("anomaly.selftest") != null || System.getenv("ANOMALY_SELFTEST") != null) {
 				runGroup(result, "следы вживую", () -> checkScarsLive(result, server));
+				runGroup(result, "рейды вживую", () -> checkNodesLive(result, server));
+				runGroup(result, "узлы вживую", () -> checkNodesPlacedLive(result, server));
 			}
 		}
 		return result;
@@ -519,6 +524,79 @@ public final class SelfTest {
 						&& AnomalyScars.builtBlock(Blocks.GLASS.defaultBlockState())
 						&& !AnomalyScars.builtBlock(Blocks.STONE.defaultBlockState())
 						&& !AnomalyScars.builtBlock(Blocks.DIRT.defaultBlockState()));
+	}
+
+	// --- рейды вживую (ставят настоящий сундук в загруженный чанк) ---
+
+	/** Узлы в живом мире: кладовая, алтарь и три якоря реально появляются на своих местах. */
+	private static void checkNodesPlacedLive(Result result, MinecraftServer server) {
+		ServerLevel level = server.overworld();
+		level.getChunk(0, 0);
+		Anomaly zone = AnomalyField.spawnTest(48.0, 48.0, 120.0, AnomalyClass.SAFE);
+		if (zone == null) {
+			report(result, "тестовая зона для узлов создаётся", false);
+			return;
+		}
+		try {
+			AnomalyNodes.placeNow(level, zone);
+			java.util.List<double[]> spots = AnomalyNodes.nodeSpots(zone, zone.node_cx, zone.node_cz, zone.node_r);
+			boolean cache = zone.node_cache_ok && level.getBlockState(
+					new BlockPos((int) Math.floor(spots.get(0)[0]), (int) Math.round(zone.node_cy),
+							(int) Math.floor(spots.get(0)[1]))).is(Blocks.CHEST);
+
+			double[] altar = spots.get(1);
+			int ax = (int) Math.floor(altar[0]);
+			int az = (int) Math.floor(altar[1]);
+			int ay = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, ax, az);
+			boolean catalyst = level.getBlockState(new BlockPos(ax, ay - 1, az)).is(Blocks.SCULK_CATALYST);
+
+			int anchors = 0;
+			for (int i = 2; i < spots.size(); i++) {
+				int x = (int) Math.floor(spots.get(i)[0]);
+				int z = (int) Math.floor(spots.get(i)[1]);
+				int y = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, x, z);
+				boolean obsidian = level.getBlockState(new BlockPos(x, y - 1, z)).is(Blocks.CRYING_OBSIDIAN)
+						|| level.getBlockState(new BlockPos(x, y, z)).is(Blocks.CRYING_OBSIDIAN);
+				if (obsidian) {
+					anchors++;
+				}
+			}
+			report(result, "кладовая, алтарь и три якоря встали на места", cache && catalyst && anchors == 3);
+		} finally {
+			AnomalyField.remove(zone.id);
+		}
+	}
+
+	/** Кладовая в живом мире: сундук ставится и получает лут. */
+	private static void checkNodesLive(Result result, MinecraftServer server) {
+		ServerLevel level = server.overworld();
+		level.getChunk(0, 0);
+		int y = Math.max(level.getMinY() + 10,
+				level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, 12, 12));
+		BlockPos pos = new BlockPos(12, y, 12);
+		level.setBlock(pos, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
+		Anomaly anomaly = new Anomaly();
+		anomaly.id = 777L;
+		anomaly.cls = "deadly";
+		anomaly.nodes_placed = true;
+		anomaly.node_cache_ok = true;
+		anomaly.node_cx = 12.0;
+		anomaly.node_cz = 12.0;
+		anomaly.node_cy = y;
+		anomaly.node_r = 100.0;
+		try {
+			AnomalyNodes.placeChest(level, anomaly, pos);
+			boolean chest = level.getBlockState(pos).is(Blocks.CHEST);
+			boolean loot = chest
+					&& level.getBlockEntity(pos) instanceof net.minecraft.world.level.block.entity.ChestBlockEntity chestEntity
+					&& !chestEntity.isEmpty();
+			report(result, "кладовая ставится и наполняется", chest && loot);
+			String described = AnomalyNodes.describe(level, anomaly, 0, 0);
+			report(result, "описание узлов видит кладовую на месте",
+					described.contains("кладовая 12, " + y + ", 12 ✓"));
+		} finally {
+			level.setBlock(pos, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
+		}
 	}
 
 	// --- следы разрушения вживую (правит блоки, только при явно включённой самопроверке) ---
@@ -960,6 +1038,81 @@ public final class SelfTest {
 		}
 	}
 
+	// --- рейды ---
+
+	private static void checkNodes(Result result, AnomalyConfig config) {
+		java.util.List<ItemStack> safe = AnomalyNodes.lootFor(AnomalyClass.SAFE, new Random(1L));
+		java.util.List<ItemStack> deadly = AnomalyNodes.lootFor(AnomalyClass.DEADLY, new Random(1L));
+		report(result, "у кладовой есть лут", !safe.isEmpty() && !deadly.isEmpty());
+		boolean bread = safe.stream().anyMatch(stack -> stack.is(Items.BREAD));
+		boolean netherite = deadly.stream().anyMatch(stack -> stack.is(Items.NETHERITE_INGOT));
+		report(result, "лут по классу: хлеб в безопасной, незерит в смертельной", bread && netherite);
+
+		java.util.List<ItemStack> again = AnomalyNodes.lootFor(AnomalyClass.DEADLY, new Random(1L));
+		boolean same = again.size() == deadly.size();
+		for (int i = 0; same && i < again.size(); i++) {
+			same = again.get(i).is(deadly.get(i).getItem())
+					&& again.get(i).getCount() == deadly.get(i).getCount();
+		}
+		report(result, "лут детерминирован по сиду", same);
+
+		// узлы: алтарь и якоря внутри зоны, кладовая в ядре
+		Anomaly anomaly = new Anomaly();
+		anomaly.id = 42L;
+		anomaly.cls = "danger";
+		anomaly.node_cx = 1000.0;
+		anomaly.node_cz = -500.0;
+		anomaly.node_r = 400.0;
+		anomaly.nodes_placed = true;
+		double[] altar = AnomalyNodes.nodePos(anomaly, AnomalyNodes.baseAngle(anomaly), 0.32);
+		double[] anchor = AnomalyNodes.nodePos(anomaly, AnomalyNodes.baseAngle(anomaly) + 2.0, 0.62);
+		double altarDist = Math.hypot(altar[0] - anomaly.node_cx, altar[1] - anomaly.node_cz);
+		double anchorDist = Math.hypot(anchor[0] - anomaly.node_cx, anchor[1] - anomaly.node_cz);
+		report(result, "алтарь и якоря внутри зоны",
+				altarDist > 1.0 && altarDist < 400.0 && anchorDist > altarDist && anchorDist < 400.0);
+		report(result, "узел без координат не считается поставленным", !new Anomaly().nodes_placed);
+		report(result, "описание узлов не падает", AnomalyNodes.describe(null, anomaly, 0, 0).startsWith("#42"));
+
+		Anomaly broken = new Anomaly();
+		broken.nodes_placed = true;
+		broken.node_r = 1.0e9;
+		report(result, "битый узел из файла отменяется", broken.valid() && !broken.nodes_placed);
+
+		// радиус рейда не тянется за радиусом зоны
+		report(result, "радиус узлов клампится в 20..160",
+				AnomalyNodes.nodeRadius(20.0) == 20.0 && AnomalyNodes.nodeRadius(700.0) == 160.0
+						&& AnomalyNodes.nodeRadius(3000.0) == 160.0);
+
+		// все пять точек узлов: кладовая, алтарь и три якоря — внутри зоны
+		java.util.List<double[]> spots = AnomalyNodes.nodeSpots(anomaly, 1000.0, -500.0, 160.0);
+		boolean inside = spots.size() == 5;
+		for (double[] spot : spots) {
+			inside &= Math.hypot(spot[0] - 1000.0, spot[1] + 500.0) <= 160.0 * 0.62 + 0.01;
+		}
+		report(result, "пять узлов рейда внутри зоны", inside);
+
+		// лут есть у всех трёх классов
+		boolean allLoot = true;
+		for (AnomalyClass cls : AnomalyClass.values()) {
+			allLoot &= !AnomalyNodes.lootFor(cls, new Random(7L)).isEmpty();
+		}
+		report(result, "лут есть у всех трёх классов", allLoot);
+
+		// плата алтаря — остаток: на потолке обмен закрыт
+		report(result, "алтарь закрыт на потолке остатка",
+				AnomalyNodes.canTrade(0.0, 24.0) && AnomalyNodes.canTrade(23.5, 24.0)
+						&& !AnomalyNodes.canTrade(24.0, 24.0) && !AnomalyNodes.canTrade(24.1, 24.0)
+						&& !AnomalyNodes.canTrade(Double.NaN, 24.0) && !AnomalyNodes.canTrade(1.0, 0.0));
+
+		// сломанный якорь не ставится заново после рестарта
+		Anomaly raided = new Anomaly();
+		raided.node_cx = 10.0;
+		raided.node_cz = 10.0;
+		raided.node_r = 100.0;
+		raided.anchors_broken = 0b101;
+		report(result, "сломанные якоря остаются сломанными", raided.valid()
+				&& raided.anchors_placed == 0b101 && raided.nodes_placed);
+	}
 	// --- рассеивание у центра ---
 
 	private static void checkSuppression(Result result, AnomalyConfig config) {

@@ -73,6 +73,23 @@ public final class Anomaly {
 
 	/** План следов разрушения. Хранится правилами, а не списком блоков. */
 	public List<ScarOp> scars = new ArrayList<>();
+
+	/** Рейдовые узлы: кладовая, алтарь и три якоря. Появляются при первом подходе к ядру. */
+	public boolean nodes_placed;
+	public double node_cx;
+	public double node_cz;
+	public double node_cy;
+	public double node_r;
+	/** Кладовая поставлена: если её разобрали, раз в 10 минут она возвращается. */
+	public boolean node_cache_ok;
+	/** Алтарь поставлен. */
+	public boolean node_altar_ok;
+	/** Биты поставленных якорей: каждый появляется сам, когда загружен его чанк. */
+	public int anchors_placed;
+	/** Когда кладовая была поставлена: раз в 10 минут её можно восстановить, если зона жива. */
+	public long node_cache_ms;
+	/** Биты сломанных якорей: три из трёх — зона схлопывается. */
+	public int anchors_broken;
 	/** Номер следующего следа и колонка внутри него: по ним видно, сколько уже сделано. */
 	public int scar_next;
 	public int scar_cursor;
@@ -289,6 +306,20 @@ public final class Anomaly {
 		}
 		if (!(Double.isFinite(shrink) && shrink > 0.0 && shrink <= 4.0)) {
 			shrink = 1.0;
+		}
+		// узел из файла: битые координаты просто отменяют постановку, а не роняют зону
+		if (!(Double.isFinite(node_cx) && Double.isFinite(node_cz) && Double.isFinite(node_cy)
+				&& Double.isFinite(node_r) && node_r > 0.0 && node_r <= 10_000.0)) {
+			nodes_placed = false;
+			node_cache_ok = false;
+			node_altar_ok = false;
+			anchors_placed = 0;
+		}
+		anchors_broken &= 0x7;
+		// сломанный якорь обратно не ставим, даже если файл писали до появления anchors_placed
+		anchors_placed |= anchors_broken;
+		if (anchors_placed != 0) {
+			nodes_placed = true;
 		}
 		return true;
 	}

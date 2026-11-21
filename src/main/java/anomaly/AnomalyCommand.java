@@ -41,6 +41,21 @@ public final class AnomalyCommand {
 												IntegerArgumentType.getInteger(context, "count")))))
 						.then(Commands.literal("here").executes(context -> here(context.getSource())))
 						.then(Commands.literal("stats").executes(context -> stats(context.getSource())))
+						.then(Commands.literal("nodes")
+								.executes(context -> nodes(context.getSource(), null))
+								.then(Commands.literal("spawn")
+										.executes(context -> nodesSpawn(context.getSource(), null))
+										.then(Commands.argument("target", StringArgumentType.greedyString())
+												.executes(context -> nodesSpawn(context.getSource(),
+														StringArgumentType.getString(context, "target")))))
+								.then(Commands.literal("collapse")
+										.executes(context -> nodesCollapse(context.getSource(), null))
+										.then(Commands.argument("target", StringArgumentType.greedyString())
+												.executes(context -> nodesCollapse(context.getSource(),
+														StringArgumentType.getString(context, "target")))))
+								.then(Commands.argument("target", StringArgumentType.greedyString())
+										.executes(context -> nodes(context.getSource(),
+												StringArgumentType.getString(context, "target")))))
 						.then(Commands.literal("residue")
 								.executes(context -> residue(context.getSource(), null))
 								.then(Commands.literal("get")
@@ -324,6 +339,66 @@ public final class AnomalyCommand {
 		if (!AnomalyMod.config.scar_enabled) {
 			reply(source, "Разрушения в конфиге выключены — команда всё равно сработала (это отладка)");
 		}
+		return 1;
+	}
+
+	private static int nodes(CommandSourceStack source, String target) {
+		if (source.getLevel().dimension() != Level.OVERWORLD) {
+			reply(source, "Узлы есть только в Верхнем мире", ChatFormatting.RED);
+			return 0;
+		}
+		ServerPlayer player = source.getPlayer();
+		double px = player != null ? player.getX() : source.getPosition().x;
+		double pz = player != null ? player.getZ() : source.getPosition().z;
+		Anomaly anomaly = target == null ? AnomalyField.containing(px, pz) : AnomalyField.find(target, px, pz);
+		if (anomaly == null) {
+			reply(source, target == null ? "Вокруг нет зоны — /anomaly nodes <id|nearest>"
+					: "Не нашёл аномалию «" + target + "»", ChatFormatting.RED);
+			return 0;
+		}
+		reply(source, AnomalyNodes.describe(source.getLevel(), anomaly, px, pz));
+		return 1;
+	}
+
+	private static int nodesSpawn(CommandSourceStack source, String target) {
+		if (source.getLevel().dimension() != Level.OVERWORLD) {
+			reply(source, "Узлы есть только в Верхнем мире", ChatFormatting.RED);
+			return 0;
+		}
+		ServerPlayer player = source.getPlayer();
+		double px = player != null ? player.getX() : source.getPosition().x;
+		double pz = player != null ? player.getZ() : source.getPosition().z;
+		Anomaly anomaly = target == null ? AnomalyField.containing(px, pz) : AnomalyField.find(target, px, pz);
+		if (anomaly == null) {
+			reply(source, "Не нашёл зону для узлов", ChatFormatting.RED);
+			return 0;
+		}
+		boolean placed = AnomalyNodes.placeNow(source.getLevel(), anomaly);
+		reply(source, placed ? "Узлы #" + anomaly.id + " поставлены" : "Не вышло: зона без ядра, узлы уже есть"
+				+ " или чанк не загружен");
+		return placed ? 1 : 0;
+	}
+
+	private static int nodesCollapse(CommandSourceStack source, String target) {
+		if (source.getLevel().dimension() != Level.OVERWORLD) {
+			reply(source, "Узлы есть только в Верхнем мире", ChatFormatting.RED);
+			return 0;
+		}
+		ServerPlayer player = source.getPlayer();
+		double px = player != null ? player.getX() : source.getPosition().x;
+		double pz = player != null ? player.getZ() : source.getPosition().z;
+		Anomaly anomaly = target == null ? AnomalyField.containing(px, pz) : AnomalyField.find(target, px, pz);
+		if (anomaly == null) {
+			reply(source, "Не нашёл зону для коллапса", ChatFormatting.RED);
+			return 0;
+		}
+		BlockPos reward = AnomalyNodes.collapseNow(source.getLevel(), anomaly);
+		if (reward == null) {
+			reply(source, "Не вышло: зона уже мертва или узлов нет", ChatFormatting.RED);
+			return 0;
+		}
+		reply(source, "Зона #" + anomaly.id + " схлопнута — мобы вокруг, награда "
+				+ reward.getX() + ", " + reward.getY() + ", " + reward.getZ());
 		return 1;
 	}
 

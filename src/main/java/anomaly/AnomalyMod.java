@@ -56,6 +56,7 @@ public class AnomalyMod implements ModInitializer {
 			AnomalyDebug.hide(handler.player.getUUID());
 		});
 		AnomalyResidue.register();
+		AnomalyNodes.register();
 		AnomalyCommand.register();
 
 		if (System.getProperty("anomaly.selftest") != null || System.getenv("ANOMALY_SELFTEST") != null) {

@@ -77,6 +77,9 @@ public class AnomalyConfig {
 	public double dose_decay_per_second = 0.02;
 	public double lingering_floor = 0.1;
 
+	/** Рейдовые узлы (кладовая, алтарь, якоря). Выключенные узлы не появляются, старые остаются в мире. */
+	public boolean nodes_enabled = true;
+
 	// --- остаток ---
 	/** «Остаток» — долгие последствия на игрока, отдельная шкала в файле мира по UUID. */
 	public boolean residue_enabled = true;

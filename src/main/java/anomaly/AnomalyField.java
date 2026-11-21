@@ -151,6 +151,7 @@ public final class AnomalyField {
 
 		boolean changed = tickData(data, config, random, now, hours);
 		changed |= AnomalyScars.tick(server, server.overworld(), data, config);
+		AnomalyNodes.tick(server, server.overworld(), config);
 		if (changed) {
 			dirty = true;
 		}
