@@ -38,11 +38,11 @@ final class AnomalyProgress {
 	}
 
 	/**
-	 * Выживание: внутри опасной или смертельной зоны не меньше 30 с, с полной дозой — и вышел
-	 * живым. Считается по состоянию игрока, а не по времени в мире: рестарт ничего не продлевает.
+	 * Выживание: внутри опасной или смертельной зоны не меньше 30 с, с полной дозой, на глубине
+	 * от 30 % радиуса — и вышел живым. Кромка не считается: иначе достижение берётся шагом.
 	 */
-	static boolean survives(int ticksInside, double dose, boolean hazard, boolean alive) {
-		return alive && hazard && ticksInside >= SURVIVE_TICKS && dose >= SURVIVE_DOSE;
+	static boolean survives(int ticksInside, double dose, boolean hazard, boolean alive, double depth) {
+		return alive && hazard && ticksInside >= SURVIVE_TICKS && dose >= SURVIVE_DOSE && depth >= 0.3;
 	}
 
 	static void onSurvived(ServerPlayer player) {

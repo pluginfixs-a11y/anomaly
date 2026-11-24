@@ -67,9 +67,6 @@ public class AnomalyMod implements ModInitializer {
 		AnomalyResidue.register();
 		AnomalyNodes.register();
 		AnomalyCommand.register();
-		// фигуры шизы, оставшиеся от прошлой сессии, убираются при загрузке их чанка
-		net.fabricmc.fabric.api.event.lifecycle.v1.ServerChunkEvents.CHUNK_LOAD.register(
-				(level, chunk, newlyGenerated) -> AnomalyMadness.sweep(level, chunk));
 
 		if (System.getProperty("anomaly.selftest") != null || System.getenv("ANOMALY_SELFTEST") != null) {
 			ServerTickEvents.START_SERVER_TICK.register(SelfTest::onTick);
@@ -112,6 +109,9 @@ public class AnomalyMod implements ModInitializer {
 			state.zoneId = 0L;
 			state.ticksInside = 0;
 			state.damageTicks = 0;
+			state.hazardTicks = 0;
+			state.coreTicks = 0;
+			AnomalyMadness.cleanup(player.getUUID());
 			return;
 		}
 
@@ -120,8 +120,9 @@ public class AnomalyMod implements ModInitializer {
 		if ((config.overworld_only && level.dimension() != Level.OVERWORLD) || player.isSpectator()) {
 			state.leave(seconds, config);
 			state.coreTicks = 0;
+			state.hazardTicks = 0;
+			AnomalyMadness.cleanup(player.getUUID());
 			AnomalyResidue.update(player, seconds, null, state.dose);
-			AnomalyMadness.tick(player, state, config);
 			return;
 		}
 
@@ -131,6 +132,17 @@ public class AnomalyMod implements ModInitializer {
 		}
 
 		List<Zone> near = AnomalyField.near(level, player.getX(), player.getZ(), config.view_range);
+
+		// кемпинг: зона кормится, пока в ней стоят. Считаем здесь же — второй обход near()
+		// на каждого игрока в секунду не нужен
+		if (config.camp_feed > 0.0) {
+			for (Zone zone : near) {
+				if (!zone.remnant() && !zone.precursor() && zone.contains(player.getX(), player.getZ())) {
+					AnomalyField.feedZone(zone.anomaly(), seconds, config.camp_feed);
+					AnomalyField.markDirty();
+				}
+			}
+		}
 
 		Zone inside = null;
 		for (Zone zone : near) {
@@ -163,6 +175,10 @@ public class AnomalyMod implements ModInitializer {
 
 		if (inside != null) {
 			boolean fresh = state.zoneId != inside.id();
+			// глубина нужна и для силы эффектов, и для достижений: считаем один раз
+			double depth = Math.min(1.0, Math.max(0.0,
+					-inside.signedDistance(player.getX(), player.getZ()) / Math.max(1.0, inside.radius())));
+			state.lastDepth = depth;
 			state.enter(inside, seconds, config);
 			AnomalyEffects.apply(level, player, inside, state, config, seconds);
 			if (fresh) {
@@ -171,8 +187,6 @@ public class AnomalyMod implements ModInitializer {
 				AnomalyResidue.raidOnEnter(level, player, inside);
 			}
 			// «в самом сердце»: глубина больше 85 % радиуса и не меньше пяти секунд
-			double depth = -inside.signedDistance(player.getX(), player.getZ())
-					/ Math.max(1.0, inside.radius());
 			if (depth > 0.85) {
 				state.coreTicks += AnomalyState.stepTicks(seconds);
 				if (state.coreTicks >= AnomalyProgress.CORE_TICKS) {
@@ -183,9 +197,11 @@ public class AnomalyMod implements ModInitializer {
 			}
 		} else {
 			// «вышел оттуда»: решаем по состоянию до сброса счётчиков в leave()
-			if (AnomalyProgress.survives(state.ticksInside, state.dose, state.lastHazard, player.isAlive())) {
+			if (AnomalyProgress.survives(state.ticksInside, state.dose, state.lastHazard, player.isAlive(),
+					state.lastDepth)) {
 				AnomalyProgress.onSurvived(player);
 			}
+			state.lastDepth = 0.0;
 			state.coreTicks = 0;
 			state.leave(seconds, config);
 			// послевкусие только от опасной/смертельной зоны и только один раз за выход

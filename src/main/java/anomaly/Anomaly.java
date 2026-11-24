@@ -86,6 +86,9 @@ public final class Anomaly {
 	/** id большой зоны, внутри которой родилась эта: вложенность, 0 — сама по себе. */
 	public long parent_id;
 
+	/** Сколько раз кладовая наполнялась за жизнь зоны: ограничено, см. {@link AnomalyNodes}. */
+	public int cache_restores;
+
 	/** План следов разрушения. Хранится правилами, а не списком блоков. */
 	public List<ScarOp> scars = new ArrayList<>();
 
@@ -186,8 +189,18 @@ public final class Anomaly {
 
 	/** Текущая позиция: хорда дуги постоянной кривизны, а не шаги по прямой. */
 	public double[] position(double ageHours) {
-		return position(x0, z0, speed, dir, arc, ageHours);
+		// за один тик позицию зоны спрашивают все её потребители (near, feed, узлы, эффекты):
+		// кэш на возраст убирает десятки тысяч аллокаций в час. Массив только читают
+		if (posCache != null && posCacheAge == ageHours) {
+			return posCache;
+		}
+		posCache = position(x0, z0, speed, dir, arc, ageHours);
+		posCacheAge = ageHours;
+		return posCache;
 	}
+
+	private transient double[] posCache;
+	private transient double posCacheAge = Double.NaN;
 
 	/**
 	 * Позиция через {@code ageHours} после рождения. При малой кривизне — прямая, при большой —
@@ -371,6 +384,7 @@ public final class Anomaly {
 			fed_hours = 0.0;
 		}
 		fed_hours = Math.min(fed_hours, life_hours * 4.0);
+		cache_restores = Math.max(0, Math.min(64, cache_restores));
 		if (!(Double.isFinite(scar_cx) && Double.isFinite(scar_cz))) {
 			scar_cx = 0.0;
 			scar_cz = 0.0;

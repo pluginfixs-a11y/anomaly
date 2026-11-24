@@ -11,9 +11,9 @@
     --line: #2e3439;
     --text: #d9d6cb;
     --muted: #8d948f;
-    --safe: #6f8f6a;
-    --danger: #c8863c;
-    --deadly: #a33a2f;
+    --safe: #9be07f;
+    --danger: #ffb24a;
+    --deadly: #ff5a43;
     --home: #4a6273;
     --accent: #57a196;
   }
@@ -96,7 +96,7 @@
     <h2>Управление</h2>
     <div class="row"><button id="seed">новый мир</button><button id="png">PNG</button></div>
     <div class="hint">Это превью концепции, а не код мода: плотность, форма, дрейф и фазы посчитаны по описанию
-      из README. Настоящий мод (0.1.0) пока рисует столбы 6–14 блоков.</div>
+      из README. Цвета классов — те же, что в игре (Zone.edgeColor).</div>
   </aside>
 </div>
 <script>
@@ -561,8 +561,10 @@ function drawDamage(a, st) {
   if (blocks <= 0) return;
   const strength = Math.min(1, Math.log10(blocks + 1) / 5.4); // 300 → ~0.46, 250k → 1.0
 
-  // выжженное пятно в ядре — тёмное, с ободком
-  polygonPath(shapePoints(a, { x: st.x, z: st.z, radius: st.radius * 0.5 }, 1));
+  // выжженное пятно в ядре — по бюджету, а не «полрадиуса у каждой»: у r=200 бюджет 120 блоков,
+  // и полрадиуса было бы 31 тыс. — превью врало про масштаб разрушений в 250 раз
+  const patchR = Math.min(st.radius * 0.5, Math.sqrt(blocks / Math.PI) * 1.6);
+  polygonPath(shapePoints(a, { x: st.x, z: st.z, radius: patchR }, 1));
   ctx.fillStyle = `rgba(10, 8, 6, ${0.32 + 0.45 * strength})`;
   ctx.fill();
   ctx.strokeStyle = `rgba(120, 96, 62, ${0.30 + 0.45 * strength})`;
@@ -598,7 +600,8 @@ function drawDamage(a, st) {
     ctx.lineTo(sx - wpx, sy);
     ctx.lineTo(sx + wpx, sy);
     ctx.closePath();
-    ctx.fillStyle = withAlpha(a.cls.color, 0.75);
+    // пик в игре — камень (SPIKE_BLOCKS), а не цвет класса
+    ctx.fillStyle = `rgba(150, 148, 142, ${0.55 + 0.35 * strength})`;
     ctx.fill();
     ctx.strokeStyle = "rgba(18, 14, 10, 0.9)";
     ctx.lineWidth = 1;
@@ -834,3 +837,4 @@ window.anomalyPreview = {
 </script>
 </body>
 </html>
+

@@ -50,6 +50,16 @@ public final class AnomalyEffects {
 		// «рейды остатка»: с остатком в крови зона бьёт сильнее — идти в неё с непромытой
 		// головой дороже, чем с чистой
 		intensity *= AnomalyResidue.hazardScale(player);
+		// у смертельной зоны есть и своя цена за время внутри: раз в 6 с, 0.8–1.5 HP по глубине
+		// и дозе. Без неё «смертельная» остаётся неприятным фоном, и в даль ходят за лутом без риска
+		if (zone.cls() == AnomalyClass.DEADLY && !player.isCreative() && !player.isSpectator()) {
+			state.hazardTicks += AnomalyState.stepTicks(seconds);
+			if (state.hazardTicks >= 120) {
+				state.hazardTicks = 0;
+				float damage = (float) ((0.8 + 0.7 * depth) * Math.max(0.25, state.dose));
+				player.hurt(level.damageSources().magic(), damage);
+			}
+		}
 		for (AnomalyComponent component : components) {
 			if (!component.isVisible()) {
 				component.apply(level, player, zone, state, state.dose, intensity, seconds, config);
@@ -79,26 +89,31 @@ public final class AnomalyEffects {
 		// каждая зона берёт свою фазу кадра: иначе все соседние стены рисуются в один тик,
 		// и клиент получает залп из сотен пакетов вместо ровного потока
 		int phase = Math.floorMod((int) (zone.id() & 0xFFFFL), 20);
-		// пыль 26.2 живёт всего 3–18 тиков при scale 0.35: у самого края рисуем вдвое чаще,
-		// иначе стена мигает и половину времени её просто нет
+		// пыль 26.2 живёт 3–18 тиков: кадр раз в секунду — это ровно столько, сколько нужно,
+		// чтобы стена не мигала. Реже 1 Гц нельзя: на 96+ блоках стена пропадала бы на полкадра
+		// (strobo — то, на что жаловался визуальный ревьюер). Экономия — в плотности, не в кадре.
 		boolean close = sd < 48.0;
-		// у дальней стены (96+ блоков) плотность и кадр режем: там частица размером в пиксель,
-		// и вдвое меньше точек не видно, зато вчетверо меньше пакетов
 		boolean distant = sd > 96.0;
-		int period = close ? 10 : (distant ? 40 : 20);
-		boolean frame = Math.floorMod(state.pulseTicks + phase, period) < Math.max(1, state.lastStep);
+		int period = 20;
+		boolean frame = frameDue(state.pulseTicks, phase, period, Math.max(1, state.lastStep));
 		if (frame) {
 			boolean wall = zone.components().contains(AnomalyComponent.LIGHT_WALL);
-			// край — стена с переливом цвета, а не линия: пыль меняет оттенок к тёмному по жизни
+			// край — стена с переливом цвета, а не линия: пыль меняет оттенок к тёмному по жизни.
+			// Высота и разброс — от класса в любом случае: иначе все зоны со световой стеной
+			// (а это дешёвый SAFE-компонент) выглядели бы одинаково
 			int density = wall ? 22 : 16;
 			if (distant) {
-				density = Math.max(6, density * 3 / 5);
+				density = Math.max(6, density * 2 / 5);
+			} else if (close) {
+				density = density * 6 / 5;
 			}
-			edgeBand(level, player, zone, config.view_range, wall ? 0.45f : scaleFor(zone), density,
-					wall ? 4.5 : spreadFor(zone), 1.0);
-			// второй контур только если он реально попадает в кадр: при r>800 он уходит за reach
+			float scale = scaleFor(zone) * (wall ? 1.35f : 1.0f);
+			double spread = spreadFor(zone) * (wall ? 1.5 : 1.0);
+			edgeBand(level, player, zone, config.view_range, scale, density, spread, 1.0);
+			// второй контур только если он реально попадает в кадр: при r>800 он уходит за reach.
+			// Это НЕ вложенность: вложенная зона рисуется своим собственным контуром
 			if (wall && zone.radius() * (1.0 - 0.84) <= config.view_range) {
-				edgeBand(level, player, zone, config.view_range, 0.3f, distant ? 7 : 12, 3.5, 0.84);
+				edgeBand(level, player, zone, config.view_range, scale * 0.7f, distant ? 7 : 12, spread * 0.8, 0.84);
 			}
 			anchors(level, player, zone);
 		}
@@ -106,9 +121,20 @@ public final class AnomalyEffects {
 		interior(level, player, zone, sd, state);
 	}
 
+	/**
+	 * Пора ли рисовать кадр стены. Вынесено из ambience, чтобы это проверялось тестом:
+	 * при {@code period == step} условие было истинным всегда, и стена у края рисовалась
+	 * 2 раза в секунду вне зависимости от фаз зон — залп из сотен пакетов в одном тике.
+	 */
+	static boolean frameDue(int tick, int phase, int period, int step) {
+		if (period <= 0) {
+			return false;
+		}
+		return Math.floorMod(tick + phase, period) < Math.max(1, step);
+	}
+
 	/** Толщина стены и высота разброса — по классу: смертельные видны издалека. */
-	private static float scaleFor(Zone zone) {
-		return switch (zone.cls()) {
+	private static float scaleFor(Zone zone) {		return switch (zone.cls()) {
 			case SAFE -> 0.25f;
 			case DANGER -> 0.3f;
 			case DEADLY -> 0.35f;
@@ -186,9 +212,16 @@ public final class AnomalyEffects {
 		double base = level.getHeight(Heightmap.Types.MOTION_BLOCKING, bx, bz);
 		// столб до 40 блоков над землёй, но не выше 64 и не ниже уровня глаз игрока в горах
 		int top = (int) Math.min(64.0, Math.max(40.0, player.getY() + 16.0 - base));
-		// один пакет на весь столб: разброс dy растягивает частицы по высоте, а не рисует 10 точек
+		// три пакета вместо одного: основание шириной полтора блока, тело столба и верхушка.
+		// Один пакет на 28 частиц давал белую нитку в один пиксель — это читалось как баг
+		int color = zone.edgeColor();
+		var glow = new DustColorTransitionOptions(color, darken(color), 0.5f);
+		level.sendParticles(player, glow, true, true, zone.coreX(), base + 1.2, zone.coreZ(),
+				10, 1.5, 0.8, 1.5, 0.01);
 		level.sendParticles(player, ParticleTypes.END_ROD, true, true,
-				zone.coreX(), base + top / 2.0, zone.coreZ(), 28, 0.15, top / 2.0, 0.15, 0.0);
+				zone.coreX(), base + top * 0.45, zone.coreZ(), 24, 0.35, top * 0.45, 0.35, 0.0);
+		level.sendParticles(player, ParticleTypes.END_ROD, true, true,
+				zone.coreX(), base + top * 0.9, zone.coreZ(), 12, 0.2, top * 0.12, 0.2, 0.0);
 	}
 
 	/**
@@ -204,14 +237,20 @@ public final class AnomalyEffects {
 			double ax = zone.x() + Math.cos(angle) * dist;
 			double az = zone.z() + Math.sin(angle) * dist;
 			if (Math.hypot(ax - player.getX(), az - player.getZ()) > 96.0) {
-				continue;
+				// в трёхкилометровой зоне якорь на 0.25–0.6 радиуса — это 375–900 блоков от игрока:
+				// внутри не на что смотреть. Тогда ставим неподвижную точку взвеси рядом, но всё
+				// равно привязанную к id зоны, а не к игроку
+				double near = 24.0 + noise01(zone.id() * 53L + i * 977L) * 36.0;
+				double nearAngle = angle + 0.7;
+				ax = player.getX() + Math.cos(nearAngle) * near;
+				az = player.getZ() + Math.sin(nearAngle) * near;
 			}
 			int bx = (int) Math.floor(ax);
 			int bz = (int) Math.floor(az);
 			if (!level.getChunkSource().hasChunk(bx >> 4, bz >> 4)) {
 				continue;
 			}
-			double y = level.getHeight(Heightmap.Types.MOTION_BLOCKING, bx, bz);
+			double y = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, bx, bz);
 			level.sendParticles(player, dust, true, true, ax, y + 0.5, az,
 					6, 0.35, 2.2, 0.35, 0.01);
 		}
@@ -308,9 +347,11 @@ public final class AnomalyEffects {
 			half = Math.min(half, 112.0 / radius);
 		}
 		double arc = 2.0 * half * radius;
-		double spacing = full ? 8.0 : 4.0;
-		int cap = full ? 96 : 56;
-		int points = Math.max(16, Math.min(cap, (int) (arc / spacing)));
+		// полное кольцо у мелкой зоны: шаг 3 блока вместо 8 — иначе между точками провалы
+		// в 6–8 блоков, и кольцо читается как пунктир/конфетти
+		double spacing = full ? 3.0 : 4.0;
+		int cap = full ? 160 : 56;
+		int points = Math.max(24, Math.min(cap, (int) (arc / spacing)));
 		// полное кольцо — это в 5 раз больше точек: плотность на точку вдвое ниже, иначе
 		// один кадр такой зоны вытесняет все остальные частицы у клиента
 		if (full) {
@@ -331,17 +372,24 @@ public final class AnomalyEffects {
 			if (!level.getChunkSource().hasChunk(bx >> 4, bz >> 4)) {
 				continue;
 			}
-			double y = level.getHeight(Heightmap.Types.MOTION_BLOCKING, bx, bz) + 0.6;
-			level.sendParticles(player, dust, true, true, point[0], y, point[1], count, 0.0, spread, 0.0, 0.0);
+			double y = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, bx, bz) + 0.6;
+			// у стены есть толщина: нулевой разброс давал плоскость в один пиксель, которую
+			// видно только строго сбоку
+			level.sendParticles(player, dust, true, true, point[0], y, point[1], count, 0.6, spread, 0.6, 0.0);
+			if (i % 5 == 0) {
+				// приземная полоса: в лесу и на склоне стена не должна висеть только на уровне глаз
+				level.sendParticles(player, dust, true, true, point[0], y - 0.4, point[1],
+						Math.max(2, count / 2), 0.5, 1.0, 0.5, 0.0);
+			}
 			if (i % 4 == 0) {
 				// верхние клочья: стена выше и не обрывается ровной линией по грудь
 				level.sendParticles(player, dust, true, true, point[0], y + spread + 2.5, point[1],
-						2, 0.0, 1.5, 0.0, 0.0);
+						2, 0.3, 1.5, 0.3, 0.0);
 			}
 			if (i % 6 == 0) {
 				// вертикальный «язык»: один пакет на шесть точек, а край читается и с 40–60 блоков
 				level.sendParticles(player, dust, true, true, point[0], y + 2.5, point[1],
-						6, 0.0, 5.0, 0.0, 0.0);
+						6, 0.25, 5.0, 0.25, 0.0);
 			}
 			if (i % 3 == 0) {
 				level.sendParticles(player, accent, true, true, point[0], y + rnd.nextDouble() * spread,
@@ -352,8 +400,10 @@ public final class AnomalyEffects {
 
 	/** Вход в аномалию: звук и вспышка пыли у ног. Текст в UI не выводим — механики объясняются средой. */
 	public static void entry(ServerLevel level, ServerPlayer player, Zone zone) {
+		// звук входа не должен совпадать ни с одной подписью компонента: иначе «что это за
+		// зона» не отличить от «я вошёл»
 		level.playSound(null, player.getX(), player.getY(), player.getZ(),
-				SoundEvents.AMETHYST_BLOCK_CHIME, SoundSource.AMBIENT, 1.2f, 0.7f);
+				SoundEvents.BEACON_POWER_SELECT, SoundSource.AMBIENT, 1.1f, 0.7f);
 		int color = zone.edgeColor();
 		var dust = new DustColorTransitionOptions(color, darken(color), 0.5f);
 		level.sendParticles(player, dust, true, true, player.getX(), player.getY() + 0.6, player.getZ(),
@@ -369,13 +419,18 @@ public final class AnomalyEffects {
 
 	/** Звуки-подписи набора: два разных компонента, чтобы слух различал зоны без текста. */
 	private static void signatureSounds(ServerLevel level, ServerPlayer player, Zone zone) {
+		List<AnomalyComponent> components = zone.components();
+		if (components.isEmpty()) {
+			return;
+		}
+		// не первые два по ordinal: почти в любой зоне это были бы голод и пустая еда.
+		// Сдвиг по id даёт разным зонам разные подписи, а внутри зоны порядок стабилен
+		int start = Math.floorMod((int) (zone.id() % components.size()), components.size());
 		int played = 0;
-		for (AnomalyComponent component : zone.components()) {
-			if (played >= 2) {
-				break;
-			}
+		for (int i = 0; i < components.size() && played < 2; i++) {
+			AnomalyComponent component = components.get((start + i) % components.size());
 			level.playSound(null, player.getX(), player.getY(), player.getZ(), component.signature(),
-					SoundSource.AMBIENT, 0.55f, played == 0 ? 0.75f : 1.15f);
+					SoundSource.AMBIENT, 0.6f, played == 0 ? 0.75f : 1.15f);
 			played++;
 		}
 	}
@@ -421,12 +476,13 @@ public final class AnomalyEffects {
 					y + 1.0 + rnd.nextDouble() * 2.0, z + Math.sin(angle) * radius,
 					2, 0.3, 1.2, 0.3, 0.0);
 		}
-		level.playSound(null, x, y, z, SoundEvents.SCULK_CATALYST_BLOOM, SoundSource.AMBIENT, 0.5f, 0.55f);
+		level.playSound(null, x, y, z, SoundEvents.SCULK_CATALYST_BLOOM, SoundSource.AMBIENT, 1.2f, 0.55f);
 		if (rnd.nextInt(3) == 0) {
-			// «шаги за спиной» — самый дешёвый и самый неуютный знак
+			// «шаги за спиной» — самый дешёвый и самый неуютный знак. Громкость ≥1: слышно
+			// на 20+ блоках, а не в восьми, иначе предвестник не предупреждает ни о чём
 			double behind = Math.atan2(player.getZ() - z, player.getX() - x) + Math.PI;
 			level.playSound(null, x + Math.cos(behind) * 9.0, y, z + Math.sin(behind) * 9.0,
-					SoundEvents.GRASS_STEP, SoundSource.AMBIENT, 0.35f, 0.7f);
+					SoundEvents.GRASS_STEP, SoundSource.AMBIENT, 1.0f, 0.7f);
 		}
 	}
 

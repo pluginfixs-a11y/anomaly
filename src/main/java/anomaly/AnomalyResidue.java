@@ -116,10 +116,9 @@ public final class AnomalyResidue {
 
 	/** Раз в секунду из общего тика: пишем не чаще раза в минуту, как и поле. */
 	public static void tick() {
-		// записи, которые дотаили до нуля, не копим: иначе файл растёт по числу всех заходивших
-		if (data.players.values().removeIf(entry -> entry.hours <= 0.0)) {
-			dirty = true;
-		}
+		// записи, которые дотаили до нуля, не копим: иначе файл растёт по числу всех заходивших.
+		// dirty здесь не ставим: удаление пустой записи не требует перезаписи файла
+		data.players.values().removeIf(entry -> entry.hours <= 0.0);
 		long now = System.currentTimeMillis();
 		if (dirty && now - lastSaveMs > 60_000L) {
 			saveNow();

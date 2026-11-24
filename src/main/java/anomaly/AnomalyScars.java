@@ -294,6 +294,8 @@ public final class AnomalyScars {
 		int chunksThisTick = 0;
 		int columnsThisTick = 0;
 		int blocksThisTick = 0;
+		int failures = 0;
+		long failedAt = 0L;
 		boolean progressed = changed;
 
 		int size = data.anomalies.size();
@@ -313,6 +315,7 @@ public final class AnomalyScars {
 				ScarOp op = anomaly.scars.get(anomaly.scar_next);
 				int count = op.columnCount();
 				boolean finished = true;
+				boolean limitHit = false;
 				while (anomaly.scar_cursor < count) {
 					int[] column = op.column(anomaly.scar_cursor);
 					if (column == null) {
@@ -334,14 +337,25 @@ public final class AnomalyScars {
 					int chunkX = column[0] >> 4;
 					int chunkZ = column[1] >> 4;
 					if (!level.getChunkSource().hasChunk(chunkX, chunkZ)) {
-						// суточный лимит: остаток плана ждёт следующего дня, а не съедает worldgen
-						if (chunksThisTick >= config.chunks_per_tick || !chunkBudgetAllows(data, config, AnomalyClock.now())) {
+						// суточный лимит: остаток плана ждёт следующего дня, а не съедает worldgen.
+						// ВАЖНО: сдвигаем очередь — иначе следующая зона тоже упрётся в лимит
+						// и всё поле замирает до смены полевых суток
+						if (chunksThisTick >= config.chunks_per_tick
+								|| !chunkBudgetAllows(data, config, AnomalyClock.now())) {
 							finished = false;
+							limitHit = true;
 							break;
 						}
 						level.getChunk(chunkX, chunkZ);
 						data.gen_count++;
+						AnomalyField.markDirty();
 						chunksThisTick++;
+						// дедлайн проверяем сразу после генерации: getChunk — это 10–50 мс,
+						// и проверка «до» его не ограничивает
+						if (System.nanoTime() > deadline) {
+							finished = false;
+							break;
+						}
 					}
 					// курсор двигаем только после проверок: иначе колонка на стыке бюджета чанков теряется
 					anomaly.scar_cursor++;
@@ -349,8 +363,14 @@ public final class AnomalyScars {
 					try {
 						blocksThisTick += applyColumn(level, op, column[0], column[1]);
 					} catch (RuntimeException e) {
-						AnomalyMod.LOGGER.warn("Anomaly: след #{} в {}, {} не применён ({})",
-								anomaly.id, column[0], column[1], e.toString());
+						// одна строка на проход, а не на колонку: устойчивое исключение иначе
+						// давало до 6000 строк со стеком в секунду
+						failures++;
+						if (failedAt == 0L) {
+							failedAt = System.nanoTime();
+							AnomalyMod.LOGGER.warn("Anomaly: след #{} в {}, {} не применён ({})",
+									anomaly.id, column[0], column[1], e.toString());
+						}
 					}
 					progressed = true;
 					if (blocksThisTick >= config.blocks_per_tick || columnsThisTick >= COLUMNS_PER_PASS
@@ -360,10 +380,11 @@ public final class AnomalyScars {
 					}
 				}
 				if (!finished) {
-					rotate = index;
+					// уперлись в лимит/бюджет чанков — идём к следующей зоне, иначе всё поле
+					// ждёт смены суток; уперлись в блоки/время — продолжаем с этой же
+					rotate = limitHit ? (index + 1) % size : index;
 					return progressed;
-				}
-				anomaly.scar_next++;
+				}				anomaly.scar_next++;
 				anomaly.scar_cursor = 0;
 				if (blocksThisTick >= config.blocks_per_tick || chunksThisTick >= config.chunks_per_tick
 						|| columnsThisTick >= COLUMNS_PER_PASS) {
@@ -605,10 +626,15 @@ public final class AnomalyScars {
 		return changed;
 	}
 
-	/** Обрушенные постройки: пол из обломков и стены без крыш и углов — «здесь кто-то жил». */
+	/** Обрушенная постройка: стены по периметру с проломами и пол из обломков внутри. */
 	private static int ruin(ServerLevel level, ScarOp op, int x, int surface, int z) {
 		int hash = (int) ((x * 73856093L) ^ (z * 19349663L) ^ op.seed);
 		int changed = 0;
+		double distance = Math.hypot(x - op.x, z - op.z);
+		if (distance > op.radius) {
+			return 0;
+		}
+		// пол внутри: обломки, а не дискотека из случайных столбиков
 		if (Math.floorMod(hash, 3) != 0) {
 			BlockPos ground = new BlockPos(x, surface - 1, z);
 			BlockState state = level.getBlockState(ground);
@@ -619,17 +645,25 @@ public final class AnomalyScars {
 				changed++;
 			}
 		}
-		if (Math.floorMod(hash, 3) == 0) {
-			int stack = 1 + Math.floorMod(hash >> 3, 3);
-			BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
-			for (int i = 0; i < stack; i++) {
-				BlockState at = level.getBlockState(pos.set(x, surface + i, z));
-				if (protectedBlock(at) || (!at.isAir() && at.blocksMotion())) {
-					break;
-				}
-				level.setBlock(pos, pick(hash + i, RUIN_WALLS).defaultBlockState(), Block.UPDATE_ALL);
-				changed++;
+		// стены: кольцо в один-полтора блока по периметру, 2–4 блока высотой, с проломами.
+		// Раньше стены ставились по hash%3 по всей площади — получался гравий с частоколом
+		double ring = Math.abs(distance - op.radius * 0.8);
+		if (ring > 1.5) {
+			return changed;
+		}
+		if (Math.floorMod(hash >> 7, 6) == 0) {
+			// пролом: в стене должно быть видно, что она обрушена
+			return changed;
+		}
+		int height = 2 + Math.floorMod(hash >> 3, 3);
+		BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
+		for (int i = 0; i < height; i++) {
+			BlockState at = level.getBlockState(pos.set(x, surface + i, z));
+			if (protectedBlock(at) || (!at.isAir() && at.blocksMotion())) {
+				break;
 			}
+			level.setBlock(pos, pick(hash + i * 31, RUIN_WALLS).defaultBlockState(), Block.UPDATE_ALL);
+			changed++;
 		}
 		return changed;
 	}

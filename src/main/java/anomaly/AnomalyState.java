@@ -22,8 +22,12 @@ public final class AnomalyState {
 	public int lastStep = 10;
 	/** Накопитель для урона давлением: бьёт раз в 20 с, а не раз в вызов. */
 	public int damageTicks;
+	/** Накопитель урона класса: у смертельной зоны своя цена за время внутри. */
+	public int hazardTicks;
 	/** Тиков в ядре зоны (глубина > 85 %): по нему выдаётся достижение, а не по времени в мире. */
 	public int coreTicks;
+	/** Глубина последнего шага внутри зоны (0 — на границе, 1 — в ядре): для достижений на выходе. */
+	public double lastDepth;
 	/** Последняя зона была опасной: «послевкусие» после безопасной не включаем. */
 	public boolean lastHazard;
 	/** Послевкусие уже выдано за этот выход: иначе тьма обновлялась каждые 0.5 с. */
@@ -63,6 +67,7 @@ public final class AnomalyState {
 	public void leave(double seconds, AnomalyConfig config) {
 		ticksInside = 0;
 		damageTicks = 0;
+		hazardTicks = 0;
 		dose = Math.max(0.0, dose - config.dose_decay_per_second * seconds);
 		if (dose <= 0.0) {
 			dose = 0.0;

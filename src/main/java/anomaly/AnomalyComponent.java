@@ -689,10 +689,9 @@ public enum AnomalyComponent {
 		level.sendParticles(player, ink, true, true, sx, base + 0.15, sz, 2, 0.3, 0.1, 0.3, 0.0);
 	}
 
-	/** Износ: одна случайная надеваемая вещь теряет единицу прочности. */
+	/** Износ: одна надетая броня теряет единицу прочности. Инструмент не трогаем. */
 	private static void wearArmour(ServerPlayer player) {
-		EquipmentSlot[] slots = {EquipmentSlot.CHEST, EquipmentSlot.LEGS, EquipmentSlot.HEAD,
-				EquipmentSlot.FEET, EquipmentSlot.MAINHAND};
+		EquipmentSlot[] slots = {EquipmentSlot.CHEST, EquipmentSlot.LEGS, EquipmentSlot.HEAD, EquipmentSlot.FEET};
 		int start = player.getRandom().nextInt(slots.length);
 		for (int i = 0; i < slots.length; i++) {
 			EquipmentSlot slot = slots[(start + i) % slots.length];
@@ -705,19 +704,24 @@ public enum AnomalyComponent {
 		}
 	}
 
-	/** Порча: часть еды в сумке превращается в гниль. Не трогаем тотем, зелья и гниль. */
+	/**
+	 * Порча: ровно один предмет еды в сумке превращается в гниль. Не трогаем золотые яблоки
+	 * (это не «еда», а ресурс) и не съедаем последний стак целиком — иначе поход в даль
+	 * заканчивается голодной смертью от одного невидимого эффекта.
+	 */
 	private static void sourFood(ServerPlayer player) {
 		var inventory = player.getInventory();
 		for (int i = 0; i < inventory.getContainerSize(); i++) {
 			ItemStack stack = inventory.getItem(i);
-			if (stack.isEmpty() || !stack.has(DataComponents.FOOD) || stack.is(Items.ROTTEN_FLESH)) {
+			if (stack.isEmpty() || !stack.has(DataComponents.FOOD) || stack.is(Items.ROTTEN_FLESH)
+					|| stack.is(Items.GOLDEN_APPLE) || stack.is(Items.ENCHANTED_GOLDEN_APPLE)) {
 				continue;
 			}
 			if (player.getRandom().nextInt(4) != 0) {
 				continue;
 			}
-			int count = Math.max(1, stack.getCount() / 2);
-			inventory.setItem(i, new ItemStack(Items.ROTTEN_FLESH, count));
+			stack.shrink(1);
+			player.getInventory().placeItemBackInInventory(new ItemStack(Items.ROTTEN_FLESH));
 			return;
 		}
 	}

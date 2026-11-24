@@ -10,7 +10,7 @@
 		},
 		"description": {
 			"translate": "anomaly.adv.survived.desc",
-			"fallback": "Полчаса в опасной зоне с полной дозой — и живым"
+			"fallback": "Тридцать секунд в опасной зоне в глубине, с полной дозой — и живым"
 		},
 		"frame": "task",
 		"show_toast": true,

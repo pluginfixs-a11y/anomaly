@@ -67,20 +67,42 @@ public record Zone(Anomaly anomaly, long now, double x, double z, double radius,
 
 	/** Цвет края: класс задаёт базу, компоненты подмешивают свой оттенок — зоны перестают быть на одно лицо. */
 	public int edgeColor() {
-		int color = cls().color;
-		int mixed = 0;
+		int base = cls().color;
+		int mixed = base;
+		int used = 0;
 		for (AnomalyComponent component : components()) {
-			if (component.color != 0 && mixed < 3) {
-				color = blend(color, component.color, 0.30);
-				mixed++;
+			// три оттенка по 0.30 уводили смертельную в жёлтый: на 40–200 блоках классы
+			// переставали различаться. Подмешиваем мягко и не больше двух
+			if (component.color != 0 && used < 2) {
+				mixed = blend(mixed, component.color, 0.15);
+				used++;
 			}
 		}
-		// ваниль множит цвет пыли на 0.6–1.0, а после подмешивания классы сближаются по яркости.
-		// Нормализуем в HSV: насыщенность не ниже 0.5, значение не ниже 0.82, оттенок остаётся.
-		return vivid(color);
+		return vividWithin(mixed, base);
 	}
 
-	private static int vivid(int color) {
+	/**
+	 * Ваниль множит цвет пыли на 0.6–1.0, поэтому насыщенность и яркость нормализуются.
+	 * Оттенок при этом держится в пределах 12° от цвета класса: оттенки компонентов — добавка
+	 * к характеру, а не замена классу.
+	 */
+	private static int vividWithin(int color, int base) {
+		float[] hsv = toHsv(color);
+		float[] baseHsv = toHsv(base);
+		float delta = hsv[0] - baseHsv[0];
+		if (delta > 180f) {
+			delta -= 360f;
+		} else if (delta < -180f) {
+			delta += 360f;
+		}
+		float hue = baseHsv[0] + Math.max(-12f, Math.min(12f, delta));
+		if (hue < 0f) {
+			hue += 360f;
+		}
+		return fromHsv(hue % 360f, Math.max(hsv[1], 0.5f), Math.max(hsv[2], 0.82f));
+	}
+
+	private static float[] toHsv(int color) {
 		float r = ((color >> 16) & 0xFF) / 255f;
 		float g = ((color >> 8) & 0xFF) / 255f;
 		float b = (color & 0xFF) / 255f;
@@ -97,12 +119,13 @@ public record Zone(Anomaly anomaly, long now, double x, double z, double radius,
 			hue = (r - g) / (max - min) + 4f;
 		}
 		float sat = max <= 0f ? 0f : (max - min) / max;
-		float val = Math.max(max, 0.82f);
-		float s = Math.max(sat, 0.5f);
-		float h = hue * 60f;
-		float c = val * s;
+		return new float[]{hue * 60f, sat, max};
+	}
+
+	private static int fromHsv(float h, float s, float v) {
+		float c = v * s;
 		float x = c * (1f - Math.abs((h / 60f) % 2f - 1f));
-		float m = val - c;
+		float m = v - c;
 		float rr;
 		float gg;
 		float bb;

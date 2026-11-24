@@ -166,7 +166,6 @@ public final class AnomalyField {
 		ServerLevel overworld = server.overworld();
 		Avoid avoid = settled(server, overworld, config);
 		boolean changed = tickData(data, config, random, now, hours, avoid);
-		changed |= feed(config, overworld, now);
 		changed |= AnomalyScars.tick(server, overworld, data, config);
 		AnomalyNodes.tick(server, overworld, config);
 		changed |= bornSignals(server, overworld, now);
@@ -174,39 +173,19 @@ public final class AnomalyField {
 			dirty = true;
 		}
 		long real = System.currentTimeMillis();
-		// файл на 250 зон — ~400 КБ, поэтому не чаще раза в 30 с на изменения и раз в пять
-		// минут для часов; на остановке сервера пишем всегда
+		// файл на 600 зон — 1.3 МБ: сериализация на тик-потоке, запись — в отдельном потоке.
+		// Не чаще раза в 30 с на изменения и раз в пять минут для часов; на остановке пишем синхронно
 		boolean due = real - lastSaveMs > 30_000L;
 		if ((dirty && due) || real - lastSaveMs > 5 * 60_000L) {
-			saveNow();
+			saveAsync();
 		}
 	}
 
 	// --- кемпинг ---
 
-	/**
-	 * «Зона кормится»: пока игрок внутри, зона старится быстрее — {@code camp_feed} часов поля
-	 * за час реального стояния. Возвращает true, если что-то накопилось.
-	 */
-	public static boolean feed(AnomalyConfig config, ServerLevel level, long now) {
-		if (config == null || config.camp_feed <= 0.0 || level == null) {
-			return false;
-		}
-		Set<Long> fed = new HashSet<>();
-		boolean changed = false;
-		for (ServerPlayer player : level.getServer().getPlayerList().getPlayers()) {
-			if (player.level() != level) {
-				continue;
-			}
-			for (Zone zone : near(level, player.getX(), player.getZ(), 0.0)) {
-				if (zone.remnant() || zone.precursor() || !fed.add(zone.id())) {
-					continue;
-				}
-				feedZone(zone.anomaly(), 1.0, config.camp_feed);
-				changed = true;
-			}
-		}
-		return changed;
+	/** Пометить поле грязным: зовут те, кто меняет данные без изменения состава (кормление, генерации). */
+	public static void markDirty() {
+		dirty = true;
 	}
 
 	/** Чистая часть кормления: по ней же гоняется самопроверка. */
@@ -239,9 +218,14 @@ public final class AnomalyField {
 		}
 
 		boolean blocks(double x, double z) {
+			return blocks(x, z, 0.0);
+		}
+
+		/** {@code extra} — будущий радиус зоны: клиренс должен учитывать, во что она вырастет. */
+		boolean blocks(double x, double z, double extra) {
 			for (double[] point : points) {
 				double radius = Math.hypot(x - point[0], z - point[1]);
-				if (radius < point[2]) {
+				if (radius < point[2] + extra) {
 					return true;
 				}
 			}
@@ -790,6 +774,19 @@ public final class AnomalyField {
 
 	// --- сохранение ---
 
+	/**
+	 * Один поток на запись: тик-поток только сериализует снимок (это десяток миллисекунд раз
+	 * в 30 с), а диск и переименование делает воркер. Иначе блокирующая запись 1.3 МБ входила
+	 * в серверный тик и давала рывок ровно тогда, когда в зоне кто-то стоит.
+	 */
+	private static final java.util.concurrent.ExecutorService WRITER =
+			java.util.concurrent.Executors.newSingleThreadExecutor(runnable -> {
+				Thread thread = new Thread(runnable, "anomaly-save");
+				thread.setDaemon(true);
+				return thread;
+			});
+	private static volatile boolean saving;
+
 	static boolean saveNow() {
 		data.clock_ms = AnomalyClock.now();
 		lastSaveMs = System.currentTimeMillis();
@@ -799,18 +796,48 @@ public final class AnomalyField {
 		return ok;
 	}
 
+	/** Снимок на тик-потоке, запись — в фоне. Один снимок в полёте: очередь не копим. */
+	static void saveAsync() {
+		if (saving || path == null) {
+			return;
+		}
+		data.clock_ms = AnomalyClock.now();
+		lastSaveMs = System.currentTimeMillis();
+		String json;
+		try {
+			json = GSON.toJson(data);
+		} catch (RuntimeException e) {
+			AnomalyMod.LOGGER.error("Anomaly: не смог сериализовать поле", e);
+			return;
+		}
+		saving = true;
+		dirty = false;
+		Path file = path;
+		WRITER.execute(() -> {
+			boolean ok = writeText(file, json);
+			saving = false;
+			if (!ok) {
+				dirty = true;
+			}
+		});
+	}
+
 	public static boolean save() {
 		return saveNow();
 	}
 
 	static boolean write(Path file, AnomalyFieldData field) {
+		return writeText(file, GSON.toJson(field));
+	}
+
+	private static boolean writeText(Path file, String json) {
 		try {
 			Path parent = file.getParent();
 			if (parent != null) {
 				Files.createDirectories(parent);
 			}
 			Path tmp = file.resolveSibling(file.getFileName() + ".tmp");
-			Files.writeString(tmp, GSON.toJson(field), StandardCharsets.UTF_8);
+			Files.writeString(tmp, json, StandardCharsets.UTF_8);
 			try {
 				Files.move(tmp, file, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
 			} catch (IOException atomicFailed) {
@@ -894,6 +921,11 @@ public final class AnomalyField {
 				continue;
 			}
 			Anomaly candidate = create(field, config, rnd, now, x, z, null, null, false);
+			// клиренс считается не по точке рождения, а по будущему радиусу: зона на 3000
+			// дорастает до базы за часы, и «260 блоков от игрока» её не спасают
+			if (avoid.blocks(x, z, candidate.r0 * 0.5)) {
+				continue;
+			}
 			if (!clashes(field, candidate)) {
 				if (herald) {
 					herald(candidate, now, config, rnd);

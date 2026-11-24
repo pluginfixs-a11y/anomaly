@@ -90,7 +90,7 @@ public class AnomalyConfig {
 	public int spawn_clear_build = 96;
 
 	/** Сколько часов поля даёт час стояния внутри зоны: кемпинг старит зону и убивает лут. */
-	public double camp_feed = 0.5;
+	public double camp_feed = 2.0;
 
 	/** Шанс, что новая зона родится внутри большой (вложенность): 0 — никогда. */
 	public double nested_chance = 0.12;

@@ -45,8 +45,12 @@ public final class AnomalyNodes {
 	private static final double REACH = 96.0;
 	/** Запас вокруг узлов: они стоят до 100 блоков от ядра, игрок не обязан идти в центр. */
 	private static final double NODE_SPREAD = 160.0;
-	/** Кладовая восстанавливается через 10 минут, пока зона жива. */
-	private static final long CACHE_RESTORE_MS = 10L * 60_000L;
+	/** Кладовая восстанавливается через 25 минут, и только если рядом никого не было. */
+	private static final long CACHE_RESTORE_MS = 25L * 60_000L;
+	/** Радиус «рядом»: у сундука не отсидеться за границей мелкой зоны (r=100 — это 10 секунд ходьбы). */
+	private static final double CACHE_CLEAR = 512.0;
+	/** Сколько раз кладовая наполняется за жизнь зоны: ферма у сундука не должна кормить вечно. */
+	private static final int CACHE_MAX_RESTORES = 3;
 	/** Сколько уровней стоит один обмен на алтаре. */
 	private static final int ALTAR_LEVELS = 5;
 	private static final long ALTAR_COOLDOWN_MS = 1500L;
@@ -114,7 +118,16 @@ public final class AnomalyNodes {
 			serverLevel.playSound(null, pos.getX() + 0.5, pos.getY(), pos.getZ() + 0.5,
 					SoundEvents.RESPAWN_ANCHOR_DEPLETE.value(), SoundSource.BLOCKS, 1.0f, 0.6f);
 			if (Integer.bitCount(anomaly.anchors_broken) >= 3) {
-				collapse(serverLevel, anomaly);
+				// третий якорь обрушивает зону только если игрок внутри: иначе это просто
+				// сломанный блок в чистом поле, а не рейд
+				ServerPlayer actor = player instanceof ServerPlayer sp ? sp : null;
+				Zone zone = anomaly.zone(AnomalyClock.now());
+				if (actor != null && zone.contains(actor.getX(), actor.getZ())) {
+					collapse(serverLevel, anomaly, actor);
+				} else {
+					serverLevel.playSound(null, pos.getX() + 0.5, pos.getY(), pos.getZ() + 0.5,
+							SoundEvents.RESPAWN_ANCHOR_DEPLETE.value(), SoundSource.BLOCKS, 0.8f, 0.4f);
+				}
 			}
 		});
 	}
@@ -227,12 +240,12 @@ public final class AnomalyNodes {
 	 * бесконечный лут, а «кемпинг невыгоден» — правило мода, а не пожелание.
 	 */
 	private static void restoreCache(ServerLevel level, Anomaly anomaly, boolean occupied) {
-		if (!anomaly.node_cache_ok || anomaly.remnant) {
+		if (!anomaly.node_cache_ok || anomaly.remnant || anomaly.cache_restores >= CACHE_MAX_RESTORES) {
 			return;
 		}
 		long now = System.currentTimeMillis();
 		if (occupied) {
-			// отсчёт начинается с момента, когда игрок ушёл, а не с последней выдачи
+			// отсчёт начинается с момента, когда рядом никого не осталось, а не с прошлой выдачи
 			anomaly.node_cache_ms = now;
 			return;
 		}
@@ -254,6 +267,7 @@ public final class AnomalyNodes {
 		}
 		placeChest(level, anomaly, pos);
 		anomaly.node_cache_ms = now;
+		anomaly.cache_restores++;
 		AnomalyField.save();
 	}
 
@@ -265,10 +279,20 @@ public final class AnomalyNodes {
 		return lastMs <= 0L || now - lastMs >= CACHE_RESTORE_MS;
 	}
 
-	/** Стоит ли в зоне игрок: пока стоит, зона «кормится», а кладовая молчит. */
+	/** Стоит ли кто-то в зоне или у кладовой: пока стоит, зона «кормится», а кладовая молчит. */
 	private static boolean occupied(MinecraftServer server, ServerLevel level, Zone zone) {
+		double cx = zone.anomaly().node_cx;
+		double cz = zone.anomaly().node_cz;
+		boolean placed = zone.anomaly().node_cache_ok;
 		for (ServerPlayer other : server.getPlayerList().getPlayers()) {
-			if (other.level() == level && zone.contains(other.getX(), other.getZ())) {
+			if (other.level() != level) {
+				continue;
+			}
+			if (zone.contains(other.getX(), other.getZ())) {
+				return true;
+			}
+			// шаг за границу мелкой зоны не должен снимать «занято»
+			if (placed && Math.hypot(other.getX() - cx, other.getZ() - cz) < CACHE_CLEAR) {
 				return true;
 			}
 		}
@@ -372,27 +396,36 @@ public final class AnomalyNodes {
 		List<ItemStack> loot = new ArrayList<>();
 		switch (cls) {
 			case SAFE -> {
-				loot.add(new ItemStack(Items.BREAD, 2 + rnd.nextInt(4)));
-				loot.add(new ItemStack(Items.IRON_INGOT, 2 + rnd.nextInt(3)));
-				loot.add(new ItemStack(Items.TORCH, 6 + rnd.nextInt(8)));
-				loot.add(new ItemStack(Items.APPLE, 1 + rnd.nextInt(3)));
+				loot.add(new ItemStack(Items.BREAD, 2 + rnd.nextInt(3)));
+				loot.add(new ItemStack(Items.IRON_INGOT, 1 + rnd.nextInt(2)));
+				loot.add(new ItemStack(Items.TORCH, 4 + rnd.nextInt(5)));
+				if (rnd.nextBoolean()) {
+					loot.add(new ItemStack(Items.APPLE, 1 + rnd.nextInt(2)));
+				}
 			}
 			case DANGER -> {
-				loot.add(new ItemStack(Items.DIAMOND, 1 + rnd.nextInt(3)));
-				loot.add(new ItemStack(Items.GOLDEN_APPLE, 1 + rnd.nextInt(2)));
-				loot.add(new ItemStack(Items.EMERALD, 2 + rnd.nextInt(4)));
+				loot.add(new ItemStack(Items.DIAMOND, 1 + rnd.nextInt(2)));
+				loot.add(new ItemStack(Items.EMERALD, 1 + rnd.nextInt(3)));
 				loot.add(new ItemStack(Items.IRON_BLOCK, 1));
-				loot.add(new ItemStack(Items.EXPERIENCE_BOTTLE, 2 + rnd.nextInt(5)));
+				loot.add(new ItemStack(Items.EXPERIENCE_BOTTLE, 1 + rnd.nextInt(3)));
+				if (rnd.nextBoolean()) {
+					loot.add(new ItemStack(Items.GOLDEN_APPLE));
+				}
 			}
 			case DEADLY -> {
-				loot.add(new ItemStack(Items.DIAMOND, 3 + rnd.nextInt(4)));
-				loot.add(new ItemStack(Items.NETHERITE_INGOT, 1));
-				loot.add(new ItemStack(Items.ENCHANTED_GOLDEN_APPLE, 1));
-				loot.add(new ItemStack(Items.EXPERIENCE_BOTTLE, 4 + rnd.nextInt(6)));
-				if (rnd.nextBoolean()) {
-					loot.add(new ItemStack(Items.TOTEM_OF_UNDYING, 1));
+				loot.add(new ItemStack(Items.DIAMOND, 2 + rnd.nextInt(3)));
+				loot.add(new ItemStack(Items.EXPERIENCE_BOTTLE, 2 + rnd.nextInt(4)));
+				// «за чем идут» — но не гарантия: незерит в 30 %, тотем в 25 %.
+				// Иначе кладовая превращается в станок, и в даль не идут за риском, а ходят за лутом
+				if (rnd.nextInt(10) < 3) {
+					loot.add(new ItemStack(Items.NETHERITE_INGOT));
 				}
-				loot.add(new ItemStack(Items.GOLD_BLOCK, 1 + rnd.nextInt(2)));
+				if (rnd.nextInt(4) == 0) {
+					loot.add(new ItemStack(Items.TOTEM_OF_UNDYING));
+				}
+				if (rnd.nextBoolean()) {
+					loot.add(new ItemStack(Items.GOLD_BLOCK));
+				}
 			}
 		}
 		return loot;
@@ -446,15 +479,26 @@ public final class AnomalyNodes {
 
 	// --- якоря и коллапс ---
 
-	private static BlockPos collapse(ServerLevel level, Anomaly anomaly) {
+	private static BlockPos collapse(ServerLevel level, Anomaly anomaly, ServerPlayer actor) {
 		Zone zone = anomaly.zone(AnomalyClock.now());
-		// коллапс рушит ядро: чанки 3×3 нужны загруженными, иначе getHeight отдаст дно мира
+		// награда там же, где кладовая: узлы прибиты к точке постановки, а зона с тех пор
+		// уехала на километры — волна и лут не должны ждать игрока в чистом поле
+		BlockPos reward = ringSpot(level, anomaly.node_cx, anomaly.node_cz);
+		if (reward == null) {
+			reward = surface(level, anomaly.node_cx, anomaly.node_cz);
+		}
+		if (reward == null) {
+			reward = surface(level, zone.coreX(), zone.coreZ());
+		}
+		double cx = reward != null ? reward.getX() + 0.5 : anomaly.node_cx;
+		double cz = reward != null ? reward.getZ() + 0.5 : anomaly.node_cz;
+		// коллапс рушит узел: чанки 3×3 нужны загруженными, иначе getHeight отдаст дно мира
 		// и половина волны родится в бедроке
-		int coreChunkX = (int) Math.floor(zone.coreX()) >> 4;
-		int coreChunkZ = (int) Math.floor(zone.coreZ()) >> 4;
+		int chunkX = (int) Math.floor(cx) >> 4;
+		int chunkZ = (int) Math.floor(cz) >> 4;
 		for (int dx = -1; dx <= 1; dx++) {
 			for (int dz = -1; dz <= 1; dz++) {
-				level.getChunk(coreChunkX + dx, coreChunkZ + dz);
+				level.getChunk(chunkX + dx, chunkZ + dz);
 			}
 		}
 		Random rnd = new Random(anomaly.id * 0x9E3779B97F4A7C15L);
@@ -463,8 +507,8 @@ public final class AnomalyNodes {
 		for (int i = 0; i < mobs; i++) {
 			double angle = rnd.nextDouble() * Math.PI * 2.0;
 			double distance = 3.0 + rnd.nextDouble() * 6.0;
-			double x = zone.coreX() + Math.cos(angle) * distance;
-			double z = zone.coreZ() + Math.sin(angle) * distance;
+			double x = cx + Math.cos(angle) * distance;
+			double z = cz + Math.sin(angle) * distance;
 			int y = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, (int) Math.floor(x), (int) Math.floor(z));
 			Mob mob = rnd.nextBoolean()
 					? EntityTypes.ZOMBIE.create(level, EntitySpawnReason.EVENT)
@@ -474,26 +518,21 @@ public final class AnomalyNodes {
 			}
 			mob.snapTo(x + 0.5, y + 0.1, z + 0.5, rnd.nextFloat() * 360f, 0f);
 			level.addFreshEntity(mob);
+			if (actor != null) {
+				mob.setTarget(actor);
+			}
 		}
 		// награда за рейд: отдельный сундук рядом с кладовой. В саму кладовую не лезем —
-		// там может лежать то, что игрок оставил, и стирать чужие вещи мод не имеет права.
-		// сначала ищем своё место: поверх кладовой сундук ставить нельзя — его не открыть
-		BlockPos reward = ringSpot(level, anomaly.node_cx, anomaly.node_cz);
-		if (reward == null) {
-			reward = surface(level, zone.coreX(), zone.coreZ());
-		}
+		// там может лежать то, что игрок оставил, и стирать чужие вещи мод не имеет права
 		if (reward != null) {
-			// surface() не отдаёт место с сундуком, так что это всегда свежая точка
 			level.setBlock(reward, Blocks.CHEST.defaultBlockState()
 					.setValue(ChestBlock.FACING, Direction.SOUTH), Block.UPDATE_ALL);
 			fillChest(level, anomaly, reward, 1.6);
 		}
 		int coreY = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES,
-				(int) Math.floor(zone.coreX()), (int) Math.floor(zone.coreZ()));
-		level.playSound(null, zone.coreX(), coreY, zone.coreZ(),
-				SoundEvents.END_PORTAL_SPAWN, SoundSource.AMBIENT, 1.0f, 0.7f);
-		level.sendParticles(ParticleTypes.EXPLOSION, zone.coreX(), coreY + 1.0, zone.coreZ(),
-				8, 3.0, 1.5, 3.0, 0.0);
+				(int) Math.floor(cx), (int) Math.floor(cz));
+		level.playSound(null, cx, coreY, cz, SoundEvents.END_PORTAL_SPAWN, SoundSource.AMBIENT, 1.0f, 0.7f);
+		level.sendParticles(ParticleTypes.EXPLOSION, cx, coreY + 1.0, cz, 8, 3.0, 1.5, 3.0, 0.0);
 		AnomalyField.remove(anomaly.id);
 		return reward;
 	}
@@ -602,7 +641,7 @@ public final class AnomalyNodes {
 		if (anomaly.remnant || !anomaly.nodes_placed) {
 			return new Collapse(false, null);
 		}
-		return new Collapse(true, collapse(level, anomaly));
+		return new Collapse(true, collapse(level, anomaly, null));
 	}
 
 	/**

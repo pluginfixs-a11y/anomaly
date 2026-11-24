@@ -89,6 +89,7 @@ public final class SelfTest {
 		runGroup(result, "обучение", () -> checkTeaching(result));
 		runGroup(result, "лимит генерации", () -> checkChunkBudget(result, config));
 		runGroup(result, "рейды остатка", () -> checkResidueRaids(result, config));
+		runGroup(result, "экономика", () -> checkEconomy(result, config, rnd));
 		runGroup(result, "сохранение", () -> checkPersistence(result, config, rnd));
 		runGroup(result, "края", () -> checkEdges(result, config, rnd));
 		if (server != null) {
@@ -1086,7 +1087,10 @@ public final class SelfTest {
 		report(result, "у кладовой есть лут", !safe.isEmpty() && !deadly.isEmpty());
 		boolean bread = safe.stream().anyMatch(stack -> stack.is(Items.BREAD));
 		boolean netherite = deadly.stream().anyMatch(stack -> stack.is(Items.NETHERITE_INGOT));
-		report(result, "лут по классу: хлеб в безопасной, незерит в смертельной", bread && netherite);
+		// незерит — не гарантия, а шанс: иначе кладовая становится станком. Хлеб в безопасной
+		// есть всегда, незерит проверяется на серии зёрен в группе «экономика»
+		report(result, "лут по классу: хлеб в безопасной", bread);
+		report(result, "смертельная даёт алмазы", deadly.stream().anyMatch(stack -> stack.is(Items.DIAMOND)));
 
 		java.util.List<ItemStack> again = AnomalyNodes.lootFor(AnomalyClass.DEADLY, new Random(1L));
 		boolean same = again.size() == deadly.size();
@@ -1432,8 +1436,8 @@ public final class SelfTest {
 		// пока в зоне стоит игрок, кладовая не восстанавливается
 		report(result, "кладовая молчит, пока игрок внутри", !AnomalyNodes.cacheDue(0L, 999_999_999L, true));
 		long placed = 1_000_000L;
-		report(result, "без игрока кладовая созревает за 10 минут",
-				AnomalyNodes.cacheDue(placed, placed + 10L * 60_000L, false));
+		report(result, "без игрока кладовая созревает за 25 минут",
+				AnomalyNodes.cacheDue(placed, placed + 25L * 60_000L, false));
 		report(result, "девяти минут ещё не хватает",
 				!AnomalyNodes.cacheDue(placed, placed + 9L * 60_000L, false));
 	}
@@ -1606,15 +1610,17 @@ public final class SelfTest {
 				+ AnomalyComponent.values().length + ")",
 				sounds.size() == AnomalyComponent.values().length);
 		report(result, "30 с с полной дозой в опасной зоне — выживание",
-				AnomalyProgress.survives(AnomalyProgress.SURVIVE_TICKS, 0.6, true, true));
+				AnomalyProgress.survives(AnomalyProgress.SURVIVE_TICKS, 0.6, true, true, 0.9));
 		report(result, "мимоходом — нет",
-				!AnomalyProgress.survives(200, 0.6, true, true));
+				!AnomalyProgress.survives(200, 0.6, true, true, 0.9));
 		report(result, "без полной дозы — нет",
-				!AnomalyProgress.survives(AnomalyProgress.SURVIVE_TICKS, 0.5, true, true));
+				!AnomalyProgress.survives(AnomalyProgress.SURVIVE_TICKS, 0.5, true, true, 0.9));
 		report(result, "в безопасной зоне — нет",
-				!AnomalyProgress.survives(AnomalyProgress.SURVIVE_TICKS, 0.6, false, true));
+				!AnomalyProgress.survives(AnomalyProgress.SURVIVE_TICKS, 0.6, false, true, 0.9));
+		report(result, "на кромке — нет",
+				!AnomalyProgress.survives(AnomalyProgress.SURVIVE_TICKS, 0.6, true, true, 0.2));
 		report(result, "мёртвому не выдают",
-				!AnomalyProgress.survives(AnomalyProgress.SURVIVE_TICKS, 0.6, true, false));
+				!AnomalyProgress.survives(AnomalyProgress.SURVIVE_TICKS, 0.6, true, false, 0.9));
 	}
 
 	// --- суточный лимит генерации чанков ---
@@ -1649,6 +1655,58 @@ public final class SelfTest {
 		report(result, "усиление монотонно",
 				AnomalyResidue.hazardScale(8.0) > AnomalyResidue.hazardScale(6.0)
 						&& AnomalyResidue.hazardScale(12.0) > AnomalyResidue.hazardScale(8.0));
+	}
+
+	// --- экономика и частота кадров ---
+
+	private static void checkEconomy(Result result, AnomalyConfig config, Random rnd) {
+		// стена: один кадр в секунду независимо от фаз, а не каждый тик
+		int frames = 0;
+		for (int tick = 0; tick < 20; tick += 10) {
+			if (AnomalyEffects.frameDue(tick, 3, 20, 10)) {
+				frames++;
+			}
+		}
+		check(result, "стена рисуется один раз в секунду", 1, frames, 0);
+		report(result, "фаза не совпадает с нулём и это не ломает кадр",
+				AnomalyEffects.frameDue(20, 3, 20, 10));
+		report(result, "в чужой половине периода кадра нет",
+				!AnomalyEffects.frameDue(10, 3, 20, 10));
+
+		// кладовая: 25 минут и потолок выдач
+		long placed = 5_000_000L;
+		report(result, "кладовая не созревает за 24 минуты",
+				!AnomalyNodes.cacheDue(placed, placed + 24L * 60_000L, false));
+		report(result, "кладовая созревает за 25 минут",
+				AnomalyNodes.cacheDue(placed, placed + 25L * 60_000L, false));
+
+		// лут смертельной: не гарантия незерита и тотема, иначе кладовая — станок
+		int totems = 0;
+		int netherite = 0;
+		boolean sane = true;
+		for (int i = 0; i < 200; i++) {
+			java.util.List<net.minecraft.world.item.ItemStack> loot =
+					AnomalyNodes.lootFor(AnomalyClass.DEADLY, new Random(9000L + i));
+			sane &= loot.size() >= 2 && loot.size() <= 5;
+			for (net.minecraft.world.item.ItemStack stack : loot) {
+				if (stack.is(net.minecraft.world.item.Items.TOTEM_OF_UNDYING)) {
+					totems++;
+				}
+				if (stack.is(net.minecraft.world.item.Items.NETHERITE_INGOT)) {
+					netherite++;
+				}
+			}
+		}
+		report(result, "лут смертельной помещается в сундук и не пустой", sane);
+		report(result, "тотем в смертельной — редкость (" + totems + "/200)",
+				totems > 20 && totems < 80);
+		report(result, "незерит в смертельной — не всегда (" + netherite + "/200)",
+				netherite > 20 && netherite < 120);
+
+		// клиренс рождения учитывает будущий радиус: зона на 3000 не «садится» в 500 блоках от базы
+		AnomalyField.Avoid avoid = new AnomalyField.Avoid(List.of(new double[]{0.0, 0.0, 256.0}), null, 0);
+		report(result, "точка в 500 блоках годится для мелкой зоны", !avoid.blocks(500, 0, 100));
+		report(result, "та же точка не годится для крупной", avoid.blocks(500, 0, 400));
 	}
 
 	// --- отчёт ---
