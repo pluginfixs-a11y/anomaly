@@ -3,6 +3,7 @@ package anomaly;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.world.entity.EntityTypes;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
@@ -835,6 +836,23 @@ public final class SelfTest {
 			report(result, "лёд под шипом остаётся льдом",
 					level.getBlockState(new BlockPos(ix, iceSurface - 1, bz)).is(Blocks.ICE));
 			restore(level, iceBefore);
+
+			// грибные блоки и бамбук — как листва: на них не спавнится. Проверяем саму
+			// ванильную проверку спавна, поэтому тест падает, если миксин не применился
+			BlockPos spawnPos = new BlockPos(bx, level.getMinY() + 2, bz);
+			boolean leavesSpawn = Blocks.OAK_LEAVES.defaultBlockState()
+					.isValidSpawn(level, spawnPos, EntityTypes.ZOMBIE);
+			boolean mushroomSpawn = Blocks.RED_MUSHROOM_BLOCK.defaultBlockState()
+					.isValidSpawn(level, spawnPos, EntityTypes.ZOMBIE)
+					|| Blocks.BROWN_MUSHROOM_BLOCK.defaultBlockState()
+							.isValidSpawn(level, spawnPos, EntityTypes.ZOMBIE)
+					|| Blocks.MUSHROOM_STEM.defaultBlockState()
+							.isValidSpawn(level, spawnPos, EntityTypes.ZOMBIE)
+					|| Blocks.BAMBOO.defaultBlockState().isValidSpawn(level, spawnPos, EntityTypes.ZOMBIE)
+					|| Blocks.BAMBOO_BLOCK.defaultBlockState().isValidSpawn(level, spawnPos, EntityTypes.ZOMBIE);
+			report(result, "на шляпках грибов, стволе и бамбуке не спавнится (листва: "
+							+ (leavesSpawn ? "спавнится" : "нет") + ")",
+					!mushroomSpawn);
 
 			// лавовый разлом у воды — обычная трещина: лава там гаснет в камень
 			int lx = bx + 160;

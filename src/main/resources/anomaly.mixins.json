@@ -4,7 +4,8 @@
 	"package": "anomaly.mixin",
 	"compatibilityLevel": "JAVA_25",
 	"mixins": [
-		"PortalProcessorMixin"
+		"PortalProcessorMixin",
+		"BlockStateSpawnMixin"
 	],
 	"injectors": {
 		"defaultRequire": 1
