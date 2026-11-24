@@ -259,34 +259,47 @@ public final class AnomalyEffects {
 		double base = level.getHeight(Heightmap.Types.MOTION_BLOCKING, bx, bz);
 		// столб до 140 блоков: у крупной зоны дальний маяк должен читаться как столб света
 		int top = (int) Math.min(140.0, Math.max(56.0, player.getY() + 20.0 - base + dist * 0.15));
+		// основание: широкое пятно у земли, чтобы столб не выглядел ниткой
 		int color = zone.edgeColor();
 		var glow = new DustColorTransitionOptions(color, darken(color), 0.5f);
 		level.sendParticles(player, glow, true, true, zone.coreX(), base + 1.2, zone.coreZ(),
 				10, 1.5, 0.8, 1.5, 0.01);
-		// четыре пакета по высоте вместо одного: один пакет на top частиц с dy = top·0.45 —
-		// это гауссово облако с плотным центром, а не столб
-		int segments = 4;
-		int per = Math.max(4, top / segments);
+		// сегментов по высоте, а не четыре: четыре пакета на 140 блоков — это четыре искры
+		// с зазором 35 блоков, читается как обрывки, а не как шахта. Соседние сегменты
+		// перекрываются по dy
+		int segments = Math.max(4, Math.min(12, top / 12));
+		int per = Math.max(3, top / (segments * 2));
+		double dy = Math.max(1.0, top / (segments * 2.0));
 		for (int k = 0; k < segments; k++) {
 			level.sendParticles(player, ParticleTypes.END_ROD, true, true,
-					zone.coreX(), base + top * (k + 0.5) / segments, zone.coreZ(), per, 0.25, 2.0, 0.25, 0.0);
+					zone.coreX(), base + top * (k + 0.5) / segments, zone.coreZ(), per, 0.25, dy, 0.25, 0.0);
 		}
 	}
 
-	/** Указатель на ядро: короткий столб пыли в его сторону, в 28 блоках от игрока. */
+	/**
+	 * Указатель на ядро: короткий столб пыли в его сторону, в 24–30 блоках от игрока.
+	 * Высоту берём по рельефу: указатель под землёй или над кронами не работает.
+	 */
 	private static void bearing(ServerLevel level, ServerPlayer player, Zone zone, double dist) {
 		if (dist < 32.0) {
 			return;
 		}
 		double dx = (zone.coreX() - player.getX()) / dist;
 		double dz = (zone.coreZ() - player.getZ()) / dist;
-		double x = player.getX() + dx * 28.0;
-		double z = player.getZ() + dz * 28.0;
+		double reach = 24.0 + Math.floorMod(zone.id(), 3) * 3.0;
+		double x = player.getX() + dx * reach;
+		double z = player.getZ() + dz * reach;
+		int bx = (int) Math.floor(x);
+		int bz = (int) Math.floor(z);
+		double ground = level.getChunkSource().hasChunk(bx >> 4, bz >> 4)
+				? level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, bx, bz)
+				: player.getY() - 1.0;
+		double y = Math.max(ground, player.getY()) + 1.0;
 		int color = zone.edgeColor();
-		var dust = new DustColorTransitionOptions(color, darken(color), 0.45f);
-		for (int k = 0; k < 3; k++) {
-			level.sendParticles(player, dust, true, true, x, player.getY() + 1.0 + k * 3.0, z,
-					4, 0.6, 2.5, 0.6, 0.0);
+		// яркая пыль класса, не затемнённая: указатель должен читаться и ночью
+		var dust = new DustColorTransitionOptions(color, color, 0.6f);
+		for (int k = 0; k < 4; k++) {
+			level.sendParticles(player, dust, true, true, x, y + k * 3.0, z, 4, 0.6, 2.5, 0.6, 0.0);
 		}
 	}
 

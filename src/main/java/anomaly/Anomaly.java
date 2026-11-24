@@ -111,6 +111,10 @@ public final class Anomaly {
 	/** Колонка следа: op уже применён, осталось доделать снос дерева (не пишется в файл). */
 	public transient boolean scar_retry_tree;
 
+	/** Попытки поставить узлы и время последней: зона в океане не должна грузить чанки вечно. */
+	public transient int node_tries;
+	public transient long node_try_ms;
+
 	/** Рейдовые узлы: кладовая, алтарь и три якоря. Появляются при первом подходе к ядру. */
 	public boolean nodes_placed;
 	public double node_cx;

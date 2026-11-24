@@ -162,19 +162,26 @@ public final class AnomalyResidue {
 			return;
 		}
 		Path file = path;
-		RESIDUE_WRITER.execute(() -> {
-			boolean ok = true;
-			try {
-				ok = writeText(file, json, mySeq);
-			} catch (RuntimeException e) {
-				ok = false;
-				AnomalyMod.LOGGER.error("Anomaly: фоновая запись остатка упала", e);
-			}
+		try {
+			RESIDUE_WRITER.execute(() -> {
+				boolean ok = true;
+				try {
+					ok = writeText(file, json, mySeq);
+				} catch (RuntimeException e) {
+					ok = false;
+					AnomalyMod.LOGGER.error("Anomaly: фоновая запись остатка упала", e);
+				}
+				writing = false;
+				if (!ok) {
+					dirty = true;
+				}
+			});
+		} catch (RuntimeException rejected) {
+			// пул отказал: иначе writing останется true и остаток перестанет сохраняться
 			writing = false;
-			if (!ok) {
-				dirty = true;
-			}
-		});
+			dirty = true;
+			AnomalyMod.LOGGER.error("Anomaly: не смог поставить запись остатка в очередь", rejected);
+		}
 	}
 
 	private static final java.util.concurrent.ExecutorService RESIDUE_WRITER =
@@ -188,8 +195,14 @@ public final class AnomalyResidue {
 
 	static boolean saveNow() {
 		lastSaveMs = System.currentTimeMillis();
-		seq++;
-		boolean ok = path != null && writeText(path, GSON.toJson(data));
+		String json = GSON.toJson(data);
+		long mySeq;
+		synchronized (SAVE_LOCK) {
+			// номер выдаём под замком: иначе воркер, уже прошедший сверку, положит старый снимок
+			// поверх этого синхронного
+			mySeq = ++seq;
+		}
+		boolean ok = path != null && writeText(path, json, mySeq);
 		dirty = !ok;
 		return ok;
 	}
@@ -209,6 +222,7 @@ public final class AnomalyResidue {
 			}
 			Path tmp = file.resolveSibling(file.getFileName() + "." + System.nanoTime() + ".tmp");
 			Files.writeString(tmp, json, StandardCharsets.UTF_8);
+			cleanTmp(parent, file);
 			synchronized (SAVE_LOCK) {
 				if (mySeq != seq) {
 					// синхронный сейв успел раньше: этот снимок старше и в файл не идёт

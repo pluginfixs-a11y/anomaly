@@ -423,8 +423,8 @@ function draw() {
 
   drawGrid();
   if (state.show.rings) {
-    drawRing(RING_DISSIPATE, "#7d6f58", "3к · аномалии здесь гаснут", true);
-    drawRing(RING_HOME, "#3f5866", "6к · дальше мир начинает портиться", true);
+    drawRing(RING_DISSIPATE, "#a2957c", "3к · аномалии здесь гаснут", true);
+    drawRing(RING_HOME, "#7c98a8", "6к · дальше мир начинает портиться", true);
     drawSoftBand(RING_SAFE, TIER_BLUR, "rgba(93, 122, 88, 0.11)", "10к · опасные");
     drawSoftBand(RING_DANGER, TIER_BLUR, "rgba(168, 113, 47, 0.11)", "15к · смертельные");
     drawRing(WORLD_R, "#6b7075", "20к · граница мира");
@@ -595,7 +595,7 @@ function drawDamage(a, st) {
   // 0.18–0.85 радиуса, а не ровно в ядре (у r=200 бюджет 120 блоков, полрадиуса было бы 31 тыс.)
   const patchR = Math.min(st.radius * 0.5, Math.sqrt(blocks / Math.PI) * 1.6);
   const patchAngle = rnd() * Math.PI * 2;
-  const patchDist = st.radius * (0.18 + 0.5 * rnd());
+  const patchDist = st.radius * (0.18 + 0.67 * rnd());
   const px = st.x + Math.cos(patchAngle) * patchDist;
   const pz = st.z + Math.sin(patchAngle) * patchDist;
   polygonPath(shapePoints(a, { x: px, z: pz, radius: patchR }, 1));
@@ -870,6 +870,7 @@ window.anomalyPreview = {
 </script>
 </body>
 </html>
+
 
 
 

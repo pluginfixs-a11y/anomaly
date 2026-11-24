@@ -188,7 +188,14 @@ public final class AnomalyNodes {
 					continue;
 				}
 				Anomaly anomaly = zone.anomaly();
-				if (anomaly == null) {
+				if (anomaly == null || anomaly.nodes_placed) {
+					// уже поставлены: ни одного getChunk в тике (пять чанков каждые 2 с на зону —
+					// это синхронная генерация в обход бюджета следов)
+					continue;
+				}
+				long nowMs = System.currentTimeMillis();
+				if (anomaly.node_tries >= 6 || nowMs - anomaly.node_try_ms < 120_000L) {
+					// не встаёт (океан, лава, чужой блок): не долбим чанки каждые две секунды
 					continue;
 				}
 				// у зоны побольше узлы стоят не в ядре, а на 30 % радиуса рейда (до 360 блоков):
@@ -206,6 +213,8 @@ public final class AnomalyNodes {
 				}
 				// чанки узлов грузим сами: surface() на незагруженном чанке возвращает null,
 				// и узел молча не появляется (это и резало алтарь и якоря у крупных зон)
+				anomaly.node_try_ms = nowMs;
+				anomaly.node_tries++;
 				for (double[] at : nodeSpots(anomaly, cx, cz, r)) {
 					level.getChunk((int) Math.floor(at[0]) >> 4, (int) Math.floor(at[1]) >> 4);
 				}

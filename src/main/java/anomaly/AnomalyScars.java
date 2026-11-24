@@ -376,7 +376,7 @@ public final class AnomalyScars {
 					}
 					// вода проверяется на первой колонке и только после загрузки чанка: до загрузки
 					// сэмплы wetOp всегда «не загружены» и проверка молча не работала
-					if (anomaly.scar_cursor == 0 && wetOp(level, op)) {
+					if (anomaly.scar_cursor == 0 && !anomaly.scar_retry_tree && wetOp(level, op, data, config)) {
 						wetSkip = true;
 						break;
 					}
@@ -903,7 +903,7 @@ public final class AnomalyScars {
 	 * След целиком в воде (озеро, река, океан): колонки такого op обрывались по урезу и давали
 	 * половину воронки. Планирование идёт без уровня, поэтому проверяем при первом заходе в op.
 	 */
-	private static boolean wetOp(ServerLevel level, ScarOp op) {
+	private static boolean wetOp(ServerLevel level, ScarOp op, AnomalyFieldData data, AnomalyConfig config) {
 		double radius = Math.max(1.0, op.radius);
 		for (int i = 0; i < 9; i++) {
 			// центр, кольцо 0.75 и кольцо 1.0: воронка на берегу касается воды краем,
@@ -912,8 +912,16 @@ public final class AnomalyScars {
 			double r = i == 0 ? 0.0 : radius * (i % 2 == 0 ? 1.0 : 0.75);
 			int x = (int) Math.floor(op.x + Math.cos(angle) * r);
 			int z = (int) Math.floor(op.z + Math.sin(angle) * r);
-			if (!level.getChunkSource().hasChunk(x >> 4, z >> 4)) {
-				continue;
+			int chunkX = x >> 4;
+			int chunkZ = z >> 4;
+			if (!level.getChunkSource().hasChunk(chunkX, chunkZ)) {
+				// в свежей местности загружен только чанк первой колонки, и все сэмплы молча
+				// пропускались — проверка воды не работала вовсе. Грузим под суточным бюджетом
+				if (!chunkBudgetAllows(data, config, AnomalyClock.now())) {
+					continue;
+				}
+				level.getChunk(chunkX, chunkZ);
+				data.gen_count++;
 			}
 			int h = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, x, z);
 			if (h <= level.getMinY() + 2) {
@@ -940,8 +948,9 @@ public final class AnomalyScars {
 			BlockState state = level.getBlockState(pos.set(x, y, z));
 			// провал на леднике — законный след (шапка из снежного блока и пакета льда), но
 			// ICE трогать нельзя: под ним вода, и дыра в припае заливается сбоку
-			if (protectedBlock(state) || builtBlock(state) || isFragileSurface(state)
-					&& (state.is(Blocks.ICE) || state.is(Blocks.FROSTED_ICE) || state.is(Blocks.POWDER_SNOW))
+			if (protectedBlock(state) || builtBlock(state)
+					|| (isFragileSurface(state)
+					&& (state.is(Blocks.ICE) || state.is(Blocks.FROSTED_ICE) || state.is(Blocks.POWDER_SNOW)))
 					|| !state.getFluidState().isEmpty()) {
 				break;
 			}
@@ -1206,6 +1215,7 @@ public final class AnomalyScars {
 		return sum;
 	}
 }
+
 
 
 
