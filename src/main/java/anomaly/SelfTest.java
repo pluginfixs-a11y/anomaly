@@ -835,6 +835,32 @@ public final class SelfTest {
 					treeGone(level, tx2, tree2Surface, bz));
 			restore(level, tree2Before);
 
+			// поваленный лес: пень остаётся, ствол лежит — иначе «лес украли дровосеки»
+			int tx3 = bx + 160;
+			level.getChunk(tx3 >> 4, bz >> 4);
+			int forestSurface = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, tx3, bz);
+			Map<BlockPos, BlockState> forestBefore = snapshot(level, tx3, bz, 8, forestSurface - 1, forestSurface + 12);
+			snapshots.add(forestBefore);
+			plantTree(level, tx3, forestSurface, bz);
+			AnomalyScars.applyColumn(level, ScarOp.forest(tx3, bz, 6.0, 37L), tx3, bz);
+			boolean stump = level.getBlockState(new BlockPos(tx3, forestSurface, bz))
+					.is(net.minecraft.tags.BlockTags.LOGS)
+					|| level.getBlockState(new BlockPos(tx3, forestSurface + 1, bz))
+					.is(net.minecraft.tags.BlockTags.LOGS);
+			report(result, "поваленный лес: пень на месте", stump);
+			restore(level, forestBefore);
+
+			// провал с кромкой: у края грунт вывернут обломками, а не остаётся травой
+			int rimX = bx + 192;
+			level.getChunk(rimX >> 4, bz >> 4);
+			int rimSurface = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, rimX, bz);
+			Map<BlockPos, BlockState> rimBefore = snapshot(level, rimX, bz, 8, rimSurface - 2, rimSurface + 2);
+			snapshots.add(rimBefore);
+			AnomalyScars.applyColumn(level, ScarOp.sinkhole(rimX, bz, 5.0, 3, 41L), rimX + 4, bz);
+			BlockState rim = level.getBlockState(new BlockPos(rimX + 4, rimSurface - 1, bz));
+			report(result, "провал: кромка обломана обломками", !rim.isAir() && !rim.is(Blocks.GRASS_BLOCK));
+			restore(level, rimBefore);
+
 			// микрособытия: воронка от хлопка, наледь от холода, гарь от молнии
 			int mx = bx + 176;
 			level.getChunk(mx >> 4, bz >> 4);
@@ -1805,6 +1831,7 @@ public final class SelfTest {
 		}
 	}
 }
+
 
 
 

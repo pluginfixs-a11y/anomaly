@@ -627,7 +627,8 @@ public enum AnomalyComponent {
 		AnomalyConfig config = AnomalyMod.config;
 		return config.scar_enabled
 				&& Math.hypot(x, z) >= config.suppress_until
-				&& level.getServer().getAverageTickTimeNanos() / 1_000_000.0 <= config.mspt_limit;
+				&& level.getServer().getAverageTickTimeNanos() / 1_000_000.0
+						<= Math.min(config.mspt_limit, 30.0);
 	}
 
 	/** Пыль между игроком и ядром: тяга и отторжение перестают быть невидимыми. */

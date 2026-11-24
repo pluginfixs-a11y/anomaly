@@ -253,7 +253,12 @@ public final class AnomalyScars {
 			}
 			List<ScarOp> planned = planAt(pos[0], pos[1], Math.min(anomaly.r0, 900.0), cls,
 					new Random(anomaly.id * 31L + (long) (moved * 7.0)), false, anomaly.components);
-			double budget = AnomalyClass.damageBudget(anomaly.r0, cls) * 0.18;
+			// остаток бюджета зоны, а не фиксированная доля: план при рождении уже взял 0.4–0.9,
+			// и дрейфовые добавки утраивали обещанный damageBudget
+			double budget = AnomalyClass.damageBudget(anomaly.r0, cls) - plannedBlocks(anomaly.scars);
+			if (budget <= 0.0) {
+				continue;
+			}
 			double used = 0.0;
 			for (ScarOp op : planned) {
 				if (used + op.blocks > budget || anomaly.scars.size() >= MAX_OPS) {
@@ -271,6 +276,17 @@ public final class AnomalyScars {
 	}
 
 	// --- применение ---
+
+	/** Сколько блоков уже обещано планом зоны: по нему считается остаток бюджета. */
+	static double plannedBlocks(List<ScarOp> ops) {
+		double sum = 0.0;
+		for (ScarOp op : ops) {
+			if (op != null) {
+				sum += op.blocks;
+			}
+		}
+		return sum;
+	}
 
 	/** С какой записи начинать следующий проход: строгий FIFO морил голодом всё поле за первой зоной. */
 	private static int rotate;
@@ -382,21 +398,23 @@ public final class AnomalyScars {
 					if (wet == 0) {
 						// бюджет/дедлайн не дали даже одного чанка: это не «сухо», а «не знаю» —
 						// не помечаем op проверенным и возвращаемся к нему в следующем проходе
-						if (++anomaly.scar_wet_tries < 3) {
+						if (++anomaly.scar_wet_tries < 8) {
 							finished = false;
 							limitHit = true;
 							break;
 						}
-						// трижды не смогли — считаем сухим, иначе op держит очередь своей зоны
+						// восемь раз не смогли: считаем МОКРЫМ. «Сухо» здесь означало бы воронку
+						// в берег — ровно то, от чего защищались; пропуск безопаснее
 						anomaly.scar_wet_tries = 0;
 						anomaly.scar_wet_for = anomaly.scar_next;
-					} else {
-						anomaly.scar_wet_tries = 0;
-						anomaly.scar_wet_for = anomaly.scar_next;
-						if (wet == 2) {
-							wetSkip = true;
-							break;
-						}
+						wetSkip = true;
+						break;
+					}
+					anomaly.scar_wet_tries = 0;
+					anomaly.scar_wet_for = anomaly.scar_next;
+					if (wet == 2) {
+						wetSkip = true;
+						break;
 					}
 				}
 				if (anomaly.scar_telegraph_for != anomaly.scar_next && !anomaly.scar_retry_tree) {
@@ -412,9 +430,9 @@ public final class AnomalyScars {
 					try {
 						// повтор после обрыва по дереву: op уже применён, доделываем только дерево,
 						// иначе воронка копается второй раз уже по дну ямы
-						applied = anomaly.scar_retry_tree
-								? finishTree(level, column[0], column[1])
-								: applyColumn(level, op, column[0], column[1]);
+						// повтор колонки: дерево сносится ДО следа, значит op ещё не применён
+						// и колонку надо обработать целиком (а не только доделать дерево)
+						applied = applyColumn(level, op, column[0], column[1]);
 						anomaly.scar_retry_tree = false;
 					} catch (RuntimeException e) {
 						// одна строка на проход, а не на колонку: устойчивое исключение иначе
@@ -562,7 +580,7 @@ public final class AnomalyScars {
 	private static boolean soil(BlockState state) {
 		return state.is(Blocks.GRASS_BLOCK) || state.is(Blocks.DIRT) || state.is(Blocks.PODZOL)
 				|| state.is(Blocks.MOSS_BLOCK) || state.is(Blocks.MYCELIUM) || state.is(Blocks.ROOTED_DIRT)
-				|| state.is(Blocks.MUD) || state.is(Blocks.CLAY);
+				|| state.is(Blocks.MUD) || state.is(Blocks.CLAY) || state.is(Blocks.COARSE_DIRT);
 	}
 
 	/**
@@ -659,7 +677,9 @@ public final class AnomalyScars {
 	/** Листва или грибные шляпы вокруг ствола: по ним дерево отличается от сруба из брёвен. */
 	private static boolean hasFoliage(ServerLevel level, int x, int height, int z) {
 		BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
-		int bottom = Math.max(level.getMinY() + 1, height - 10);
+		// листва только на уровне верха ствола и выше: иначе стена из брёвен у леса
+		// считалась кроной, и clearTreeColumn выносил всю вертикаль
+		int bottom = Math.max(level.getMinY() + 1, height - 1);
 		for (int dx = -2; dx <= 2; dx++) {
 			for (int dz = -2; dz <= 2; dz++) {
 				if (!level.getChunkSource().hasChunk((x + dx) >> 4, (z + dz) >> 4)) {
@@ -687,7 +707,7 @@ public final class AnomalyScars {
 		BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
 		// сверху вниз: крона висит и ниже верхушки ствола, а земля — единственный стоп-блок
 		int top = Math.min(level.getMaxY() - 2, height + 8);
-		int bottom = Math.max(level.getMinY() + 1, height - 40);
+		int bottom = Math.max(level.getMinY() + 1, height - 24);
 		int changed = 0;
 		for (int y = top; y >= bottom; y--) {
 			// дерево — это до 48 setBlock в одной колонке: проверяем бюджет внутри, иначе
@@ -725,27 +745,19 @@ public final class AnomalyScars {
 			return 0;
 		}
 		Block log = top.getBlock();
-		int changed = clearTreeColumn(level, x, height, z);
+		// крона снимается целиком: одна колонка ствола оставляла висеть 8/9 листвы
+		int changed = deforestForce(level, x, height, z);
 		if (changed < 0) {
 			// ствол не доснесён по дедлайну: колонку нельзя считать обработанной, иначе рядом
 			// с лежащим бревном останется обрубок
 			return -1;
 		}
-		// пень: 1–2 блока ствола у земли. Без него «поваленный лес» читается как «кто-то
-		// напилил дров и унёс», а не как лес, который положило
-		BlockPos.MutableBlockPos stump = new BlockPos.MutableBlockPos();
-		for (int i = 0; i < 2; i++) {
-			BlockState at = level.getBlockState(stump.set(x, surface + i, z));
-			if (at.blocksMotion() || protectedBlock(at)) {
-				break;
-			}
-			level.setBlock(stump, log.defaultBlockState(), Block.UPDATE_ALL);
-			changed++;
-		}
 		int hash = (int) ((x * 31L) ^ (z * 17L) ^ op.seed);
 		int length = 4 + Math.floorMod(hash, 4);
 		BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
-		for (int i = 0; i < length; i++) {
+		// укладка начинается со второго блока: на месте ствола остаётся пень, и первое бревно
+		// в той же колонке не давало уложить ни одного (place упирался в пень)
+		for (int i = 1; i < length; i++) {
 			int bx = (int) Math.floor(x + Math.cos(op.angle) * i);
 			int bz = (int) Math.floor(z + Math.sin(op.angle) * i);
 			if (!level.getChunkSource().hasChunk(bx >> 4, bz >> 4)) {
@@ -775,6 +787,17 @@ public final class AnomalyScars {
 						ax >= az ? Direction.Axis.X : Direction.Axis.Z);
 			}
 			level.setBlock(pos, lay, Block.UPDATE_ALL);
+			changed++;
+		}
+		// пень: 1–2 блока ствола у земли, ставится после укладки, иначе первое бревно
+		// упирается в него и лес остаётся стоять пнём
+		BlockPos.MutableBlockPos stump = new BlockPos.MutableBlockPos();
+		for (int i = 0; i < 2; i++) {
+			BlockState at = level.getBlockState(stump.set(x, surface + i, z));
+			if (at.blocksMotion() || protectedBlock(at)) {
+				break;
+			}
+			level.setBlock(stump, log.defaultBlockState(), Block.UPDATE_ALL);
 			changed++;
 		}
 		return changed;
@@ -875,7 +898,9 @@ public final class AnomalyScars {
 		int hash = (int) ((x * 73856093L) ^ (z * 19349663L) ^ seed);
 		BlockPos ground = new BlockPos(x, surface - 1, z);
 		BlockState state = level.getBlockState(ground);
-		if (protectedBlock(state) || state.isAir()) {
+		// грядки и тропинки — работа игрока: rubble не должен штукатурить ферму
+		if (protectedBlock(state) || state.isAir() || state.is(Blocks.FARMLAND)
+				|| state.is(Blocks.DIRT_PATH)) {
 			return 0;
 		}
 		Block block = rubbleBlock(state, hash);
@@ -886,6 +911,11 @@ public final class AnomalyScars {
 
 	/** Обломки из того же материала, что и грунт: булыжник посреди песка или терракоты — клякса. */
 	private static Block rubbleBlock(BlockState ground, int hash) {
+		// трава и земля — не камень: на лугу обломки это вывернутый грунт, а не булыжник,
+		// иначе каждый хлопок у игрока красит луг серым пятном
+		if (soil(ground)) {
+			return pick(hash, Blocks.COARSE_DIRT, Blocks.DIRT, Blocks.GRAVEL);
+		}
 		if (ground.is(BlockTags.SAND)) {
 			return pick(hash, Blocks.SANDSTONE, Blocks.SANDSTONE, Blocks.GRAVEL);
 		}
@@ -914,6 +944,8 @@ public final class AnomalyScars {
 		if (lava && fluidNear(level, x, surface, z)) {
 			lava = false;
 		}
+		// трава и цветы в трещине сносятся ванилью с дропом — убираем сами
+		clearPlant(level, x, surface, z);
 		int changed = 0;
 		BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
 		for (int i = 0; i < depth; i++) {
@@ -1158,13 +1190,23 @@ public final class AnomalyScars {
 	static boolean builtBlock(BlockState state) {
 		return state.is(BlockTags.PLANKS) || state.is(BlockTags.STONE_BRICKS) || state.is(BlockTags.WOOL)
 				|| state.is(BlockTags.CONCRETE) || state.is(BlockTags.CONCRETE_POWDERS) || state.is(BlockTags.COPPER)
+				// стены, заборы, двери, люки: без них следы сносили забор вокруг базы
+				|| state.is(BlockTags.WALLS) || state.is(BlockTags.FENCES) || state.is(BlockTags.FENCE_GATES)
+				|| state.is(BlockTags.DOORS) || state.is(BlockTags.TRAPDOORS)
 				|| state.is(Blocks.BRICKS) || state.is(Blocks.GLASS) || state.is(Blocks.GLASS_PANE)
 				|| state.is(Blocks.TINTED_GLASS) || state.is(Blocks.SANDSTONE) || state.is(Blocks.SMOOTH_SANDSTONE)
 				|| state.is(Blocks.CUT_SANDSTONE) || state.is(Blocks.SMOOTH_STONE) || state.is(Blocks.MUD_BRICKS)
 				|| state.is(Blocks.DEEPSLATE_BRICKS) || state.is(Blocks.DEEPSLATE_TILES)
 				|| state.is(Blocks.POLISHED_DEEPSLATE) || state.is(Blocks.COBBLESTONE)
 				|| state.is(Blocks.MOSSY_COBBLESTONE) || state.is(BlockTags.SLABS)
-				|| state.is(BlockTags.STAIRS);
+				|| state.is(BlockTags.STAIRS)
+				// камень, который в природе не встречается: кварц, пурпур, призмарин, чернокамень
+				|| state.is(Blocks.QUARTZ_BLOCK) || state.is(Blocks.SMOOTH_QUARTZ) || state.is(Blocks.PURPUR_BLOCK)
+				|| state.is(Blocks.PRISMARINE) || state.is(Blocks.PRISMARINE_BRICKS) || state.is(Blocks.DARK_PRISMARINE)
+				|| state.is(Blocks.BLACKSTONE) || state.is(Blocks.POLISHED_BLACKSTONE)
+				|| state.is(Blocks.NETHER_BRICKS) || state.is(Blocks.RED_NETHER_BRICKS)
+				|| state.is(Blocks.IRON_BARS) || state.is(Blocks.CRAFTING_TABLE) || state.is(Blocks.BOOKSHELF)
+				|| state.is(Blocks.SCAFFOLDING) || state.is(Blocks.BEEHIVE);
 	}
 
 	static boolean protectedBlock(BlockState state) {
@@ -1377,6 +1419,8 @@ public final class AnomalyScars {
 		return sum;
 	}
 }
+
+
 
 
 
