@@ -11,6 +11,7 @@ import net.minecraft.world.entity.EntityTypes;
 import net.minecraft.world.entity.decoration.ArmorStand;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.levelgen.Heightmap;
+import net.minecraft.world.phys.AABB;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -78,6 +79,9 @@ public final class AnomalyMadness {
 
 	// --- шаг на игроке ---
 
+	/** Счётчик вызовов: уборка сирот идёт не чаще раза в 10 минут на игрока. */
+	private static int sweeps;
+
 	public static void tick(ServerPlayer player, AnomalyState state, AnomalyConfig config) {
 		if (config == null || !config.enabled || !config.madness_enabled) {
 			return;
@@ -85,6 +89,10 @@ public final class AnomalyMadness {
 		ServerLevel level = player.level();
 		if (level.dimension() != Level.OVERWORLD) {
 			return;
+		}
+		// уборка сирот прошлой сессии: чанк мог загрузиться раньше, чем сущность попала в список
+		if (++sweeps % 1200 == 0) {
+			sweepNear(level, player);
 		}
 		if (player.isCreative() || player.isSpectator()) {
 			cleanup(player.getUUID());
@@ -181,7 +189,7 @@ public final class AnomalyMadness {
 		stand.setInvulnerable(true);
 		stand.setSilent(true);
 		stand.setNoGravity(false);
-		stand.addTag("anomaly:figure");
+		stand.addTag(TAG);
 		level.addFreshEntity(stand);
 		FIGURES.put(key, new Figure(stand.getId(), System.currentTimeMillis()));
 	}
@@ -236,6 +244,51 @@ public final class AnomalyMadness {
 	/** Сколько фигур сейчас живо: для команды и самопроверки. */
 	public static int figures() {
 		return FIGURES.size();
+	}
+
+	/** Тег фигуры: по нему убираются сироты прошлой сессии. */
+	static final String TAG = "anomaly:figure";
+
+	/** Живая ли это фигура текущей сессии (а не сирота из чанка). */
+	static boolean known(int entityId) {
+		for (Figure figure : FIGURES.values()) {
+			if (figure.entityId() == entityId) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Уборка сирот: сервер упал или его выключили с фигурой на поле — армор-стенд остался бы
+	 * в мире навсегда и читался бы как чужая постройка. При загрузке чанка убираем всех
+	 * помеченных, кого не знает текущая сессия. Запрос ограничен одним чанком.
+	 */
+	public static void sweep(ServerLevel level, net.minecraft.world.level.chunk.LevelChunk chunk) {
+		var pos = chunk.getPos();
+		AABB box = new AABB(pos.getMinBlockX(), level.getMinY(), pos.getMinBlockZ(),
+				pos.getMaxBlockX() + 1, level.getMaxY(), pos.getMaxBlockZ() + 1);
+		for (ArmorStand stand : level.getEntitiesOfClass(ArmorStand.class, box,
+				entity -> entity.entityTags().contains(TAG))) {
+			if (!known(stand.getId())) {
+				stand.discard();
+			}
+		}
+	}
+
+	/**
+	 * Уборка сирот рядом с игроком: сервер упал или его выключили с фигурой на поле — армор-стенд
+	 * остался бы в мире навсегда и читался бы как чужая постройка. Раз в 10 минут на игрока,
+	 * запрос ограничен 64 блоками: это дешевле, чем сканировать чанки при каждой загрузке.
+	 */
+	static void sweepNear(ServerLevel level, ServerPlayer player) {
+		AABB box = player.getBoundingBox().inflate(64.0);
+		for (ArmorStand stand : level.getEntitiesOfClass(ArmorStand.class, box,
+				entity -> entity.entityTags().contains(TAG))) {
+			if (!known(stand.getId())) {
+				stand.discard();
+			}
+		}
 	}
 
 	/** Отладочный показ: один звук, фигура и ложный тотем — не дожидаясь остатка в 12 часов. */

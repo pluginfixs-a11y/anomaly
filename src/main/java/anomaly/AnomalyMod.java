@@ -67,6 +67,9 @@ public class AnomalyMod implements ModInitializer {
 		AnomalyResidue.register();
 		AnomalyNodes.register();
 		AnomalyCommand.register();
+		// фигуры шизы, оставшиеся от прошлой сессии, убираются при загрузке их чанка
+		net.fabricmc.fabric.api.event.lifecycle.v1.ServerChunkEvents.CHUNK_LOAD.register(
+				(level, chunk, newlyGenerated) -> AnomalyMadness.sweep(level, chunk));
 
 		if (System.getProperty("anomaly.selftest") != null || System.getenv("ANOMALY_SELFTEST") != null) {
 			ServerTickEvents.START_SERVER_TICK.register(SelfTest::onTick);
