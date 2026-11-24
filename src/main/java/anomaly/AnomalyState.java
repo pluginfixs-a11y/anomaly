@@ -77,6 +77,8 @@ public final class AnomalyState {
 
 	/** Счётчик урона Нижнего мира: отдельный от hazardTicks, который гасит leave(). */
 	public int netherTicks;
+	/** Гул оброка уже сыгран в этом цикле: звук идёт за секунду до удара, а не вместе с ним. */
+	public transient boolean netherWarned;
 
 	/** Счётчик эффектных тиков: по нему идут периодические эффекты, а не по мировому времени. */
 	public void pulse(int ticks) {

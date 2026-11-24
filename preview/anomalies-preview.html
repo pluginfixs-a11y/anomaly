@@ -617,12 +617,17 @@ function damagePlan(a, st) {
   for (let i = 0; i < count; i++) {
     // блоков на один op → радиус пятна той же площади
     const share = plan / count;
-    const radius = Math.max(1.2, Math.min(st.radius * 0.3, Math.sqrt(share / Math.PI)));
+    const kind = pickDamageKind(a, blocks, rnd);
+    // потолки радиусов — те же, что в ScarOp.pick: пятно ≤24, провал ≤8, пик ≤14,
+    // плита ≤18, руины ≤13, лес ≤24. Без них превью обещало пятна вдвое крупнее
+    const cap = kind === "sinkhole" ? 8 : kind === "spike" ? 14 : kind === "uplift" ? 18
+      : kind === "ruins" ? 13 : kind === "fault" ? 3 : 24;
+    const radius = Math.max(1.2, Math.min(cap, st.radius * 0.3, Math.sqrt(share / Math.PI)));
     const ang = rnd() * Math.PI * 2;
     // spot(): 0.08 + 0.78·√u — следы ложатся от ядра до края, а не только в центре
     const dist = st.radius * (0.08 + 0.78 * Math.sqrt(rnd()));
     ops.push({
-      kind: pickDamageKind(a, blocks, rnd),
+      kind,
       x: st.x + Math.cos(ang) * dist,
       z: st.z + Math.sin(ang) * dist,
       radius
@@ -646,7 +651,7 @@ function pickDamageKind(a, blocks, rnd) {
     if (r < 0.76 && a.geo && a.geo.storm) return "fault";
   }
   if (r < 0.70) return "soil";
-  if (r < 0.88) return "crater";
+  // лунки — не план зоны, а микрособытие у игрока (AnomalyScars.microCrater); в плане их нет
   return "crack";
 }
 
@@ -772,19 +777,18 @@ function drawDamageOp(a, st, kind, ox, oz, radius, strength, rnd) {
   }
 
   if (kind === "uplift") {
-    // поднятая плита: светлый пласт с тенью по нижнему краю
-    const rr = Math.max(3, radius * s);
-    ctx.beginPath();
-    ctx.arc(sx, sy, rr, 0, Math.PI * 2);
-    ctx.fillStyle = `rgba(188, 178, 152, ${0.30 + 0.35 * strength})`;
-    ctx.fill();
-    ctx.strokeStyle = `rgba(58, 52, 40, ${0.55 + 0.3 * strength})`;
-    ctx.lineWidth = Math.max(1, 1.5 * s);
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.arc(sx + rr * 0.18, sy + rr * 0.22, rr * 0.9, 0.2, Math.PI - 0.2);
-    ctx.strokeStyle = "rgba(20, 17, 12, 0.45)";
-    ctx.stroke();
+    // поднятая плита: ступени по 2 блока (uplift квантует высоту), а не ровный круг
+    const rings = 3;
+    for (let step = rings - 1; step >= 0; step--) {
+      const rr = Math.max(3, radius * s * (0.35 + 0.22 * step));
+      ctx.beginPath();
+      ctx.arc(sx, sy, rr, 0, Math.PI * 2);
+      ctx.fillStyle = `rgba(188, 178, 152, ${(0.22 + 0.1 * step) + 0.2 * strength})`;
+      ctx.fill();
+      ctx.strokeStyle = `rgba(58, 52, 40, ${0.35 + 0.12 * step + 0.2 * strength})`;
+      ctx.lineWidth = Math.max(1, 1.2 * s);
+      ctx.stroke();
+    }
     return;
   }
 

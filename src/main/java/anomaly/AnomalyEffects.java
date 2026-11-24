@@ -518,9 +518,14 @@ public final class AnomalyEffects {
 			return;
 		}
 		double y = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, bx, bz) + 0.6;
-		level.playSound(null, x, y, z, SoundEvents.STONE_BREAK, SoundSource.AMBIENT, 1.4f, 0.55f);
-		level.sendParticles(new DustColorTransitionOptions(color, darken(color), 0.8f),
-				x, y + 1.0, z, 26, 2.2, 1.4, 2.2, 0.02);
+		// Громко: след в 40 блоков должен быть слышен, а не «треснуло где-то сбоку».
+		// Пыль — облаком по подошве, а не одной точкой: игрок видит, откуда придёт камень
+		level.playSound(null, x, y, z, SoundEvents.STONE_BREAK, SoundSource.AMBIENT, 4.0f, 0.5f);
+		level.playSound(null, x, y, z, SoundEvents.DEEPSLATE_BREAK, SoundSource.AMBIENT, 2.4f, 0.45f);
+		level.sendParticles(new DustColorTransitionOptions(color, darken(color), 0.9f),
+				x, y + 1.2, z, 60, 4.0, 1.8, 4.0, 0.02);
+		level.sendParticles(new DustColorTransitionOptions(darken(color), color, 0.5f),
+				x, y + 0.4, z, 24, 3.2, 0.6, 3.2, 0.01);
 	}
 
 	/** Вход в аномалию: звук и вспышка пыли у ног. Текст в UI не выводим — механики объясняются средой. */

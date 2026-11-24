@@ -48,7 +48,7 @@ public final class AnomalyNodes {
 	/** Кладовая восстанавливается через 25 минут, и только если рядом никого не было. */
 	private static final long CACHE_RESTORE_MS = 25L * 60_000L;
 	/** Радиус «рядом»: у сундука не отсидеться за границей мелкой зоны (r=100 — это 10 секунд ходьбы). */
-	private static final double CACHE_CLEAR = 512.0;
+	private static final double CACHE_CLEAR = 64.0;
 	/** Сколько раз кладовая наполняется за жизнь зоны: ферма у сундука не должна кормить вечно. */
 	private static final int CACHE_MAX_RESTORES = 3;
 	/** Сколько уровней стоит один обмен на алтаре. */
@@ -258,7 +258,7 @@ public final class AnomalyNodes {
 					}
 					// синхронная генерация — 10–50 мс в тик-потоке; при живых игроках узлы
 					// ждут, пока чанк загрузится сам: игрок всё равно стоит далеко
-					if (!level.players().isEmpty()) {
+					if (AnomalyScars.serverHasPlayers(level)) {
 						break;
 					}
 					level.getChunk(cx2, cz2);
@@ -321,7 +321,7 @@ public final class AnomalyNodes {
 			}
 		}
 		if (!anomaly.node_altar_ok) {
-			double[] altar = nodePos(anomaly, baseAngle(anomaly), 0.32);
+			double[] altar = nodeSpots(anomaly, anomaly.node_cx, anomaly.node_cz, anomaly.node_r).get(1);
 			BlockPos altarPos = adoptOrSpot(level, altar[0], altar[1], Blocks.LODESTONE);
 			if (altarPos != null) {
 				if (!level.getBlockState(altarPos).is(Blocks.LODESTONE)) {
@@ -337,7 +337,7 @@ public final class AnomalyNodes {
 			if ((anomaly.anchors_placed & bit) != 0) {
 				continue;
 			}
-			double[] anchor = nodePos(anomaly, baseAngle(anomaly) + i * Math.PI * 2.0 / 3.0, 0.62);
+			double[] anchor = anchorSpot(anomaly, i);
 			BlockPos anchorPos = adoptOrSpot(level, anchor[0], anchor[1], Blocks.CRYING_OBSIDIAN);
 			if (anchorPos != null) {
 				if (!level.getBlockState(anchorPos).is(Blocks.CRYING_OBSIDIAN)) {
@@ -401,13 +401,9 @@ public final class AnomalyNodes {
 			return false;
 		}
 		if (!level.getChunkSource().hasChunk(pos.getX() >> 4, pos.getZ() >> 4)) {
-			// чанк выгружен — а без игрока рядом он всегда выгружен, и «занято» его и не пускало:
-			// рефилл был недостижим. Грузим сами, но только на пустом сервере: при игроках
-			// это 10–50 мс синхронной генерации в тик-потоке
-			if (!level.players().isEmpty()) {
-				return false;
-			}
-			level.getChunk(pos.getX() >> 4, pos.getZ() >> 4);
+			// чанк выгружен: рефилл произойдёт, когда игрок подойдёт ближе 64 блоков и чанк
+			// загрузится сам. Синхронной генерации здесь нет — она стоила 10–50 мс в тике
+			return false;
 		}
 		if (level.getBlockState(pos).is(Blocks.CHEST)) {
 			// сундук уже вернули (или его не ломали): флаг снимаем, ждём следующего раза
@@ -445,7 +441,8 @@ public final class AnomalyNodes {
 			if (other.level() != level) {
 				continue;
 			}
-			// шаг за границу мелкой зоны не должен снимать «занято»
+			// 64 блока, а не 512: чанк на 512 уже выгружен, и «занято» не снималось бы никогда —
+			// рефилл кладовой был мёртв на живом сервере
 			if (Math.hypot(other.getX() - cx, other.getZ() - cz) < CACHE_CLEAR) {
 				return true;
 			}
@@ -741,7 +738,7 @@ public final class AnomalyNodes {
 			if (anomaly.anchor_ys[i] != pos.getY()) {
 				continue;
 			}
-			double[] anchor = nodePos(anomaly, baseAngle(anomaly) + i * Math.PI * 2.0 / 3.0, 0.62);
+			double[] anchor = anchorSpot(anomaly, i);
 			if ((int) Math.floor(anchor[0]) == pos.getX() && (int) Math.floor(anchor[1]) == pos.getZ()) {
 				return i;
 			}
@@ -749,8 +746,18 @@ public final class AnomalyNodes {
 		return -1;
 	}
 
-	static double[] nodePos(Anomaly anomaly, double angle, double factor) {
-		double radius = Math.max(20.0, anomaly.node_r) * factor;
+	/**
+	 * Одна точка узла относительно кладовой: смещение меньше самого узла (см. nodeSpots).
+	 * Прежний вариант умножал расстояние до ядра (до 360) на 0.32/0.62 и выносил якоря
+	 * за границу зоны.
+	 */
+	/** Точка i-го якоря: ровно та же, что в nodeSpots и в тесте, иначе «сломан» не тот блок. */
+	static double[] anchorSpot(Anomaly anomaly, int index) {
+		return nodeSpots(anomaly, anomaly.node_cx, anomaly.node_cz, anomaly.node_r).get(index + 2);
+	}
+
+	static double[] nodePos(Anomaly anomaly, double angle, double rings) {
+		double radius = Math.max(10.0, Math.min(28.0, anomaly.node_r * 0.02)) * rings;
 		return new double[]{
 				anomaly.node_cx + Math.cos(angle) * radius,
 				anomaly.node_cz + Math.sin(angle) * radius
@@ -791,16 +798,22 @@ public final class AnomalyNodes {
 		return Math.max(20.0, zoneRadius - depth);
 	}
 
-	/** Позиции всех узлов: кладовая в ядре, алтарь на 32 %, три якоря на 62 %. */
+	/**
+	 * Пять точек рейда — вокруг узла, а не вдоль радиуса к ядру. Узлы стоят в 120–360 блоках
+	 * внутрь от края, и прежние 0.32/0.62·r от точки узла выносили алтарь и якоря ЗА границу
+	 * зоны (у R=3000 третий якорь уходил на 1.43R), а ломать якорь можно только изнутри —
+	 * значит финал рейда не срабатывал никогда.
+	 */
 	static java.util.List<double[]> nodeSpots(Anomaly anomaly, double cx, double cz, double r) {
 		java.util.List<double[]> spots = new java.util.ArrayList<>(5);
 		spots.add(new double[]{cx, cz});
 		double angle = (anomaly.id * 2.399963229728653) % (Math.PI * 2.0);
-		double radius = Math.max(20.0, r);
-		spots.add(new double[]{cx + Math.cos(angle) * radius * 0.32, cz + Math.sin(angle) * radius * 0.32});
+		double base = Math.max(10.0, Math.min(28.0, r * 0.02));
+		// алтарь — в 10–28 блоках по одному лучу, якоря — кольцом в 1.6 раза дальше
+		spots.add(new double[]{cx + Math.cos(angle) * base, cz + Math.sin(angle) * base});
 		for (int i = 0; i < 3; i++) {
-			double a = angle + i * Math.PI * 2.0 / 3.0;
-			spots.add(new double[]{cx + Math.cos(a) * radius * 0.62, cz + Math.sin(a) * radius * 0.62});
+			double a = angle + Math.PI * 0.5 + i * Math.PI * 2.0 / 3.0;
+			spots.add(new double[]{cx + Math.cos(a) * base * 1.6, cz + Math.sin(a) * base * 1.6});
 		}
 		return spots;
 	}
@@ -833,7 +846,7 @@ public final class AnomalyNodes {
 		StringBuilder anchors = new StringBuilder();
 		int standing = 0;
 		for (int i = 0; i < 3; i++) {
-			double[] anchor = nodePos(anomaly, baseAngle(anomaly) + i * Math.PI * 2.0 / 3.0, 0.62);
+			double[] anchor = anchorSpot(anomaly, i);
 			int bit = 1 << i;
 			boolean chunk = loaded(level, anchor[0], anchor[1]);
 			if ((anomaly.anchors_broken & bit) != 0) {
@@ -892,6 +905,10 @@ public final class AnomalyNodes {
 				: String.valueOf(Math.round(value));
 	}
 }
+
+
+
+
 
 
 

@@ -237,9 +237,11 @@ public class AnomalyMod implements ModInitializer {
 			return;
 		}
 		double scaled = Math.hypot(player.getX(), player.getZ()) * 8.0;
-		// Оброк берётся с первого шага, а не с 6 000: иначе незерит и тотем добывались в аду
-		// рядом с порталом без единой капли риска, и дальние кольца Верхнего мира теряли смысл.
-		// У самого портала цена почти нулевая (регенерация её перекрывает), глубже — растёт
+		// Первые 1500 блоков Верхнего мира (≈190 в аду) — зона портала: у своей стройки
+		// игрок не должен умирать. Дальше оброк берётся с первого шага и растёт квадратично
+		if (scaled < 1500.0) {
+			return;
+		}
 		double depth = Math.min(1.0, scaled / 24000.0);
 		double ramp = depth * depth;
 		state.dose = Math.min(1.0, state.dose + config.dose_gain_per_second * seconds * depth);
@@ -248,16 +250,19 @@ public class AnomalyMod implements ModInitializer {
 		// свой счётчик: ветка overworld_only зовёт leave(), а он гасит hazardTicks —
 		// с ним урон в аду не срабатывал ни разу
 		state.netherTicks += AnomalyState.stepTicks(seconds);
-		if (state.netherTicks >= 120) {
-			state.netherTicks = 0;
-			// оброк должен читаться, а не бить из пустоты: гул душ и пепел вокруг игрока
-			// за пару секунд до урона — иначе это выглядит как случайный урон от сервера
+		// гул и пепел — за секунду ДО удара, а не в том же тике: игрок должен обернуться
+		if (state.netherTicks >= 100 && !state.netherWarned) {
+			state.netherWarned = true;
 			player.level().playSound(null, player.getX(), player.getY(), player.getZ(),
 					net.minecraft.sounds.SoundEvents.SOUL_ESCAPE.value(),
 					net.minecraft.sounds.SoundSource.AMBIENT, 0.9f + 0.7f * (float) depth, 0.55f);
 			((net.minecraft.server.level.ServerLevel) player.level()).sendParticles(
 					new net.minecraft.core.particles.DustColorTransitionOptions(0x6B1A1A, 0x1F1013, 0.7f),
 					player.getX(), player.getY() + 1.0, player.getZ(), 8 + (int) (16 * depth), 0.9, 0.7, 0.9, 0.01);
+		}
+		if (state.netherTicks >= 120) {
+			state.netherTicks = 0;
+			state.netherWarned = false;
 			player.hurt(player.level().damageSources().magic(), (float) (0.5 + 4.2 * ramp));
 			// сатурация в аду тоже сливается — но только там, где оброк уже настоящий:
 			// у портала пусть работает обычная еда, иначе первый поход в ад станет наказанием

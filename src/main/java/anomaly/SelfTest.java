@@ -1256,6 +1256,18 @@ public final class SelfTest {
 		}
 		report(result, "пять узлов рейда внутри зоны", inside);
 
+		// у большой зоны узлы не должны уезжать за границу: якоря ставились долями радиуса
+		// ОТ ТОЧКИ УЗЛА, и у R=3000 третий уходил на 1.43R — ломать его можно только изнутри
+		double bigNode = AnomalyNodes.nodeRadius(3000.0);
+		double angle = 0.7;
+		double ncx = Math.cos(angle) * bigNode;
+		double ncz = Math.sin(angle) * bigNode;
+		boolean bigInside = true;
+		for (double[] spot : AnomalyNodes.nodeSpots(anomaly, ncx, ncz, bigNode)) {
+			bigInside &= Math.hypot(spot[0], spot[1]) < 3000.0;
+		}
+		report(result, "у зоны R=3000 все пять узлов внутри границы", bigInside);
+
 		// лут есть у всех трёх классов
 		boolean allLoot = true;
 		for (AnomalyClass cls : AnomalyClass.values()) {

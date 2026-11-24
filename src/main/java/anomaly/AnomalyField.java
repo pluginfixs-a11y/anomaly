@@ -195,8 +195,8 @@ public final class AnomalyField {
 		boolean overdue = real - lastSaveMs > FORCED_SAVE_MS;
 		if (dirty && (overdue || (due && calm))) {
 			if (overdue && !calm) {
-				AnomalyMod.LOGGER.warn("Anomaly: снимок поля откладывался {} мин (MSPT высокий)",
-						Math.round((real - lastSaveMs) / 60_000.0));
+				warnOnce("снимок поля", new IllegalStateException(
+						"сейв откладывался " + Math.round((real - lastSaveMs) / 60_000.0) + " мин"));
 			}
 			saveAsync();
 		}

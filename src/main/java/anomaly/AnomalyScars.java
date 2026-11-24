@@ -49,6 +49,14 @@ public final class AnomalyScars {
 	private static int microThisTick;
 	private static long microTickStamp;
 
+	/**
+	 * Есть ли игроки ХОТЬ ГДЕ на сервере. Проверка по одному измерению врала: все ушли в ад
+	 * или в край — Верхний мир «пуст», и следы снова генерировали чанки синхронно.
+	 */
+	static boolean serverHasPlayers(ServerLevel level) {
+		return level.getServer() != null && !level.getServer().getPlayerList().getPlayers().isEmpty();
+	}
+
 	private static boolean microBudget(ServerLevel level) {
 		long tick = level.getServer().overworld().getGameTime();
 		if (tick != microTickStamp) {
@@ -354,12 +362,14 @@ public final class AnomalyScars {
 	 */
 	static final int MAX_OPS_WORLD = 5000;
 
-	/** Сколько следов уже запланировано во всём поле. */
+	/** Сколько следов уже запланировано И ещё не применено: только эта очередь и стоит в файле. */
 	static int totalOps(AnomalyFieldData data) {
 		int total = 0;
 		for (Anomaly anomaly : data.anomalies) {
 			if (anomaly.scars != null) {
-				total += anomaly.scars.size();
+				// применённые op остаются в списке навсегда: считать их — значит упереться
+				// в потолок и молча лишить следа все зоны, чья очередь позже
+				total += Math.max(0, anomaly.scars.size() - Math.max(0, anomaly.scar_next));
 			}
 		}
 		return total;
@@ -471,7 +481,7 @@ public final class AnomalyScars {
 						// поэтому при живых игроках след ждёт: чанк загрузится сам, когда игрок
 						// подойдёт (раньше он всё равно следа не видит). Добор идёт только на
 						// пустом сервере и под суточным лимитом
-						if (!level.players().isEmpty() || chunksThisTick >= config.chunks_per_tick
+						if (serverHasPlayers(level) || chunksThisTick >= config.chunks_per_tick
 								|| !chunkBudgetAllows(data, config, AnomalyClock.now())) {
 							finished = false;
 							limitHit = true;
@@ -698,9 +708,12 @@ public final class AnomalyScars {
 				// грядки и тропинки — работа игрока, а не рельеф: их не штукатурим
 				&& !state.is(Blocks.FARMLAND) && !state.is(Blocks.DIRT_PATH)) {
 			int hash = (int) ((x * 73856093L) ^ (z * 19349663L) ^ seed);
+			// материал — по ячейке 4×4, а не по колонке: иначе на камне получался
+			// «перец с солью» из булыжника, гравия, андезита и туфа вперемешку
+			int cell = ((x >> 2) * 31) ^ ((z >> 2) * 17) ^ (int) seed;
 			// в пустыне, бэдлендах и на камне «мёртвая земля» из грубой земли — клякса:
 			// выгоревший грунт берёт материал биома, как и обломки
-			Block replacement = soil(state) ? Blocks.COARSE_DIRT : rubbleBlock(state, hash);
+			Block replacement = soil(state) ? Blocks.COARSE_DIRT : rubbleBlock(state, cell);
 			level.setBlock(ground, replacement.defaultBlockState(), Block.UPDATE_ALL);
 			changed++;
 		}
@@ -1204,7 +1217,7 @@ public final class AnomalyScars {
 				// в свежей местности загружен только чанк первой колонки, и все сэмплы молча
 				// пропускались — проверка воды не работала вовсе. Генерировать в тик-потоке
 				// при живых игроках нельзя: след ждёт, пока чанк загрузится сам
-				if (!level.players().isEmpty()) {
+				if (serverHasPlayers(level)) {
 					budgetStop = true;
 					break;
 				}
@@ -1369,14 +1382,23 @@ public final class AnomalyScars {
 		// высота и камень — по ячейке 2×2, а не по колонке: «перец с солью» на грани пика
 		// читался как ошибка генерации (то же уже сделано для плиты)
 		int cell = ((x >> 1) * 31) ^ ((z >> 1) * 17) ^ (int) op.seed;
-		// Профиль шипа: 0.05 + 0.95·falloff^1.2. У земли колонна ниже 0.16·h, а не 0.40·h —
-		// прежняя степень оставляла на газоне каменную башню шириной с основание
-		double profile = 0.05 + 0.95 * Math.pow(Math.max(0.0, falloff), 1.2);
+		// Профиль шипа ведём в ноль на границе обломочной юбки (falloff = 0.28), иначе у
+		// подошвы получалась вертикальная стенка в 0.26·h — при h=120 это 31 блок камня
+		double base = Math.max(0.0, (falloff - 0.28) / 0.72);
+		double profile = 0.95 * Math.pow(base, 1.2);
 		// шум высоты билинейный по сетке 5 блоков: ступени, привязанные к сетке 2 блока,
 		// читались как набранная из кубиков крышка
 		double jitter = 0.88 + 0.24 * smoothNoise(x, z, 5, op.seed);
 		int height = (int) Math.round(op.height * profile * jitter);
-		height = Math.max(2, Math.min(MAX_HEIGHT, height));
+		// у самой юбки колонна не встаёт вовсе: камни вырастают из обломков, а не из травы.
+		// Проверка после ветки юбки — иначе обломки оставались бы только в кольце 0.24..0.28
+		if (height < 1) {
+			height = falloff > 0.24 ? 1 : 0;
+		}
+		height = Math.max(0, Math.min(MAX_HEIGHT, height));
+		if (height <= 0 && falloff >= 0.28) {
+			return 0;
+		}
 		// Кромка: вывернутый грунт и обломки вокруг основания, 2–3 клетки в ширину и с
 		// просветами. Без него конус растёт прямо из целой травы, сплошной плитой — насыпь
 		if (falloff < 0.28) {
@@ -1774,6 +1796,7 @@ public final class AnomalyScars {
 		return sum;
 	}
 }
+
 
 
 
