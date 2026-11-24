@@ -46,8 +46,16 @@ public final class AnomalyField {
 	private static long lastSaveMs;
 	/** Период снимка поля: сериализация 1.3 МБ идёт на тик-потоке, чаще нельзя. */
 	private static final long SAVE_INTERVAL_MS = 5L * 60_000L;
+	/** Размер последнего снимка: по нему растягивается интервал, чтобы большой файл стоил реже. */
+	private static long lastBytes;
 	/** Жёсткий предел: если MSPT не даёт сохранить, пишем всё равно — терять данные дороже. */
 	private static final long FORCED_SAVE_MS = 15L * 60_000L;
+
+	/** Интервал снимка: от 5 минут на 1 МБ до 12 минут на 8 МБ. */
+	private static long saveIntervalMs() {
+		long over = Math.max(0L, lastBytes - 1_000_000L);
+		return Math.min(12L * 60_000L, SAVE_INTERVAL_MS + over / 1_000_000L * 60_000L);
+	}
 	private static long lastTickFieldMs;
 	private static volatile boolean dirty;
 	private AnomalyField() {
@@ -188,7 +196,7 @@ public final class AnomalyField {
 		long real = System.currentTimeMillis();
 		// Файл на 600 зон — 1.3 МБ: Gson-сериализация идёт на тик-потоке (20–50 мс), поэтому
 		// не чаще раза в 5 минут и только когда сервер не задыхается. Запись на диск — в фоне
-		boolean due = real - lastSaveMs > SAVE_INTERVAL_MS;
+		boolean due = real - lastSaveMs > saveIntervalMs();
 		boolean calm = server.getAverageTickTimeNanos() / 1_000_000.0 < 40.0;
 		// на живом сервере MSPT 40–50 держится постоянно: без жёсткого предела сейв не
 		// случался бы никогда, и падение теряло бы все рождения и прогресс следов
@@ -880,7 +888,16 @@ public final class AnomalyField {
 			data.clock_ms = AnomalyClock.now();
 			lastSaveMs = System.currentTimeMillis();
 			try {
+				long started = System.nanoTime();
 				json = GSON.toJson(data);
+				long ms = (System.nanoTime() - started) / 1_000_000L;
+				lastBytes = json.length();
+				// Потолка на размер нет (population до 5000) — тогда сейв может стоить сотни мс.
+				// Роняем не тик, а знание: длительность видна в логе, а интервал растёт с файлом
+				if (ms > 25L) {
+					warnOnce("сериализация поля " + ms + " мс / " + (lastBytes / 1024) + " КБ",
+							new IllegalStateException("большое поле"));
+				}
 			} catch (RuntimeException e) {
 				AnomalyMod.LOGGER.error("Anomaly: не смог сериализовать поле", e);
 				return;

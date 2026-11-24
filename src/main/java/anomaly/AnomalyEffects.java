@@ -55,11 +55,12 @@ public final class AnomalyEffects {
 		// регенерацию (1 HP / 4 с) и «смертельная» была безобидной. Класс фиксируется при
 		// рождении, а зона дрейфует: если она приехала в 6–10 км, она больше не «смертельная».
 		// У своего респавна в домашней полосе deadly не бьёт: база не должна быть death loop.
-		// И у самого узла кладовой — карман тишины: иначе приз стоит дороже дропа
+		// У кладовой урон не отменяется, а режется до трети: полная тишина превращала
+		// «смертельную» зону в отель с сундуком незерита и бесконечным рефиллом
 		boolean deadlyActive = zone.cls() == AnomalyClass.DEADLY && !zone.remnant()
 				&& Math.hypot(zone.x(), zone.z()) > config.deadly_from - config.class_blur
-				&& !nearOwnRespawn(player, 32.0, config)
-				&& !nearNodePocket(zone, player, 12.0);
+				&& !nearOwnRespawn(player, 32.0, config);
+		boolean pocket = nearNodePocket(zone, player, 12.0);
 		if (deadlyActive && !player.isCreative() && !player.isSpectator()) {
 			state.hazardTicks += AnomalyState.stepTicks(seconds);
 			if (state.hazardTicks >= 120) {
@@ -68,6 +69,9 @@ public final class AnomalyEffects {
 				// (можно отступить), в ядре обгоняет её вдвое. Пол 2.0 HP делал внешнюю
 				// четверть радиуса безобидной, а глубину — неразличимой
 				float damage = (float) Math.max(0.6, (0.5 + 4.6 * depth * depth) * Math.max(0.35, state.dose));
+				if (pocket) {
+					damage *= 0.35f;
+				}
 				player.hurt(level.damageSources().magic(), damage);
 				// зона высасывает силы: с полной сатурацией ванильная регенерация даёт до 2 HP/с,
 				// и урон ядра её не обгонял — сытый игрок кемпил ядро на стейках
@@ -75,6 +79,24 @@ public final class AnomalyEffects {
 				// удар без признака читается как баг сервера: короткий вдох зоны на каждом ударе
 				level.playSound(null, player.getX(), player.getY(), player.getZ(),
 						SoundEvents.SCULK_BLOCK_SPREAD, SoundSource.AMBIENT, 0.7f, 0.6f);
+			}
+		}
+		// Янтарное кольцо тоже берёт своё, но мягко: раньше у 10–15 км не было классового
+		// урона, и сытый игрок ходил туда за алмазами бесплатно — риск/награда были перевёрнуты
+		boolean dangerActive = zone.cls() == AnomalyClass.DANGER && !zone.remnant()
+				&& Math.hypot(zone.x(), zone.z()) > config.danger_from - config.class_blur
+				&& !nearOwnRespawn(player, 24.0, config);
+		if (dangerActive && !player.isCreative() && !player.isSpectator()) {
+			state.dangerTicks += AnomalyState.stepTicks(seconds);
+			if (state.dangerTicks >= 160) {
+				state.dangerTicks = 0;
+				float damage = (float) (0.3 + 0.9 * depth);
+				if (pocket) {
+					damage *= 0.5f;
+				}
+				player.hurt(level.damageSources().magic(), damage);
+				level.playSound(null, player.getX(), player.getY(), player.getZ(),
+						SoundEvents.SCULK_BLOCK_SPREAD, SoundSource.AMBIENT, 0.45f, 0.8f);
 			}
 		}
 		// карман тишины у кладовой: раз в ~3 с тихий звон. Без метки исчезновение урона

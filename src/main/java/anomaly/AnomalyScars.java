@@ -453,6 +453,13 @@ public final class AnomalyScars {
 				boolean finished = true;
 				boolean limitHit = false;
 				boolean wetSkip = false;
+				// игрок в объёме опа — проверяем ОДИН раз на op, а не на каждую колонку
+				opPlayerFree = anomaly.scar_retry_tree || !opHasPlayer(level, op);
+				if (!opPlayerFree) {
+					finished = false;
+					limitHit = true;
+					break;
+				}
 				while (anomaly.scar_cursor < count) {
 					int[] column = op.column(anomaly.scar_cursor);
 					if (column == null) {
@@ -635,6 +642,13 @@ public final class AnomalyScars {
 		return progressed;
 	}
 
+	/**
+	 * Проверку «игрок внутри опа» тик делает один раз на op ({@code getHeight} на каждого
+	 * игрока), а не на каждую из 6000 колонок: повторная проверка съедала весь 5-мс бюджет.
+	 * Тестам и командам флаг остаётся false — тогда applyColumn проверяет сам.
+	 */
+	private static boolean opPlayerFree;
+
 	static int applyColumn(ServerLevel level, ScarOp op, int x, int z) {
 		// чанк уже загружен вызывающим: иначе getHeight отдаёт минимум мира
 		int height = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, x, z);
@@ -657,8 +671,9 @@ public final class AnomalyScars {
 		if (isFragileSurface(ground) && !op.type.equals("crack")) {
 			return 0;
 		}
-		// игрок в объёме следа: откладываем op целиком, иначе в провале остаётся столб-остров
-		if (opHasPlayer(level, op)) {
+		// игрок в объёме следа: откладываем op целиком, иначе в провале остаётся столб-остров.
+		// Тик уже проверил op один раз (opPlayerFree) — здесь только для тестов и команд
+		if (!opPlayerFree && opHasPlayer(level, op)) {
 			return -2;
 		}
 		// игрок вплотную: камень в ступнях — это удушье, а вынутый блок — падение

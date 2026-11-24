@@ -77,6 +77,8 @@ public final class AnomalyState {
 
 	/** Счётчик урона Нижнего мира: отдельный от hazardTicks, который гасит leave(). */
 	public int netherTicks;
+	/** Тик мягкого урона янтарного кольца: своё ведро, иначе смертельная и опасная мешают друг другу. */
+	public int dangerTicks;
 	/** Гул оброка уже сыгран в этом цикле: звук идёт за секунду до удара, а не вместе с ним. */
 	public transient boolean netherWarned;
 

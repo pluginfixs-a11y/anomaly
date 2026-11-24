@@ -538,7 +538,9 @@ public final class AnomalyNodes {
 				break;
 			}
 			int count = Math.max(1, (int) Math.round(stack.getCount() * multiplier));
-			chest.setItem(slot++, new ItemStack(stack.getItem(), count));
+			// copyWithCount, а не new ItemStack(item, count): иначе теряются компоненты
+			// (зачарования, зелья, имя) и «награда» приходит пустышкой
+			chest.setItem(slot++, stack.copyWithCount(count));
 		}
 	}
 
@@ -547,13 +549,14 @@ public final class AnomalyNodes {
 		List<ItemStack> loot = new ArrayList<>();
 		switch (cls) {
 			case SAFE -> {
-				// Зелёное кольцо — не склад на дороге: там нет урона, значит платить должна
-				// редкость. Опыт в бутылках и аметист — то, чего у дома не накопаешь
+				// Зелёное кольцо — не склад на дороге: там нет классового урона, значит платить
+				// должна редкость. Только предметы без компонентов: пустая «зачарованная книга»
+				// приходила бы без чар (чары в 26.2 живут в stored_enchantments)
 				loot.add(new ItemStack(Items.EXPERIENCE_BOTTLE, 3 + rnd.nextInt(5)));
 				loot.add(new ItemStack(Items.AMETHYST_SHARD, 4 + rnd.nextInt(6)));
 				loot.add(new ItemStack(Items.BREAD, 2 + rnd.nextInt(3)));
 				if (rnd.nextBoolean()) {
-					loot.add(new ItemStack(Items.ENCHANTED_BOOK));
+					loot.add(new ItemStack(Items.LAPIS_LAZULI, 8 + rnd.nextInt(16)));
 				}
 				if (rnd.nextInt(3) == 0) {
 					loot.add(new ItemStack(Items.IRON_INGOT, 2 + rnd.nextInt(3)));
