@@ -473,6 +473,7 @@ public final class AnomalyScars {
 				boolean finished = true;
 				boolean limitHit = false;
 				boolean wetSkip = false;
+				boolean skipped = false;
 				// игрок в объёме опа — проверяем ОДИН раз на op, а не на каждую колонку
 				boolean opPlayerFree = anomaly.scar_retry_tree || !opHasPlayer(level, op);
 				if (!opPlayerFree) {
@@ -511,9 +512,13 @@ public final class AnomalyScars {
 					if (!level.getChunkSource().hasChunk(chunkX, chunkZ)) {
 						// Чанк не загружен. Синхронная генерация — это 10–50 мс прямо в тик-потоке,
 						// поэтому при живых игроках след ждёт: чанк загрузится сам, когда игрок
-						// подойдёт (раньше он всё равно следа не видит). Добор идёт только на
-						// пустом сервере и под суточным лимитом
-						if (serverHasPlayers(level) || chunksThisTick >= config.chunks_per_tick
+						// подойдёт. И это НЕ повод обрывать весь проход: с «break» поле обслуживало
+						// ровно одну зону в секунду, и 610 зон ждали своей очереди десять минут
+						if (serverHasPlayers(level)) {
+							skipped = true;
+							break;
+						}
+						if (chunksThisTick >= config.chunks_per_tick
 								|| !chunkBudgetAllows(data, config, AnomalyClock.now())) {
 							finished = false;
 							limitHit = true;
@@ -625,6 +630,10 @@ public final class AnomalyScars {
 						finished = false;
 						break;
 					}
+				}
+				if (skipped) {
+					// чанк этой зоны не загружен: идём к следующей, а не тратим проход впустую
+					break;
 				}
 				if (wetSkip) {
 					// след целиком в воде: пропускаем op, а не режем берег половинками.
