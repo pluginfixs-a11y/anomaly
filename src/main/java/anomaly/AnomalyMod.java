@@ -96,6 +96,9 @@ public class AnomalyMod implements ModInitializer {
 			}
 		}
 		AnomalyDebug.tick(server);
+		// отложенные гашения порталов: server.execute на серверном потоке выполняется сразу,
+		// до самой телепортации, поэтому «на следующий тик» нужен свой список
+		AnomalyPortals.tickPending(server);
 	}
 
 	private static void tickPlayer(ServerPlayer player, double seconds) {

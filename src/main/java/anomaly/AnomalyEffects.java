@@ -481,12 +481,10 @@ public final class AnomalyEffects {
 		// втрое больше, а дальняя сторона полного кольца выходит за reach и пропадает
 		arc *= 0.5 * (1.0 + Math.min(2.0, Math.max(0.2, zone.anomaly().stretch)));
 		boolean far = zone.signedDistance(player.getX(), player.getZ()) > 96.0;
-		// полное кольцо у мелкой зоны: 128 точек. При 56 на r=150 шаг был 20 блоков и
-		// кольцо читалось как пунктир; 128 даёт 7.4, а у мелких — 3–5. Лишние ветки
-		// (вертикальный язык, акцент) на полном кольце режем: они нужны для читаемости
-		// с 100+ блоков, а тут игрок и так близко
+		// полное кольцо у мелкой зоны: 96 точек. При 56 на r=150 шаг был 20 блоков и
+		// кольцо читалось как пунктир; 96 даёт ~10, а у мелких — 4–6
 		double spacing = 3.0;
-		int cap = far ? 28 : 128;
+		int cap = far ? 28 : 96;
 		int points = Math.max(24, Math.min(cap, (int) (arc / spacing)));
 		// полное кольцо — это в 5 раз больше точек: плотность на точку вдвое ниже, иначе
 		// один кадр такой зоны вытесняет все остальные частицы у клиента
@@ -498,11 +496,6 @@ public final class AnomalyEffects {
 		ParticleOptions accent = accent(zone);
 		var rnd = player.getRandom();
 		for (int i = 0; i < points; i++) {
-			// мелкая зона в кадре: каждый второй пакет лишний — плотность держим сдвоенным
-			// count, а пакетов вдвое меньше (128 пакетов/с на зону — это лаг у клиента)
-			if (full && (i & 1) == 1) {
-				continue;
-			}
 			double angle = toPlayer - half + 2.0 * half * (i + rnd.nextDouble()) / points;
 			double[] point = zone.anomaly().boundaryPoint(angle, zone.ageHours(), radius);
 			if (Math.hypot(point[0] - player.getX(), point[1] - player.getZ()) > reach) {
@@ -516,7 +509,7 @@ public final class AnomalyEffects {
 			double y = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, bx, bz) + 0.6;
 			// у стены есть толщина: нулевой разброс давал плоскость в один пиксель, которую
 			// видно только строго сбоку
-			int batch = full ? count * 2 : count;
+			int batch = count;
 			level.sendParticles(player, dust, true, true, point[0], y, point[1], batch, 0.6, spread, 0.6, 0.0);
 			if (i % (full ? 16 : 5) == 0) {
 				// приземная полоса: в лесу и на склоне стена не должна висеть только на уровне глаз

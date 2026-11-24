@@ -718,7 +718,7 @@ public final class AnomalyNodes {
 			if (!anomaly.node_altar_ok || anomaly.remnant) {
 				continue;
 			}
-			double[] altar = nodePos(anomaly, baseAngle(anomaly), 0.32);
+			double[] altar = nodeSpots(anomaly, anomaly.node_cx, anomaly.node_cz, anomaly.node_r).get(1);
 			if ((int) Math.floor(altar[0]) == pos.getX() && (int) Math.floor(altar[1]) == pos.getZ()
 					&& (int) Math.round(anomaly.node_altar_cy) == pos.getY()) {
 				return anomaly;
@@ -850,7 +850,7 @@ public final class AnomalyNodes {
 					+ " блоков или /anomaly nodes spawn";
 		}
 		BlockPos cache = blockPos(anomaly.node_cx, anomaly.node_cy, anomaly.node_cz);
-		double[] altar = nodePos(anomaly, baseAngle(anomaly), 0.32);
+		double[] altar = nodeSpots(anomaly, anomaly.node_cx, anomaly.node_cz, anomaly.node_r).get(1);
 		int broken = Integer.bitCount(anomaly.anchors_broken);
 		StringBuilder anchors = new StringBuilder();
 		int standing = 0;
@@ -914,6 +914,7 @@ public final class AnomalyNodes {
 				: String.valueOf(Math.round(value));
 	}
 }
+
 
 
 

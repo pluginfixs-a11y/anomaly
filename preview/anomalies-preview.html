@@ -655,6 +655,20 @@ function pickDamageKind(a, blocks, rnd) {
   return "crack";
 }
 
+// пятно следа — диск с рваной кромкой ±14 % по углу, как ScarOp.column, а не контур зоны:
+// у зоны вытянутость до 2.25 и гармоники, и «пятно» выходило втрое длиннее, чем в игре
+function damageDisc(ox, oz, radius, seed) {
+  const pts = [];
+  const N = 32;
+  for (let i = 0; i < N; i++) {
+    const th = i / N * Math.PI * 2;
+    const r = radius * (1 + 0.09 * Math.sin(th * 3 + seed * 0.0001)
+      + 0.05 * Math.sin(th * 7 + seed * 0.0007));
+    pts.push([ox + Math.cos(th) * r, oz + Math.sin(th) * r]);
+  }
+  return pts;
+}
+
 function drawDamageOp(a, st, kind, ox, oz, radius, strength, rnd) {
   const s = baseScale();
   const [sx, sy] = toScreen(ox, oz);
@@ -663,7 +677,7 @@ function drawDamageOp(a, st, kind, ox, oz, radius, strength, rnd) {
   // выжженная земля, поваленный лес и руины стоят на одном основании: тон золы,
   // а не чёрная дыра (#0a0806 на тёмном фоне читался как вырезанный кусок карты)
   if (kind === "soil" || kind === "fallen" || kind === "ruins") {
-    polygonPath(shapePoints(a, { x: ox, z: oz, radius }, 1));
+    polygonPath(damageDisc(ox, oz, radius, a.id * 7919 + 13));
     ctx.fillStyle = `rgba(38, 30, 22, ${0.45 + 0.4 * strength})`;
     ctx.fill();
     ctx.strokeStyle = `rgba(120, 96, 62, ${0.30 + 0.45 * strength})`;
@@ -697,18 +711,25 @@ function drawDamageOp(a, st, kind, ox, oz, radius, strength, rnd) {
       }
     }
     if (kind === "ruins") {
-      // стены без крыш: контур и пол из обломков, а не сплошной квадрат
-      const w = Math.max(4, (8 + rnd() * 8) * s);
-      const h = Math.max(4, (6 + rnd() * 8) * s);
+      // стены без крыш: повёрнутый прямоугольник, три стороны (одна обрушена), пол из обломков
+      const w = Math.max(4, (10 + rnd() * 8) * s);
+      const h = Math.max(4, (8 + rnd() * 8) * s);
+      const rot = rnd() * Math.PI * 2;
+      ctx.save();
+      ctx.translate(sx, sy);
+      ctx.rotate(rot);
+      ctx.fillStyle = `rgba(150, 146, 138, ${0.14 + 0.16 * strength})`;
+      ctx.fillRect(-w / 2, -h / 2, w, h);
       ctx.strokeStyle = `rgba(150, 146, 138, ${0.55 + 0.3 * strength})`;
       ctx.lineWidth = Math.max(1, 2 * s);
       ctx.beginPath();
-      ctx.moveTo(sx - w / 2, sy - h / 2);
-      ctx.lineTo(sx + w / 2, sy - h / 2);
-      ctx.lineTo(sx + w / 2, sy + h / 2);
+      ctx.moveTo(-w / 2, -h / 2);
+      ctx.lineTo(w / 2, -h / 2);
+      ctx.lineTo(w / 2, h / 2);
+      ctx.moveTo(-w / 2, -h / 2);
+      ctx.lineTo(-w / 2, h / 2);
       ctx.stroke();
-      ctx.fillStyle = `rgba(150, 146, 138, ${0.18 + 0.2 * strength})`;
-      ctx.fillRect(sx - w / 2, sy - h / 2, w, h);
+      ctx.restore();
     }
     return;
   }
@@ -728,7 +749,7 @@ function drawDamageOp(a, st, kind, ox, oz, radius, strength, rnd) {
 
   if (kind === "spike") {
     // кромка вывернутого грунта: обломки, а не ровный круг — конус растёт из разбитой земли
-    polygonPath(shapePoints(a, { x: ox, z: oz, radius: radius * 1.15 }, 1));
+    polygonPath(damageDisc(ox, oz, radius * 1.15, a.id * 7919 + 13));
     ctx.fillStyle = `rgba(84, 70, 48, ${0.30 + 0.25 * strength})`;
     ctx.fill();
     ctx.fillStyle = `rgba(150, 132, 96, ${0.5 + 0.35 * strength})`;
@@ -762,7 +783,7 @@ function drawDamageOp(a, st, kind, ox, oz, radius, strength, rnd) {
 
   if (kind === "sinkhole") {
     // провал: рваный контур, дно темнее к центру, кромка обломана
-    polygonPath(shapePoints(a, { x: ox, z: oz, radius }, 1));
+    polygonPath(damageDisc(ox, oz, radius, a.id * 7919 + 13));
     ctx.fillStyle = `rgba(14, 12, 10, ${0.65 + 0.25 * strength})`;
     ctx.fill();
     ctx.strokeStyle = `rgba(140, 120, 88, ${0.4 + 0.3 * strength})`;
@@ -1052,6 +1073,7 @@ window.anomalyPreview = {
 </script>
 </body>
 </html>
+
 
 
 

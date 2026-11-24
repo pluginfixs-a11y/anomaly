@@ -407,6 +407,23 @@ public final class Anomaly {
 				|| op.height < 0 || op.height > 400 || op.length > 512 || op.width > 8 || op.radius > 256);
 		scar_next = Math.max(0, Math.min(scar_next, scars.size()));
 		scar_cursor = Math.max(0, scar_cursor);
+		// Файл, записанный до новой книги расходов: op с индексом < scar_next уже применены,
+		// их блоки должны попасть в scar_spent, иначе повторно применятся после рестарта
+		if (scar_next > 0) {
+			double spent = 0.0;
+			for (int i = 0; i < scar_next && i < scars.size(); i++) {
+				spent += Math.max(0, scars.get(i).blocks);
+			}
+			scar_spent += spent;
+			scars.subList(0, Math.min(scar_next, scars.size())).clear();
+			scar_next = 0;
+		}
+		// истраченный бюджет из правленого файла: NaN или минус делали остаток бюджета
+		// неограниченным (оба сравнения с NaN ложны)
+		if (!(Double.isFinite(scar_spent) && scar_spent >= 0.0)) {
+			scar_spent = 0.0;
+		}
+		scar_spent = Math.min(scar_spent, 10_000_000.0);
 		// битый курсор молча съедал бы след: подрезаем к длине текущего опа
 		if (scar_next < scars.size()) {
 			scar_cursor = Math.min(scar_cursor, scars.get(scar_next).columnCount());

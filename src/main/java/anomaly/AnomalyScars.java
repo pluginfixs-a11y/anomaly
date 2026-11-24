@@ -312,7 +312,7 @@ public final class AnomalyScars {
 			if (!cls.damages() || config == null || !config.scar_enabled) {
 				continue;
 			}
-			boolean firstPlan = anomaly.scars.isEmpty();
+			boolean firstPlan = anomaly.scars.isEmpty() && anomaly.scar_spent <= 0.0;
 			// потолок плана на весь мир: иначе файл и снимок поля растут без предела
 			if (worldOps >= MAX_OPS_WORLD) {
 				continue;
@@ -391,6 +391,26 @@ public final class AnomalyScars {
 		return sum;
 	}
 
+	/**
+	 * Один op отработан: его блоки уходят в счётчик зоны, сам op выбрасывается. Общая книга
+	 * для обычного применения и для мокрого пропуска — иначе счётчик расходится с планом.
+	 */
+	private static void finishOp(Anomaly anomaly, ScarOp op) {
+		anomaly.scar_spent = Math.max(0.0, anomaly.scar_spent) + Math.max(0, op.blocks);
+		anomaly.scar_next++;
+		anomaly.scar_cursor = 0;
+		// довели очередь до конца — чистим план зоны: применённое больше не нужно, и файл
+		// поля не растёт до 7 МБ (42 мс Gson на тик-потоке)
+		if (anomaly.scar_next >= anomaly.scars.size()) {
+			anomaly.scars.clear();
+			anomaly.scar_next = 0;
+			anomaly.scar_telegraph_for = -1;
+			anomaly.scar_hold_for = -1;
+			anomaly.scar_wet_for = -1;
+			AnomalyField.markDirty();
+		}
+	}
+
 	/** С какой записи начинать следующий проход: строгий FIFO морил голодом всё поле за первой зоной. */
 	private static int rotate;
 	/** Дедлайн текущего прохода: деревья внутри одной колонки умеют съесть его целиком. */
@@ -454,7 +474,7 @@ public final class AnomalyScars {
 				boolean limitHit = false;
 				boolean wetSkip = false;
 				// игрок в объёме опа — проверяем ОДИН раз на op, а не на каждую колонку
-				opPlayerFree = anomaly.scar_retry_tree || !opHasPlayer(level, op);
+				boolean opPlayerFree = anomaly.scar_retry_tree || !opHasPlayer(level, op);
 				if (!opPlayerFree) {
 					finished = false;
 					limitHit = true;
@@ -572,7 +592,7 @@ public final class AnomalyScars {
 								deforestForce(level, column[0], h, column[1]);
 							}
 						}
-						applied = applyColumn(level, op, column[0], column[1]);
+						applied = applyColumn(level, op, column[0], column[1], opPlayerFree);
 						anomaly.scar_retry_tree = false;
 					} catch (RuntimeException e) {
 						// одна строка на проход, а не на колонку: устойчивое исключение иначе
@@ -607,9 +627,10 @@ public final class AnomalyScars {
 					}
 				}
 				if (wetSkip) {
-					// след целиком в воде: пропускаем op, а не режем берег половинками
-					anomaly.scar_next++;
-					anomaly.scar_cursor = 0;
+					// след целиком в воде: пропускаем op, а не режем берег половинками.
+					// Через ту же книгу, что и обычный op: иначе мокрый последний op не чистит
+					// список, его блоки считаются дважды (scar_spent + план) и зона голодает
+					finishOp(anomaly, op);
 					continue;
 				}
 				if (!finished) {
@@ -617,21 +638,8 @@ public final class AnomalyScars {
 					// ждёт смены суток; уперлись в блоки/время — продолжаем с этой же
 					rotate = limitHit ? (index + 1) % size : index;
 					return progressed;
-				}				// след применён: его блоки уходят в счётчик, а сам op выбрасываем. Иначе
-				// список зоны растёт до 64 записей, которые никогда не применятся снова, и файл
-				// поля пухнет до 7 МБ (42 мс Gson на тик-потоке)
-				anomaly.scar_spent += Math.max(0, op.blocks);
-				anomaly.scar_next++;
-				anomaly.scar_cursor = 0;
-				// довели очередь до конца — чистим план зоны и начинаем заново при следующем дрейфе
-				if (anomaly.scar_next >= anomaly.scars.size()) {
-					anomaly.scars.clear();
-					anomaly.scar_next = 0;
-					anomaly.scar_telegraph_for = -1;
-					anomaly.scar_hold_for = -1;
-					anomaly.scar_wet_for = -1;
-					AnomalyField.markDirty();
 				}
+				finishOp(anomaly, op);
 				if (blocksThisTick >= config.blocks_per_tick || chunksThisTick >= config.chunks_per_tick
 						|| columnsThisTick >= COLUMNS_PER_PASS) {
 					rotate = (index + 1) % size;
@@ -642,14 +650,16 @@ public final class AnomalyScars {
 		return progressed;
 	}
 
-	/**
-	 * Проверку «игрок внутри опа» тик делает один раз на op ({@code getHeight} на каждого
-	 * игрока), а не на каждую из 6000 колонок: повторная проверка съедала весь 5-мс бюджет.
-	 * Тестам и командам флаг остаётся false — тогда applyColumn проверяет сам.
-	 */
-	private static boolean opPlayerFree;
-
 	static int applyColumn(ServerLevel level, ScarOp op, int x, int z) {
+		return applyColumn(level, op, x, z, false);
+	}
+
+	/**
+	 * @param playerFree тик уже проверил «игрок вне опа» один раз на весь op: внутри
+	 *                   колонок проверку не повторяем (getHeight на каждого игрока съедал
+	 *                   5-мс бюджет). Команды и тесты зовут версию без флага.
+	 */
+	static int applyColumn(ServerLevel level, ScarOp op, int x, int z, boolean playerFree) {
 		// чанк уже загружен вызывающим: иначе getHeight отдаёт минимум мира
 		int height = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, x, z);
 		if (height <= level.getMinY() + 3 || height >= level.getMaxY() - 2) {
@@ -672,8 +682,8 @@ public final class AnomalyScars {
 			return 0;
 		}
 		// игрок в объёме следа: откладываем op целиком, иначе в провале остаётся столб-остров.
-		// Тик уже проверил op один раз (opPlayerFree) — здесь только для тестов и команд
-		if (!opPlayerFree && opHasPlayer(level, op)) {
+		// игрок в объёме следа: откладываем op целиком, иначе в провале остаётся столб-остров
+		if (!playerFree && opHasPlayer(level, op)) {
 			return -2;
 		}
 		// игрок вплотную: камень в ступнях — это удушье, а вынутый блок — падение
@@ -741,12 +751,19 @@ public final class AnomalyScars {
 				// грядки и тропинки — работа игрока, а не рельеф: их не штукатурим
 				&& !state.is(Blocks.FARMLAND) && !state.is(Blocks.DIRT_PATH)) {
 			int hash = (int) ((x * 73856093L) ^ (z * 19349663L) ^ seed);
-			// материал — по ячейке 4×4, а не по колонке: иначе на камне получался
-			// «перец с солью» из булыжника, гравия, андезита и туфа вперемешку
-			int cell = ((x >> 2) * 31) ^ ((z >> 2) * 17) ^ (int) seed;
+			// Материал — по ячейке 3×3: поблочный хеш давал «перец с солью», а один сплошной
+			// COARSE_DIRT — ровный коричневый диск, который читается как /fill.
+			// Пропорции как у выгоревшей земли: грубая земля, гравий, корни, подзол
+			int cell = ((x / 3) * 37) ^ ((z / 3) * 19) ^ (int) seed;
+			int roll = Math.floorMod(cell, 20);
+			Block burned = roll < 12 ? Blocks.COARSE_DIRT
+					: roll < 16 ? Blocks.GRAVEL
+					: roll == 16 ? Blocks.ROOTED_DIRT
+					: roll == 17 ? Blocks.PODZOL
+					: Blocks.COARSE_DIRT;
 			// в пустыне, бэдлендах и на камне «мёртвая земля» из грубой земли — клякса:
 			// выгоревший грунт берёт материал биома, как и обломки
-			Block replacement = soil(state) ? Blocks.COARSE_DIRT : rubbleBlock(state, cell);
+			Block replacement = soil(state) ? burned : rubbleBlock(state, cell);
 			level.setBlock(ground, replacement.defaultBlockState(), Block.UPDATE_ALL);
 			changed++;
 		}
@@ -1020,8 +1037,12 @@ public final class AnomalyScars {
 		if (protectedBlock(ground) || builtBlock(ground) || !ground.getFluidState().isEmpty()) {
 			return changed;
 		}
-		int height = 2 + Math.floorMod(hash >> 3, 3);
-		Block wall = ruinBlock(ground, hash);
+		// Материал и высота стены — по сегменту (3 блока вдоль стены), а не по блоку:
+		// булыжник, треснувший кирпич, мшистый булыжник и каменный кирпич вперемешку
+		// давали шахматку — ту же «странность генерации», от которой ушли у плиты и шипа
+		int wallCell = segment * 53 + (int) (op.seed & 0xFF);
+		int height = 2 + Math.floorMod(wallCell >> 3, 3);
+		Block wall = ruinBlock(ground, wallCell);
 		BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
 		for (int i = 0; i < height; i++) {
 			BlockState at = level.getBlockState(pos.set(x, surface + i, z));

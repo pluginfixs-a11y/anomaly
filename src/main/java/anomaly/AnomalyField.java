@@ -111,9 +111,11 @@ public final class AnomalyField {
 						migrated = true;
 					}
 				}
-				// зоны, рождённые до 0.2.0-alpha3, приходят без плана следов — планируем на загрузке
+				// зоны, рождённые до 0.2.0-alpha3, приходят без плана следов — планируем на загрузке.
+				// Проверяем и scar_spent: после prune план пуст, и без этого зона получала новый
+				// план (0.4–0.9 бюджета) на КАЖДОМ рестарте — бюджет обходился числом перезапусков
 				if (!anomaly.pinned && (anomaly.scars == null || anomaly.scars.isEmpty())
-						&& anomaly.scar_next == 0 && anomaly.scar_cursor == 0) {
+						&& anomaly.scar_next == 0 && anomaly.scar_cursor == 0 && anomaly.scar_spent <= 0.0) {
 					// за 50–150 ч дрейф уводит зону на километры: следы планируем вокруг нынешнего места,
 					// иначе они окажутся вне зоны и в чужих землях
 					double[] center = anomaly.position(anomaly.ageHours(AnomalyClock.now()));

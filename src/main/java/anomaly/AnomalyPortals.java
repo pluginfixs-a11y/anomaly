@@ -46,21 +46,35 @@ public final class AnomalyPortals {
 	 * Погасить портал, в который игрок только что шагнул из Нижнего. Вернуться домой запретить
 	 * нельзя — это запирание в аду, — но дальний портал сгорает сразу после перехода: обойти
 	 * правило, наладив портал в аду за 1250 блоками, не выйдет.
+	 * <p>
+	 * Через свой список, а не {@code server.execute}: в 26.2 задача, поставленная на серверном
+	 * потоке, выполняется немедленно — до телепортации, когда игрок ещё в Нижнем.
 	 */
 	public static void collapseAfterArrival(ServerPlayer player) {
-		MinecraftServer server = player.level().getServer();
-		if (server == null) {
+		PENDING.add(player.getUUID());
+	}
+
+	private static final java.util.Set<java.util.UUID> PENDING = new java.util.HashSet<>();
+
+	/** Раз в тик: у кого прибытие уже случилось — гасим портал на месте. */
+	public static void tickPending(MinecraftServer server) {
+		if (PENDING.isEmpty()) {
 			return;
 		}
-		java.util.UUID id = player.getUUID();
-		server.execute(() -> {
-			ServerPlayer online = server.getPlayerList().getPlayer(id);
-			if (online == null || online.level() != server.overworld()) {
-				return;
+		java.util.Iterator<java.util.UUID> it = PENDING.iterator();
+		while (it.hasNext()) {
+			ServerPlayer online = server.getPlayerList().getPlayer(it.next());
+			if (online == null) {
+				it.remove();
+				continue;
 			}
+			if (online.level() != server.overworld()) {
+				continue;
+			}
+			it.remove();
 			collapseAt(online.level(), online.blockPosition());
 			online.setPortalCooldown(80);
-		});
+		}
 	}
 
 	/**
