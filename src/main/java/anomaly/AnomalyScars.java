@@ -925,8 +925,9 @@ public final class AnomalyScars {
 		double radius = Math.max(1.0, op.radius);
 		// у линии точек вдоль длины, а не кольцо вокруг начала: трещина 40–80 блоков
 		// переходит ручей в середине, и кольцо у старта этого не видит
-		int samples = op.isLine() ? Math.max(5, op.length / 8) : 13;
+		int samples = op.isLine() ? Math.max(5, op.length / 8 + 1) : 13;
 		int loads = 0;
+		int wet = 0;
 		for (int i = 0; i < samples; i++) {
 			double x;
 			double z;
@@ -963,16 +964,16 @@ public final class AnomalyScars {
 				continue;
 			}
 			if (!level.getBlockState(new BlockPos(bx, h - 1, bz)).getFluidState().isEmpty()) {
-				if (loads > 0) {
-					AnomalyField.markDirty();
-				}
-				return 2;
+				wet++;
 			}
 		}
 		if (loads > 0) {
 			AnomalyField.markDirty();
 		}
-		return 1;
+		// одна лужа у края не повод выбрасывать весь след: у прибрежной зоны иначе не остаётся
+		// ни одного шрама. Мокрым считаем op, если вода в двух и более точках — там воронка
+		// действительно режется по урезу
+		return wet >= 2 ? 2 : 1;
 	}
 
 	/** Провал: вынимаем колонку на depth блоков, стенки остаются как есть. */
