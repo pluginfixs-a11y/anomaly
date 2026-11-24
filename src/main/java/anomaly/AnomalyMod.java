@@ -250,8 +250,11 @@ public class AnomalyMod implements ModInitializer {
 		if (state.netherTicks >= 120) {
 			state.netherTicks = 0;
 			player.hurt(player.level().damageSources().magic(), (float) (1.6 + 1.6 * depth));
+			// сатурация в аду тоже сливается: иначе полный стейк даёт реген 2 HP/с и оброк не виден
+			player.getFoodData().setSaturation(0.0f);
 		}
 	}
 }
+
 
 

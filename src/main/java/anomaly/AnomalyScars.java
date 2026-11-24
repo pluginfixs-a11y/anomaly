@@ -377,8 +377,16 @@ public final class AnomalyScars {
 				// вода проверяется один раз на op: column(0) у диска — угол квадрата вне круга
 				// и возвращает null, поэтому привязка к scar_cursor == 0 не срабатывала никогда
 				if (anomaly.scar_wet_for != anomaly.scar_next && !anomaly.scar_retry_tree) {
+					int wet = wetOpState(level, op, data, config);
+					if (wet == 0) {
+						// бюджет/дедлайн не дали даже одного чанка: это не «сухо», а «не знаю» —
+						// не помечаем op проверенным и возвращаемся к нему в следующем проходе
+						finished = false;
+						limitHit = true;
+						break;
+					}
 					anomaly.scar_wet_for = anomaly.scar_next;
-					if (wetOp(level, op, data, config)) {
+					if (wet == 2) {
 						wetSkip = true;
 						break;
 					}
@@ -908,23 +916,29 @@ public final class AnomalyScars {
 	 * След целиком в воде (озеро, река, океан): колонки такого op обрывались по урезу и давали
 	 * половину воронки. Планирование идёт без уровня, поэтому проверяем при первом заходе в op.
 	 */
-	private static boolean wetOp(ServerLevel level, ScarOp op, AnomalyFieldData data, AnomalyConfig config) {
+	/**
+	 * Состояние воды под следом: 2 — вода есть (op пропускаем), 1 — сухо, 0 — не знаю
+	 * (чанк не загружен, а бюджета или дедлайна на загрузку нет — повторим позже).
+	 * Планирование идёт без уровня, поэтому проверяем при первом заходе в op.
+	 */
+	private static int wetOpState(ServerLevel level, ScarOp op, AnomalyFieldData data, AnomalyConfig config) {
 		double radius = Math.max(1.0, op.radius);
 		// у линии точек вдоль длины, а не кольцо вокруг начала: трещина 40–80 блоков
 		// переходит ручей в середине, и кольцо у старта этого не видит
-		int samples = op.isLine() ? 5 : 9;
+		int samples = op.isLine() ? Math.max(5, op.length / 8) : 13;
 		int loads = 0;
 		for (int i = 0; i < samples; i++) {
 			double x;
 			double z;
 			if (op.isLine()) {
-				double t = i / (double) (samples - 1);
+				double t = samples <= 1 ? 0.0 : i / (double) (samples - 1);
 				x = op.x + Math.cos(op.angle) * op.length * t;
 				z = op.z + Math.sin(op.angle) * op.length * t;
 			} else {
-				// центр, кольцо 0.75 и кольцо 1.0: воронка на берегу касается воды краем
-				double angle = i * Math.PI * 2.0 / 8.0;
-				double r = i == 0 ? 0.0 : radius * (i % 2 == 0 ? 1.0 : 0.75);
+				// центр, кольца 0.5, 0.75 и 1.0: воронка на берегу касается воды краем,
+				// а ручей в середине радиуса не видело ни одно из внутренних колец
+				double angle = (i - 1) * Math.PI * 2.0 / 12.0;
+				double r = i == 0 ? 0.0 : radius * (i % 3 == 1 ? 0.5 : i % 3 == 2 ? 0.75 : 1.0);
 				x = op.x + Math.cos(angle) * r;
 				z = op.z + Math.sin(angle) * r;
 			}
@@ -938,7 +952,7 @@ public final class AnomalyScars {
 				// пока не вышел дедлайн прохода: иначе это залп генераций в одном тике
 				if (loads >= 2 || (passDeadline != 0L && System.nanoTime() > passDeadline)
 						|| !chunkBudgetAllows(data, config, AnomalyClock.now())) {
-					return false;
+					return 0;
 				}
 				level.getChunk(chunkX, chunkZ);
 				data.gen_count++;
@@ -949,13 +963,16 @@ public final class AnomalyScars {
 				continue;
 			}
 			if (!level.getBlockState(new BlockPos(bx, h - 1, bz)).getFluidState().isEmpty()) {
-				return true;
+				if (loads > 0) {
+					AnomalyField.markDirty();
+				}
+				return 2;
 			}
 		}
 		if (loads > 0) {
 			AnomalyField.markDirty();
 		}
-		return false;
+		return 1;
 	}
 
 	/** Провал: вынимаем колонку на depth блоков, стенки остаются как есть. */

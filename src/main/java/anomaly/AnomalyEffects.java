@@ -64,7 +64,9 @@ public final class AnomalyEffects {
 			state.hazardTicks += AnomalyState.stepTicks(seconds);
 			if (state.hazardTicks >= 120) {
 				state.hazardTicks = 0;
-				float damage = (float) ((0.6 + 3.6 * depth) * Math.max(0.25, state.dose));
+				// пол по урону: 2.0 HP за 6 с выше медленной регенерации (0.25 HP/с), иначе
+				// внешняя четверть радиуса лечила в плюс и там можно было стоять с едой
+				float damage = (float) Math.max(2.0, (0.6 + 3.6 * depth) * Math.max(0.4, state.dose));
 				player.hurt(level.damageSources().magic(), damage);
 				// зона высасывает силы: с полной сатурацией ванильная регенерация даёт до 2 HP/с,
 				// и урон ядра её не обгонял — сытый игрок кемпил ядро на стейках
@@ -730,6 +732,7 @@ public final class AnomalyEffects {
 		return time >= 13000L && time <= 23000L;
 	}
 }
+
 
 
 

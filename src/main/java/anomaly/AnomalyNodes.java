@@ -206,6 +206,11 @@ public final class AnomalyNodes {
 					continue;
 				}
 				long nowMs = System.currentTimeMillis();
+				if (zone.signedDistance(player.getX(), player.getZ()) <= 0.0) {
+					// игрок вошёл в зону — это новый визит: лимит попыток сбрасывается, иначе
+					// зона с водой/лавой на месте кладовой оставалась без неё навсегда
+					anomaly.node_tries = 0;
+				}
 				if (anomaly.node_tries >= 6 || nowMs - anomaly.node_try_ms < 120_000L) {
 					// не встаёт (океан, лава, чужой блок): не долбим чанки каждые две секунды
 					continue;
