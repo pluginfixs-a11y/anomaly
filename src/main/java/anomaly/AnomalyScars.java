@@ -55,12 +55,21 @@ public final class AnomalyScars {
 	// --- планирование ---
 
 	public static List<ScarOp> plan(Anomaly anomaly, AnomalyClass cls, Random rnd) {
-		return planAt(anomaly.x0, anomaly.z0, anomaly.r0, cls, rnd, anomaly.pinned, anomaly.components);
+		return planAt(anomaly.x0, anomaly.z0, anomaly.r0, cls, rnd, anomaly.pinned, anomaly.components, true);
 	}
 
 	/** План вокруг точки: при миграции старой зоны это её нынешнее место, а не точка рождения. */
 	public static List<ScarOp> planAt(double x, double z, double r0, AnomalyClass cls, Random rnd,
 			boolean pinned, List<String> components) {
+		return planAt(x, z, r0, cls, rnd, pinned, components, false);
+	}
+
+	/**
+	 * @param ring опоясывающая рана по контуру — только при рождении: у дрейфующей зоны кольцо
+	 *             каждый шаг ставилось бы вокруг нового центра и сыпалось вдоль пути
+	 */
+	static List<ScarOp> planAt(double x, double z, double r0, AnomalyClass cls, Random rnd,
+			boolean pinned, List<String> components, boolean ring) {
 		List<ScarOp> ops = new ArrayList<>();
 		double budget = AnomalyClass.damageBudget(r0, cls);
 		if (budget < 20.0 || pinned) {
@@ -83,10 +92,10 @@ public final class AnomalyScars {
 		}
 		// опоясывающая рана по контуру: граница класса становится материальной, иначе край
 		// трёхкилометровой зоны ничем не отмечен и «вход» не читается
-		if (r0 >= 300.0 && used < budget) {
-			int ring = 10;
-			for (int i = 0; i < ring; i++) {
-				double angle = i * Math.PI * 2.0 / ring + rnd.nextDouble() * 0.4;
+		if (ring && r0 >= 300.0 && used < budget) {
+			int ringCount = 24;
+			for (int i = 0; i < ringCount; i++) {
+				double angle = i * Math.PI * 2.0 / ringCount + rnd.nextDouble() * 0.15;
 				double rr = r0 * (0.90 + rnd.nextDouble() * 0.07);
 				double ox = x + Math.cos(angle) * rr;
 				double oz = z + Math.sin(angle) * rr;
@@ -443,19 +452,13 @@ public final class AnomalyScars {
 						break;
 					}
 				}
-				if (anomaly.scar_telegraph_for != anomaly.scar_next && !anomaly.scar_retry_tree) {
-					// перед блоками: игрок должен обернуться на звук и пыль, а не обнаружить
-					// гору post factum. Один пакет и один звук на след
+				if (!anomaly.scar_retry_tree && anomaly.scar_telegraph_for != anomaly.scar_next) {
+					// сигнал от первой реальной колонки, а не от центра опа: у линии работа
+					// уходит на сотню блоков, и центр мог оказаться в стороне (или в незагруженном чанке)
+					AnomalyEffects.scarTelegraph(level, column[0], column[1],
+							AnomalyClass.byId(anomaly.cls).color);
 					anomaly.scar_telegraph_for = anomaly.scar_next;
-					AnomalyEffects.scarTelegraph(level, op.x, op.z, AnomalyClass.byId(anomaly.cls).color);
 				}
-					if (!anomaly.scar_retry_tree && anomaly.scar_telegraph_for != anomaly.scar_next) {
-						// сигнал от первой реальной колонки, а не от центра опа: у линии работа
-						// уходит на сотню блоков, и центр мог оказаться в стороне (или в незагруженном чанке)
-						AnomalyEffects.scarTelegraph(level, column[0], column[1],
-								AnomalyClass.byId(anomaly.cls).color);
-						anomaly.scar_telegraph_for = anomaly.scar_next;
-					}
 					// курсор двигаем только после проверок: иначе колонка на стыке бюджета чанков теряется
 					anomaly.scar_cursor++;
 					columnsThisTick++;
@@ -464,7 +467,15 @@ public final class AnomalyScars {
 						// повтор после обрыва по дереву: op уже применён, доделываем только дерево,
 						// иначе воронка копается второй раз уже по дну ямы
 						// повтор колонки: дерево сносится ДО следа, значит op ещё не применён
-						// и колонку надо обработать целиком (а не только доделать дерево)
+						// и колонку надо обработать целиком (а не только доделать дерево).
+						// Если прошлая попытка оборвалась на кроне — досносим её: deforestForce
+						// идемпотентен, а fallenForest на повторе уже не видит ствола
+						if (anomaly.scar_retry_tree) {
+							int h = level.getHeight(Heightmap.Types.MOTION_BLOCKING, column[0], column[1]);
+							if (h > level.getMinY() + 3 && h < level.getMaxY() - 2) {
+								deforestForce(level, column[0], h, column[1]);
+							}
+						}
 						applied = applyColumn(level, op, column[0], column[1]);
 						anomaly.scar_retry_tree = false;
 					} catch (RuntimeException e) {
@@ -539,7 +550,9 @@ public final class AnomalyScars {
 		if (!ground.getFluidState().isEmpty() || builtBlock(ground)) {
 			return 0;
 		}
-		if (isFragileSurface(ground) && !op.type.equals("crack") && !op.type.equals("sinkhole")) {
+		// на льду и снежном блоке — только трещина: шип и плита выглядят мусором,
+		// а провал всё равно упирается в воду подо льдом
+		if (isFragileSurface(ground) && !op.type.equals("crack")) {
 			return 0;
 		}
 		// игрок в объёме следа: откладываем op целиком, иначе в провале остаётся столб-остров
@@ -903,9 +916,10 @@ public final class AnomalyScars {
 		int changed = 0;
 		BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
 		for (int i = 0; i < height; i++) {
-			// игрок на плите сверху — не повод ставить ему камень в ноги
+			// игрок на плите сверху — не повод ставить ему камень в ноги; колонку пропускаем
+			// целиком, иначе останется шахта 1×1 на всю высоту
 			if (playersNear(level, x, surface + i, z)) {
-				break;
+				return 0;
 			}
 			BlockState at = level.getBlockState(pos.set(x, surface + i, z));
 			if (protectedBlock(at) || (!at.isAir() && at.blocksMotion() && !at.canBeReplaced())) {
@@ -1013,10 +1027,18 @@ public final class AnomalyScars {
 				BlockPos rim = new BlockPos(x, surface - 1, z);
 				BlockState at = level.getBlockState(rim);
 				if (!protectedBlock(at) && !builtBlock(at)) {
-					// только базальт: магма на кромке жгла бы стоящего рядом игрока, а шов
-					// и без урона читается как остывшая лава
+					// на кромке — базальт (магма жгла бы стоящего рядом), а светящийся шов —
+					// магмой на блок ниже: её видно из щели, но ногой не заденешь
 					level.setBlock(rim, Blocks.BASALT.defaultBlockState(), Block.UPDATE_ALL);
 					changed++;
+					if (roll == 0 && depth >= 3) {
+						BlockPos glow = new BlockPos(x, surface - 2, z);
+						BlockState deep = level.getBlockState(glow);
+						if (!protectedBlock(deep) && !builtBlock(deep) && deep.isAir()) {
+							level.setBlock(glow, Blocks.MAGMA_BLOCK.defaultBlockState(), Block.UPDATE_ALL);
+							changed++;
+						}
+					}
 				}
 			}
 		}
@@ -1206,9 +1228,10 @@ public final class AnomalyScars {
 		int changed = 0;
 		int top = Math.min(level.getMaxY() - 2, surface + height);
 		for (int y = surface; y <= top; y++) {
-			// игрок выше земли (на скале, в полёте) тоже не должен получить камень в голову
+			// игрок выше земли (на скале, в полёте) тоже не должен получить камень в голову;
+			// колонку пропускаем целиком, иначе остаётся обрубок до высоты головы
 			if (playersNear(level, x, y, z)) {
-				break;
+				return 0;
 			}
 			BlockState state = level.getBlockState(pos.set(x, y, z));
 			if (protectedBlock(state)) {
@@ -1280,6 +1303,15 @@ public final class AnomalyScars {
 	 */
 	static boolean opHasPlayer(ServerLevel level, ScarOp op) {
 		for (ServerPlayer player : level.players()) {
+			// окно по Y: игрок в шахте под следом не должен замораживать опа наверху
+			int bx = (int) Math.floor(op.x);
+			int bz = (int) Math.floor(op.z);
+			if (level.getChunkSource().hasChunk(bx >> 4, bz >> 4)) {
+				double oy = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, bx, bz);
+				if (Math.abs(player.getY() - oy) > 24.0) {
+					continue;
+				}
+			}
 			double dx = player.getX() - op.x;
 			double dz = player.getZ() - op.z;
 			if (op.isLine()) {
@@ -1303,8 +1335,16 @@ public final class AnomalyScars {
 
 	/** Дно уже выбитой воронки: повторный хлопок в ту же точку просаживал землю без предела. */
 	static boolean isCraterFloor(BlockState state) {
+		// только булыжник: туф, андезит и песчаник встречаются в природе, и по ним нельзя
+		// отличить выбитое дно от обычного грунта
 		return state.is(Blocks.COBBLESTONE) || state.is(Blocks.COBBLED_DEEPSLATE)
 				|| state.is(Blocks.MOSSY_COBBLESTONE);
+	}
+
+	/** Материал пломбы дна воронки: узнаваемый «уже копано», чтобы хлопок не углублял яму. */
+	private static BlockState seal(BlockState ground) {
+		return (ground.is(Blocks.DEEPSLATE) ? Blocks.COBBLED_DEEPSLATE : Blocks.COBBLESTONE)
+				.defaultBlockState();
 	}
 
 	/** Близко ли игрок к клетке: след не должен ставить камень в игрока (удушье) или вынимать
@@ -1388,14 +1428,13 @@ public final class AnomalyScars {
 					changed++;
 					dug = y;
 				}
-				// дно воронки — под последним выкопанным блоком, а не «где-то по плану»:
-				// если копание прервалось на сундуке, пол не должен висеть в пещере ниже
+				// дно воронки пломбируем всегда: иначе следующий хлопок видит новый грунт ниже
+				// и воронка углубляется без предела (у стоянки выгрызается терраса)
 				if (dug < surface) {
-					int floorY = Math.max(level.getMinY() + 1, dug - 1);
-					BlockState floor = level.getBlockState(pos.set(x0, floorY, z0));
-					if (floor.canBeReplaced() && !protectedBlock(floor) && !builtBlock(floor)) {
-						level.setBlock(pos, Blocks.COBBLESTONE.defaultBlockState(), Block.UPDATE_ALL);
-						changed++;
+					BlockPos floorPos = new BlockPos(x0, Math.max(level.getMinY() + 1, dug), z0);
+					BlockState floor = level.getBlockState(floorPos);
+					if (!protectedBlock(floor) && !builtBlock(floor) && !floor.isAir()) {
+						level.setBlock(floorPos, seal(ground), Block.UPDATE_ALL);
 					}
 				}
 			}
@@ -1500,6 +1539,7 @@ public final class AnomalyScars {
 		return sum;
 	}
 }
+
 
 
 
