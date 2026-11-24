@@ -374,12 +374,15 @@ public final class AnomalyScars {
 							break;
 						}
 					}
-					// вода проверяется на первой колонке и только после загрузки чанка: до загрузки
-					// сэмплы wetOp всегда «не загружены» и проверка молча не работала
-					if (anomaly.scar_cursor == 0 && !anomaly.scar_retry_tree && wetOp(level, op, data, config)) {
+				// вода проверяется один раз на op: column(0) у диска — угол квадрата вне круга
+				// и возвращает null, поэтому привязка к scar_cursor == 0 не срабатывала никогда
+				if (anomaly.scar_wet_for != anomaly.scar_next && !anomaly.scar_retry_tree) {
+					anomaly.scar_wet_for = anomaly.scar_next;
+					if (wetOp(level, op, data, config)) {
 						wetSkip = true;
 						break;
 					}
+				}
 					// курсор двигаем только после проверок: иначе колонка на стыке бюджета чанков теряется
 					anomaly.scar_cursor++;
 					columnsThisTick++;
@@ -611,7 +614,9 @@ public final class AnomalyScars {
 
 	/** Повтор колонки, у которой op уже применён, а дерево не доделано: только снос. */
 	private static int finishTree(ServerLevel level, int x, int z) {
-		int height = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, x, z);
+		// MOTION_BLOCKING, а не NO_LEAVES: ствол уже снесён, и высотная карта без листвы
+		// падает до земли — крона оставалась висеть над обрубком
+		int height = level.getHeight(Heightmap.Types.MOTION_BLOCKING, x, z);
 		if (height <= level.getMinY() + 3 || height >= level.getMaxY() - 2) {
 			return 0;
 		}
@@ -905,15 +910,27 @@ public final class AnomalyScars {
 	 */
 	private static boolean wetOp(ServerLevel level, ScarOp op, AnomalyFieldData data, AnomalyConfig config) {
 		double radius = Math.max(1.0, op.radius);
-		for (int i = 0; i < 9; i++) {
-			// центр, кольцо 0.75 и кольцо 1.0: воронка на берегу касается воды краем,
-			// и проверка только внутреннего кольца её пропускала
-			double angle = i * Math.PI * 2.0 / 8.0;
-			double r = i == 0 ? 0.0 : radius * (i % 2 == 0 ? 1.0 : 0.75);
-			int x = (int) Math.floor(op.x + Math.cos(angle) * r);
-			int z = (int) Math.floor(op.z + Math.sin(angle) * r);
-			int chunkX = x >> 4;
-			int chunkZ = z >> 4;
+		// у линии точек вдоль длины, а не кольцо вокруг начала: трещина 40–80 блоков
+		// переходит ручей в середине, и кольцо у старта этого не видит
+		int samples = op.isLine() ? 5 : 9;
+		for (int i = 0; i < samples; i++) {
+			double x;
+			double z;
+			if (op.isLine()) {
+				double t = i / (double) (samples - 1);
+				x = op.x + Math.cos(op.angle) * op.length * t;
+				z = op.z + Math.sin(op.angle) * op.length * t;
+			} else {
+				// центр, кольцо 0.75 и кольцо 1.0: воронка на берегу касается воды краем
+				double angle = i * Math.PI * 2.0 / 8.0;
+				double r = i == 0 ? 0.0 : radius * (i % 2 == 0 ? 1.0 : 0.75);
+				x = op.x + Math.cos(angle) * r;
+				z = op.z + Math.sin(angle) * r;
+			}
+			int bx = (int) Math.floor(x);
+			int bz = (int) Math.floor(z);
+			int chunkX = bx >> 4;
+			int chunkZ = bz >> 4;
 			if (!level.getChunkSource().hasChunk(chunkX, chunkZ)) {
 				// в свежей местности загружен только чанк первой колонки, и все сэмплы молча
 				// пропускались — проверка воды не работала вовсе. Грузим под суточным бюджетом
@@ -922,12 +939,13 @@ public final class AnomalyScars {
 				}
 				level.getChunk(chunkX, chunkZ);
 				data.gen_count++;
+				AnomalyField.markDirty();
 			}
-			int h = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, x, z);
+			int h = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, bx, bz);
 			if (h <= level.getMinY() + 2) {
 				continue;
 			}
-			if (!level.getBlockState(new BlockPos(x, h - 1, z)).getFluidState().isEmpty()) {
+			if (!level.getBlockState(new BlockPos(bx, h - 1, bz)).getFluidState().isEmpty()) {
 				return true;
 			}
 		}
@@ -1215,6 +1233,7 @@ public final class AnomalyScars {
 		return sum;
 	}
 }
+
 
 
 

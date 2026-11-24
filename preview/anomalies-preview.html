@@ -381,7 +381,7 @@ function drawSoftBand(center, half, color, label) {
   ctx.restore();
   if (label) {
     const p = toScreen(center * 0.7071, -center * 0.7071);
-    pendingLabels.push([p[0] + 6, p[1] - 4, "#8d948f", label]);
+    pendingLabels.push([p[0] + 6, p[1] - 4, "#a2957c", label]);
   }
 }
 
@@ -595,7 +595,7 @@ function drawDamage(a, st) {
   // 0.18–0.85 радиуса, а не ровно в ядре (у r=200 бюджет 120 блоков, полрадиуса было бы 31 тыс.)
   const patchR = Math.min(st.radius * 0.5, Math.sqrt(blocks / Math.PI) * 1.6);
   const patchAngle = rnd() * Math.PI * 2;
-  const patchDist = st.radius * (0.18 + 0.67 * rnd());
+  const patchDist = st.radius * (0.18 + 0.67 * Math.sqrt(rnd()));
   const px = st.x + Math.cos(patchAngle) * patchDist;
   const pz = st.z + Math.sin(patchAngle) * patchDist;
   polygonPath(shapePoints(a, { x: px, z: pz, radius: patchR }, 1));
@@ -870,6 +870,7 @@ window.anomalyPreview = {
 </script>
 </body>
 </html>
+
 
 
 

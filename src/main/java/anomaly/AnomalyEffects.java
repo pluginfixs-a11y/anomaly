@@ -66,13 +66,17 @@ public final class AnomalyEffects {
 				state.hazardTicks = 0;
 				float damage = (float) ((0.6 + 3.6 * depth) * Math.max(0.25, state.dose));
 				player.hurt(level.damageSources().magic(), damage);
+				// зона высасывает силы: с полной сатурацией ванильная регенерация даёт до 2 HP/с,
+				// и урон ядра её не обгонял — сытый игрок кемпил ядро на стейках
+				player.getFoodData().setSaturation(0.0f);
 			}
 		}
 		// карман тишины у кладовой: раз в ~3 с тихий звон. Без метки исчезновение урона
-		// в 12 блоках и возвращение в 13 читается как баг мода, а не как «тут тихо»
+		// в 12 блоках и возвращение в 13 читается как баг мода, а не как «тут тихо».
+		// Считаем по мировым тикам: pulseTicks зависит от tick_period и при 3 давал звон раз в 4 с
 		if (zone.cls() == AnomalyClass.DEADLY && !zone.remnant() && !player.isCreative()
 				&& !player.isSpectator() && nearNodePocket(zone, player, 12.0)
-				&& state.pulseTicks % 12 == 0) {
+				&& player.tickCount % 60 == 0) {
 			level.playSound(null, player.getX(), player.getY(), player.getZ(),
 					SoundEvents.AMETHYST_BLOCK_CHIME, SoundSource.AMBIENT, 0.35f, 0.55f);
 		}
@@ -155,15 +159,20 @@ public final class AnomalyEffects {
 
 	/**
 	 * Карман тишины у кладовой: в смертельной зоне урон идёт везде, и без паузы у самого
-	 * узла приз (незерит/тотем) стоил бы дороже, чем дроп. Пауза только на радиус узла —
-	 * кемпинг всё равно невыгоден: кладовая молчит, пока рядом кто-то есть.
+	 * узла приз (незерит/тотем) стоил бы дороже, чем дроп. Пауза только на радиус узла и только
+	 * в объёме кладовой: кемпинг всё равно невыгоден — она молчит, пока рядом кто-то есть.
 	 */
 	static boolean nearNodePocket(Zone zone, ServerPlayer player, double radius) {
 		var anomaly = zone.anomaly();
-		if (anomaly == null || !Double.isFinite(anomaly.node_cx) || anomaly.node_r <= 0.0) {
+		if (anomaly == null || !anomaly.node_cache_ok || !Double.isFinite(anomaly.node_cx)
+				|| anomaly.node_r <= 0.0) {
 			return false;
 		}
-		return Math.hypot(player.getX() - anomaly.node_cx, player.getZ() - anomaly.node_cz) < radius;
+		double r = Math.max(radius, 0.32 * anomaly.node_r + 2.0);
+		if (Math.abs(player.getY() - anomaly.node_cy) > 16.0) {
+			return false;
+		}
+		return Math.hypot(player.getX() - anomaly.node_cx, player.getZ() - anomaly.node_cz) < r;
 	}
 
 	/**
@@ -268,7 +277,7 @@ public final class AnomalyEffects {
 		// с зазором 35 блоков, читается как обрывки, а не как шахта. Соседние сегменты
 		// перекрываются по dy
 		int segments = Math.max(4, Math.min(12, top / 12));
-		int per = Math.max(3, top / (segments * 2));
+		int per = Math.max(6, top / segments);
 		double dy = Math.max(1.0, top / (segments * 2.0));
 		for (int k = 0; k < segments; k++) {
 			level.sendParticles(player, ParticleTypes.END_ROD, true, true,
@@ -294,7 +303,7 @@ public final class AnomalyEffects {
 		double ground = level.getChunkSource().hasChunk(bx >> 4, bz >> 4)
 				? level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, bx, bz)
 				: player.getY() - 1.0;
-		double y = Math.max(ground, player.getY()) + 1.0;
+		double y = ground + 1.0;
 		int color = zone.edgeColor();
 		// яркая пыль класса, не затемнённая: указатель должен читаться и ночью
 		var dust = new DustColorTransitionOptions(color, color, 0.6f);
@@ -721,4 +730,6 @@ public final class AnomalyEffects {
 		return time >= 13000L && time <= 23000L;
 	}
 }
+
+
 

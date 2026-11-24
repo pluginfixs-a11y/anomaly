@@ -249,8 +249,9 @@ public class AnomalyMod implements ModInitializer {
 		state.netherTicks += AnomalyState.stepTicks(seconds);
 		if (state.netherTicks >= 120) {
 			state.netherTicks = 0;
-			player.hurt(player.level().damageSources().magic(), (float) (1.2 + 1.6 * depth));
+			player.hurt(player.level().damageSources().magic(), (float) (1.6 + 1.6 * depth));
 		}
 	}
 }
+
 

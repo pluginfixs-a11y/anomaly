@@ -111,6 +111,9 @@ public final class Anomaly {
 	/** Колонка следа: op уже применён, осталось доделать снос дерева (не пишется в файл). */
 	public transient boolean scar_retry_tree;
 
+	/** Номер op, для которого уже проверена вода: проверка один раз, а не на каждой колонке. */
+	public transient int scar_wet_for = -1;
+
 	/** Попытки поставить узлы и время последней: зона в океане не должна грузить чанки вечно. */
 	public transient int node_tries;
 	public transient long node_try_ms;
@@ -427,6 +430,9 @@ public final class Anomaly {
 			node_cache_ok = false;
 			node_altar_ok = false;
 			anchors_placed = 0;
+			// node_r обнуляем вместе с парой: иначе placeNodes увидит «радиус есть» и поставит
+			// узлы в (0, 0) — на координатах битого файла
+			node_r = 0.0;
 		}
 		anchors_broken &= 0x7;
 		if (anchor_ys == null || anchor_ys.length != 3) {

@@ -179,18 +179,30 @@ public final class AnomalyNodes {
 		if ((++nodeTicker & 1) != 0) {
 			return;
 		}
+		// одна попытка постановки на проход, а не залп по всем зонам рядом: у каждой попытки
+		// до двух синхронных getChunk, и десяток зон в одном тике — это фриз
+		int nodeBudget = 1;
 		for (ServerPlayer player : server.getPlayerList().getPlayers()) {
 			if (player.level() != level) {
 				continue;
 			}
+			if (nodeBudget <= 0) {
+				break;
+			}
 			for (Zone zone : AnomalyField.near(level, player.getX(), player.getZ(), REACH + NODE_SPREAD)) {
+				if (nodeBudget <= 0) {
+					break;
+				}
 				if (zone.remnant() || zone.precursor()) {
 					continue;
 				}
 				Anomaly anomaly = zone.anomaly();
-				if (anomaly == null || anomaly.nodes_placed) {
-					// уже поставлены: ни одного getChunk в тике (пять чанков каждые 2 с на зону —
-					// это синхронная генерация в обход бюджета следов)
+				if (anomaly == null) {
+					continue;
+				}
+				// пропускаем только полностью укомплектованную зону: nodes_placed ставится уже
+				// при первом узле, и «кладовая легла, якорь в лаве» иначе застывало навсегда
+				if (anomaly.node_cache_ok && anomaly.node_altar_ok && anomaly.anchors_placed == 7) {
 					continue;
 				}
 				long nowMs = System.currentTimeMillis();
@@ -212,11 +224,23 @@ public final class AnomalyNodes {
 					continue;
 				}
 				// чанки узлов грузим сами: surface() на незагруженном чанке возвращает null,
-				// и узел молча не появляется (это и резало алтарь и якоря у крупных зон)
+				// и узел молча не появляется (это и резало алтарь и якоря у крупных зон).
+				// Не больше двух за попытку: пять чанков в одном тике — это фриз на генерации
 				anomaly.node_try_ms = nowMs;
 				anomaly.node_tries++;
+				nodeBudget--;
+				int loads = 0;
 				for (double[] at : nodeSpots(anomaly, cx, cz, r)) {
-					level.getChunk((int) Math.floor(at[0]) >> 4, (int) Math.floor(at[1]) >> 4);
+					int cx2 = (int) Math.floor(at[0]) >> 4;
+					int cz2 = (int) Math.floor(at[1]) >> 4;
+					if (level.getChunkSource().hasChunk(cx2, cz2)) {
+						continue;
+					}
+					if (loads >= 2) {
+						break;
+					}
+					level.getChunk(cx2, cz2);
+					loads++;
 				}
 				placeNodes(level, anomaly, zone);
 			}
