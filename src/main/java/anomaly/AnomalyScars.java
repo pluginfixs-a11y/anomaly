@@ -413,6 +413,91 @@ public final class AnomalyScars {
 
 	/** С какой записи начинать следующий проход: строгий FIFO морил голодом всё поле за первой зоной. */
 	private static int rotate;
+
+	/** Раз в столько миллисекунд миру достаётся один тихий след. */
+	private static final long DRIP_PERIOD_MS = 6_000L;
+	private static final Random DRIP_RANDOM = new Random(0x5EED5CA7L);
+	private static long dripAt;
+
+	/**
+	 * Тихий след: зона должна сорить и без игрока.
+	 * <p>
+	 * Пока в зоне никого нет, единственное, что там появляется, — это план, поставленный при
+	 * рождении и дрейфе. Игрок возвращается через сутки и находит два шипа и пустоту: «страшная
+	 * аномалия» не выглядит страшной. Здесь раз в несколько секунд одна повреждённая зона
+	 * получает маленький op — воронку, мёртвую землю, трещину, осыпь.
+	 * <p>
+	 * Op идёт в обычную очередь зоны, поэтому его применяет тот же проход: чанк загружен — след
+	 * лёг, не загружен — ждёт. Синхронной генерации чанков это не добавляет: она по-прежнему
+	 * разрешена только на пустом сервере и под суточным лимитом.
+	 */
+	static boolean drip(AnomalyFieldData data, AnomalyConfig config, long now, Random rnd) {
+		if (config == null || !config.scar_enabled) {
+			return false;
+		}
+		if (now < dripAt) {
+			return false;
+		}
+		dripAt = now + DRIP_PERIOD_MS;
+		return dripOnce(data, config, now, rnd);
+	}
+
+	/** Один тихий след в случайную повреждённую зону. Вынесено от таймера ради самопроверки. */
+	static boolean dripOnce(AnomalyFieldData data, AnomalyConfig config, long now, Random rnd) {
+		if (data == null || data.anomalies.isEmpty() || totalOps(data) >= MAX_OPS_WORLD) {
+			return false;
+		}
+		int size = data.anomalies.size();
+		int start = rnd.nextInt(size);
+		for (int step = 0; step < size; step++) {
+			Anomaly anomaly = data.anomalies.get((start + step) % size);
+			if (anomaly.pinned || anomaly.remnant || anomaly.precursor || anomaly.scars == null) {
+				continue;
+			}
+			AnomalyClass cls = AnomalyClass.byId(anomaly.cls);
+			// безопасная зона не рушит мир: у неё и бюджет нулевой
+			if (!cls.damages() || anomaly.scars.size() >= MAX_OPS) {
+				continue;
+			}
+			double age = anomaly.ageHours(now);
+			double[] pos = anomaly.position(age);
+			if (!Double.isFinite(pos[0]) || !Double.isFinite(pos[1])) {
+				continue;
+			}
+			// та же касса, что у плана: бюджет зоны один на всех, и дрип не должен
+			// съедать больше, чем осталось после уже обещанного
+			double budget = AnomalyClass.damageBudget(anomaly.r0, cls);
+			double used = anomaly.scar_spent + plannedBlocks(anomaly.scars);
+			ScarOp op = dripOp(pos[0], pos[1], Math.max(12.0, anomaly.radius(age)), rnd);
+			if (used + op.blocks > budget) {
+				continue;
+			}
+			// уже применённое не мешает: сравниваем только с тем, что ещё в очереди
+			List<ScarOp> queue = anomaly.scars.subList(Math.max(0, anomaly.scar_next), anomaly.scars.size());
+			if (overlaps(queue, op)) {
+				continue;
+			}
+			anomaly.scars.add(op);
+			AnomalyField.markDirty();
+			return true;
+		}
+		return false;
+	}
+
+	/** Мелкий след для дрипа: тот же язык, что у плана, но самая мелкая его часть. */
+	private static ScarOp dripOp(double cx, double cz, double radius, Random rnd) {
+		double angle = rnd.nextDouble() * Math.PI * 2.0;
+		double dist = radius * (0.1 + 0.75 * rnd.nextDouble());
+		double x = cx + Math.cos(angle) * dist;
+		double z = cz + Math.sin(angle) * dist;
+		long seed = rnd.nextLong();
+		return switch (rnd.nextInt(4)) {
+			case 0 -> ScarOp.disk("dead_soil", x, z, 4 + rnd.nextInt(6), seed);
+			case 1 -> ScarOp.sinkhole(x, z, 2 + rnd.nextInt(3), 2, seed);
+			case 2 -> ScarOp.line("crack", x, z, rnd.nextDouble() * Math.PI * 2.0, 12 + rnd.nextInt(20), 1, 3, seed);
+			default -> ScarOp.disk("rubble", x, z, 3 + rnd.nextInt(5), seed);
+		};
+	}
 	/** Дедлайн текущего прохода: деревья внутри одной колонки умеют съесть его целиком. */
 	private static long passDeadline;
 
@@ -439,7 +524,8 @@ public final class AnomalyScars {
 	public static boolean tick(MinecraftServer server, ServerLevel level, AnomalyFieldData data,
 			AnomalyConfig config) {
 		try {
-			return pass(server, level, data, config);
+			boolean dripped = drip(data, config, AnomalyClock.now(), DRIP_RANDOM);
+			return pass(server, level, data, config) || dripped;
 		} finally {
 			// дедлайн держим только внутри тика. Раньше он оставался в прошлом, и любой
 			// вызов вне прохода (/anomaly demo, /anomaly event) получал «время вышло»

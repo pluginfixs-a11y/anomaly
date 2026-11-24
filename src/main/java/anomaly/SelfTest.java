@@ -477,6 +477,32 @@ public final class SelfTest {
 		report(result, "следы не выходят за зону и доходят до внешней половины", insideZone && outer);
 		report(result, "у смертельной бывают пики", kinds);
 
+		// тихий след: пока игрока в зоне нет, она продолжает сорить мелкими следами.
+		// Иначе, вернувшись через сутки, игрок видит два шипа и пустоту
+		AnomalyFieldData dripField = new AnomalyFieldData();
+		Anomaly dripZone = AnomalyField.create(dripField, config, rnd, 0L, 8000, 0, 1500.0,
+				AnomalyClass.DEADLY, false);
+		// create() не кладёт зону в поле, это делает вызывающий; для дрипа нужен именно список
+		dripField.anomalies.add(dripZone);
+		// план рождения убираем: проверяем сам дрип, а не остаток бюджета после плана
+		dripZone.scars.clear();
+		dripZone.scar_next = 0;
+		boolean dripped = AnomalyScars.dripOnce(dripField, config, 0L, new Random(3L));
+		boolean dripSmall = dripped && dripZone.scars.size() == 1 && dripZone.scars.get(0).blocks <= 600;
+		double dripDist = dripSmall
+				? Math.hypot(dripZone.scars.get(0).x - dripZone.x0, dripZone.scars.get(0).z - dripZone.z0)
+				: Double.MAX_VALUE;
+		report(result, "тихий след ложится в очередь зоны ("
+						+ (dripped ? dripZone.scars.get(0).describe() : "нет")
+						+ ", до центра " + Math.round(dripDist) + ")",
+				dripSmall && dripDist <= dripZone.r0);
+		// безопасная зона не сорит даже по таймеру
+		AnomalyFieldData safeField = new AnomalyFieldData();
+		safeField.anomalies.add(AnomalyField.create(safeField, config, rnd, 0L, 9000, 0, 1500.0,
+				AnomalyClass.SAFE, false));
+		report(result, "безопасная зона тихих следов не оставляет",
+				!AnomalyScars.dripOnce(safeField, config, 0L, new Random(4L)));
+
 		// кольцо раны: пятна мёртвой земли по настоящему контуру, а не по кругу
 		double ringAge = deadly.ageHours(0L);
 		List<ScarOp> wound = AnomalyScars.woundRing(deadly, ringAge, new Random(5L));
@@ -849,9 +875,13 @@ public final class SelfTest {
 					|| Blocks.MUSHROOM_STEM.defaultBlockState()
 							.isValidSpawn(level, spawnPos, EntityTypes.ZOMBIE)
 					|| Blocks.BAMBOO.defaultBlockState().isValidSpawn(level, spawnPos, EntityTypes.ZOMBIE)
+					|| Blocks.BAMBOO_SAPLING.defaultBlockState()
+							.isValidSpawn(level, spawnPos, EntityTypes.ZOMBIE)
 					|| Blocks.BAMBOO_BLOCK.defaultBlockState().isValidSpawn(level, spawnPos, EntityTypes.ZOMBIE);
-			report(result, "на шляпках грибов, стволе и бамбуке не спавнится (листва: "
-							+ (leavesSpawn ? "спавнится" : "нет") + ")",
+			// листва в ванили проходит isValidSpawn=true и защищена другой картой высот —
+			// печатаем это, чтобы метка не обещала «как у листвы» больше, чем есть
+			report(result, "на шляпках грибов, стволе и бамбуке не спавнится (листва проходит эту "
+							+ "проверку: " + leavesSpawn + ")",
 					!mushroomSpawn);
 
 			// лавовый разлом у воды — обычная трещина: лава там гаснет в камень
