@@ -526,9 +526,12 @@ public final class SelfTest {
 		}
 		report(result, "план следов детерминирован", same);
 
-		ScarOp hole = ScarOp.sinkhole(0.0, 0.0, 4.0, 5, 1L);
-		report(result, "провал оценивается по объёму",
-				hole.blocks == (int) Math.round(Math.PI * 16.0 * 5)
+		// оценка идёт по фактической глубине (не меньше 0.9 радиуса), а не по аргументу:
+		// иначе зона планирует одну цену, а пишет в мир втрое больше
+		ScarOp hole = ScarOp.sinkhole(0.0, 0.0, 4.0, 2, 1L);
+		report(result, "провал оценивается по фактической глубине",
+				hole.sinkholeDepth() == 4
+						&& hole.blocks == (int) Math.round(Math.PI * 16.0 * 4 * 0.75)
 						&& hole.describe().startsWith("провал"));
 
 		boolean columnsOk = true;
@@ -775,6 +778,38 @@ public final class SelfTest {
 			report(result, "пик поднимает колонку на " + (spikeAfter - spikeSurface) + " блоков из 12",
 					spikeAfter >= spikeSurface + 9);
 			restore(level, spikeBefore);
+
+			// малый пик: кэп 2.5 радиуса не должен стереть его в ноль (r 3 → ~7 блоков)
+			int miniX = bx + 48;
+			level.getChunk(miniX >> 4, bz >> 4);
+			int miniSurface = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, miniX, bz);
+			Map<BlockPos, BlockState> miniBefore = snapshot(level, miniX, bz, 5, miniSurface - 1, miniSurface + 12);
+			snapshots.add(miniBefore);
+			level.setBlock(new BlockPos(miniX, miniSurface - 1, bz), Blocks.STONE.defaultBlockState(), Block.UPDATE_ALL);
+			AnomalyScars.applyColumn(level, ScarOp.spike(miniX, bz, 3.0, 14, 23L), miniX, bz);
+			int miniAfter = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, miniX, bz);
+			report(result, "малый пик (r 3) поднимает колонку на " + (miniAfter - miniSurface) + " блоков",
+					miniAfter >= miniSurface + 4 && miniAfter <= miniSurface + 10);
+			restore(level, miniBefore);
+
+			// провал копает от радиуса: яма глубиной в аргумент при 12 поперёк — не провал
+			int pitX = bx + 96;
+			level.getChunk(pitX >> 4, bz >> 4);
+			int pitSurface = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, pitX, bz);
+			Map<BlockPos, BlockState> pitBefore = snapshot(level, pitX, bz, 8, pitSurface - 12, pitSurface + 2);
+			snapshots.add(pitBefore);
+			for (int y = pitSurface - 6; y < pitSurface; y++) {
+				level.setBlock(new BlockPos(pitX, y, bz), Blocks.STONE.defaultBlockState(), Block.UPDATE_ALL);
+			}
+			// глубина — это возврат applyColumn по центральной колонке: сколько блоков вынуто.
+			// Точное число зависит от грунта под тестовой точкой, поэтому сверяем с расчётной
+			// глубиной, а не с константой: при старом «depth из аргумента» тут было бы 2
+			ScarOp pitOp = ScarOp.sinkhole(pitX, bz, 6.0, 2, 29L);
+			int pitDug = AnomalyScars.applyColumn(level, pitOp, pitX, bz);
+			report(result, "провал r 6: аргумент 2, расчётная глубина " + pitOp.sinkholeDepth()
+							+ ", вынуто " + pitDug,
+					pitDug >= pitOp.sinkholeDepth() - 2);
+			restore(level, pitBefore);
 
 			// трещина выедает колонку
 			int cx = bx + 64;

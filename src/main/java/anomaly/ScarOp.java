@@ -51,17 +51,35 @@ public final class ScarOp {
 	public static ScarOp spike(double x, double z, double radius, int height, long seed) {
 		ScarOp op = disk("spike", x, z, radius, seed);
 		op.height = height;
-		// реальная высота колонки ~0.5·h из-за спада к краю, а не h/3: иначе бюджет занижен в 1.5 раза
-		op.blocks = (int) Math.round(Math.PI * radius * radius * height * 0.55);
+		// оценка — по той высоте, которая реально ставится: пока она брала op.height,
+		// смертельная зона списывала втрое больше блоков и теряла два-три следа
+		op.blocks = (int) Math.round(Math.PI * radius * radius * op.spikeHeight() * 0.3);
 		return op;
+	}
+
+	/** Фактическая высота пика: не выше 2.5 радиуса — иначе это антенна, а не скала. */
+	public int spikeHeight() {
+		return (int) Math.round(Math.min(height, Math.max(6.0, radius * 2.5)));
 	}
 
 	/** Провал: круг radius и глубина depth. Не воронка от хлопка, а настоящая дыра в рельефе. */
 	public static ScarOp sinkhole(double x, double z, double radius, int depth, long seed) {
 		ScarOp op = disk("sinkhole", x, z, radius, seed);
 		op.depth = Math.max(1, Math.min(10, depth));
-		op.blocks = (int) Math.round(Math.PI * radius * radius * op.depth);
+		// глубина идёт от радиуса (яма 4 блока при 16 поперёк — не провал), и оценка
+		// считается по той же цифре, что копается: иначе зона пишет в мир сверх плана
+		op.blocks = (int) Math.round(Math.PI * radius * radius * op.sinkholeDepth() * 0.75);
 		return op;
+	}
+
+	/** Фактическая глубина провала: не меньше 0.9 радиуса, не глубже 1.5 радиуса и 20 блоков. */
+	public int sinkholeDepth() {
+		if (radius < 2.0) {
+			// мелкий провал у игрока (хлопок, событие): глубина ровно заказанная
+			return Math.max(1, Math.min(depth, 10));
+		}
+		double want = Math.max(depth, radius * 0.9);
+		return (int) Math.round(Math.min(want, Math.min(radius * 1.5, 20.0)));
 	}
 
 	/**
@@ -78,7 +96,7 @@ public final class ScarOp {
 	/** Обрушенная постройка: пол из обломков и стены без крыш. */
 	public static ScarOp ruin(double x, double z, double radius, long seed) {
 		ScarOp op = disk("ruin", x, z, radius, seed);
-		op.blocks = (int) Math.round(Math.PI * radius * radius * 1.2);
+		op.blocks = (int) Math.round(Math.PI * radius * radius * 1.9);
 		return op;
 	}
 
@@ -141,7 +159,7 @@ public final class ScarOp {
 	public String describe() {
 		return switch (type) {
 			case "spike" -> "пик " + Math.round(height) + " (r " + Math.round(radius) + ")";
-			case "sinkhole" -> "провал r " + Math.round(radius) + " × " + depth;
+			case "sinkhole" -> "провал r " + Math.round(radius) + " × " + sinkholeDepth();
 			case "fallen_forest" -> "поваленный лес r " + Math.round(radius);
 			case "ruin" -> "руины r " + Math.round(radius);
 			case "uplift" -> "подъём r " + Math.round(radius) + " на " + height;

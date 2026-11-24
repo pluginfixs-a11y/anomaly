@@ -99,7 +99,9 @@ public final class AnomalyCommand {
 														IntegerArgumentType.getInteger(context, "z"))))))
 						.then(Commands.literal("demo")
 								.then(Commands.argument("type", StringArgumentType.word())
-										.then(Commands.argument("radius", DoubleArgumentType.doubleArg(2.0, 60.0))
+										// 30, не 60: демо ставит след синхронно в тик, а провал
+										// радиусом 60 — это 120 поперёк и ~40 тысяч setBlock разом
+										.then(Commands.argument("radius", DoubleArgumentType.doubleArg(2.0, 30.0))
 												.executes(context -> demo(context.getSource(),
 														StringArgumentType.getString(context, "type"),
 														DoubleArgumentType.getDouble(context, "radius"))))))
@@ -484,8 +486,9 @@ public final class AnomalyCommand {
 		};
 		reply(source, "Событие «" + type + "»: изменено " + changed + " блоков в " + bx + ", " + bz
 				+ " (радиус " + trim(radius)
-				+ (type.equals("crater") || type.equals("burst") || type.equals("bolt")
-						|| type.equals("sinkhole") ? ", глубина " + depth : "")
+				+ (type.equals("sinkhole") ? ", глубина от радиуса, не мельче " + depth
+						: type.equals("crater") || type.equals("burst") || type.equals("bolt")
+								? ", глубина " + depth : "")
 				+ ")");
 		if (!AnomalyMod.config.scar_enabled) {
 			reply(source, "Разрушения в конфиге выключены — команда всё равно сработала (это отладка)");

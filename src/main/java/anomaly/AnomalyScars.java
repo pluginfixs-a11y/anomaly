@@ -771,11 +771,9 @@ public final class AnomalyScars {
 		if (!protectedBlock(state) && !state.isAir() && state.getFluidState().isEmpty()
 				// грядки и тропинки — работа игрока, а не рельеф: их не штукатурим
 				&& !state.is(Blocks.FARMLAND) && !state.is(Blocks.DIRT_PATH)) {
-			int hash = (int) ((x * 73856093L) ^ (z * 19349663L) ^ seed);
 			// Материал — по ячейке 3×3: поблочный хеш давал «перец с солью», а один сплошной
 			// COARSE_DIRT — ровный коричневый диск, который читается как /fill.
 			// Пропорции как у выгоревшей земли: грубая земля, гравий, корни, подзол
-			int cell = ((x / 3) * 37) ^ ((z / 3) * 19) ^ (int) seed;
 			// выгоревшая земля: разливы грубой земли с вкраплениями гравия и корней.
 			// Материал — пятнами по 13 блоков, иначе диск выглядит как посыпка
 			Block burned = blotch(x, z, seed + 11, Blocks.COARSE_DIRT, Blocks.GRAVEL,
@@ -951,6 +949,11 @@ public final class AnomalyScars {
 		if (!isTreePart(top) || !hasFoliage(level, x, height, z)) {
 			return 0;
 		}
+		// бревно — только настоящее бревно: шляпка грибного дерева, уложенная плашмя,
+		// давала красную плиту на земле, а не поваленный ствол
+		if (!top.is(BlockTags.LOGS)) {
+			return 0;
+		}
 		Block log = top.getBlock();
 		// крона снимается целиком: одна колонка ствола оставляла висеть 8/9 листвы
 		int changed = deforestForce(level, x, height, z);
@@ -1038,7 +1041,7 @@ public final class AnomalyScars {
 		// отдельные уцелевшие плиты, середина зарастает. Прежний пол красил 75 %
 		// прямоугольника клетками 3×3 и читался как клетчатое одеяло, а не как руина
 		int patch = (int) (((x / 5) * 37L) ^ ((z / 5) * 19L) ^ op.seed);
-		boolean apron = edge > -3.5;
+		boolean apron = edge > -Math.min(3.5, op.radius * 0.4);
 		boolean slab = Math.floorMod(patch, 9) == 0;
 		if (edge < -1.0 && (apron || slab)) {
 			if (!protectedBlock(ground) && !ground.isAir() && ground.getFluidState().isEmpty()
@@ -1057,8 +1060,9 @@ public final class AnomalyScars {
 		double along = lx >= lz ? lz : lx;
 		int segment = (int) Math.floor(along / 3.0);
 		int roll = Math.floorMod(segment * 31 + (int) (op.seed & 0x7F), 12);
-		if (roll < 3) {
-			// каждый четвёртый сегмент обвалился целиком, ещё один — до фундамента
+		if (roll < 4) {
+			// треть сегментов обвалилась целиком: столбик в один блок среди стен 3–6
+			// читался тем же «зубом», который убрали с кромок пика и провала
 			return changed;
 		}
 		if (protectedBlock(ground) || builtBlock(ground) || !ground.getFluidState().isEmpty()) {
@@ -1068,7 +1072,7 @@ public final class AnomalyScars {
 		// булыжник, треснувший кирпич, мшистый булыжник и каменный кирпич вперемешку
 		// давали шахматку — ту же «странность генерации», от которой ушли у плиты и шипа
 		int wallCell = segment * 53 + (int) (op.seed & 0xFF);
-		int height = roll == 3 ? 1 : 3 + Math.floorMod(wallCell >> 3, 4);
+		int height = 3 + Math.floorMod(wallCell >> 3, 4);
 		Block wall = ruinBlock(ground, x, z, wallCell);
 		BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
 		for (int i = 0; i < height; i++) {
@@ -1080,7 +1084,7 @@ public final class AnomalyScars {
 			changed++;
 		}
 		// под стеной всегда лежит осыпь: кирпич не стоит на траве без мусора вокруг
-		if (Math.floorMod(wallCell, 3) == 0 && edge > -2.0) {
+		if (Math.floorMod(wallCell, 3) == 0) {
 			BlockState below = level.getBlockState(new BlockPos(x, surface - 1, z));
 			if (!protectedBlock(below) && below.getFluidState().isEmpty() && !below.isAir()) {
 				level.setBlock(new BlockPos(x, surface - 1, z),
@@ -1160,10 +1164,6 @@ public final class AnomalyScars {
 		clearPlant(level, x, surface, z);
 		level.setBlock(ground, block.defaultBlockState(), Block.UPDATE_ALL);
 		return 1;
-	}
-
-	private static Block pick(int hash, Block... blocks) {
-		return blocks[Math.floorMod(hash, blocks.length)];
 	}
 
 	/**
@@ -1395,14 +1395,10 @@ public final class AnomalyScars {
 		BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
 		// глубина гуляет по клеткам 2×2 и мельчает к краю: ровное дно читалось как /fill
 		double taper = 0.7 + 0.3 * (1.0 - distance / Math.max(0.5, op.radius));
-		// яма 4 блока глубиной при 16 поперёк читается не провалом, а вытоптанным
-		// пятном: глубина идёт от радиуса, а не от аргумента, и только растёт от него
-		double want = Math.max(op.depth, op.radius * 0.9);
-		int depth = (int) Math.round(want * taper * (0.8 + Math.floorMod(cell, 100) / 250.0));
-		// и не глубже полутора радиусов: колодец 10 блоков при радиусе 3 — это шахта
-		if (op.radius >= 2.0) {
-			depth = Math.min(Math.max(2, (int) Math.round(op.radius * 1.5)), depth);
-		}
+		// глубина — из ScarOp.sinkholeDepth (не меньше 0.9 радиуса): по ней же
+		// считается бюджет, иначе зона пишет в мир больше, чем планировала
+		int depth = Math.max(1,
+				(int) Math.round(op.sinkholeDepth() * taper * (0.8 + Math.floorMod(cell, 100) / 250.0)));
 		// у самой стенки колонна копается на блок меньше, а у дна кладётся обломок: осыпь
 		// со стены, а не подрезанный край
 		boolean scree = op.radius >= 3.0 && distance > op.radius - lip - 1.0;
@@ -1462,7 +1458,7 @@ public final class AnomalyScars {
 			return blotch(x, z, salt, Blocks.SANDSTONE, Blocks.CUT_SANDSTONE);
 		}
 		if (ground.is(BlockTags.TERRACOTTA)) {
-			return blotch(x, z, salt, Blocks.BRICKS, Blocks.TERRACOTTA);
+			return blotch(x, z, salt, Blocks.TERRACOTTA, Blocks.BRICKS);
 		}
 		if (ground.is(Blocks.DEEPSLATE)) {
 			return blotch(x, z, salt, Blocks.DEEPSLATE_BRICKS, Blocks.COBBLED_DEEPSLATE);
@@ -1517,10 +1513,8 @@ public final class AnomalyScars {
 		// шум высоты билинейный по сетке 5 блоков: ступени, привязанные к сетке 2 блока,
 		// читались как набранная из кубиков крышка
 		double jitter = 0.88 + 0.24 * smoothNoise(x, z, 5, op.seed);
-		// высота не больше двух с половиной радиусов: игла в 60 блоков на базе 20
-		// читается воткнутой антенной, а у вырванного камня отношение как у скалы
-		double cap = Math.max(6.0, op.radius * 2.5);
-		int height = (int) Math.round(Math.min(op.height, cap) * profile * jitter);
+		// высота (с кэпом 2.5 радиуса) — из ScarOp.spikeHeight: по ней же считается бюджет
+		int height = (int) Math.round(op.spikeHeight() * profile * jitter);
 		// у самой юбки колонна не встаёт вовсе: камни вырастают из обломков, а не из травы.
 		// Проверка после ветки юбки — иначе обломки оставались бы только в кольце 0.24..0.28
 		if (height < 1) {
