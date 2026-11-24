@@ -52,7 +52,7 @@ public final class AnomalyEffects {
 		intensity *= AnomalyResidue.hazardScale(player);
 		// у смертельной зоны есть и своя цена за время внутри: раз в 6 с, 0.8–1.5 HP по глубине
 		// и дозе. Без неё «смертельная» остаётся неприятным фоном, и в даль ходят за лутом без риска
-		if (zone.cls() == AnomalyClass.DEADLY && !player.isCreative() && !player.isSpectator()) {
+		if (zone.cls() == AnomalyClass.DEADLY && !zone.remnant() && !player.isCreative() && !player.isSpectator()) {
 			state.hazardTicks += AnomalyState.stepTicks(seconds);
 			if (state.hazardTicks >= 120) {
 				state.hazardTicks = 0;
@@ -231,6 +231,7 @@ public final class AnomalyEffects {
 	private static void anchors(ServerLevel level, ServerPlayer player, Zone zone) {
 		int color = zone.edgeColor();
 		var dust = new DustColorTransitionOptions(color, darken(color), 0.45f);
+		double sd = zone.signedDistance(player.getX(), player.getZ());
 		for (int i = 0; i < 3; i++) {
 			double angle = noise01(zone.id() * 31L + i * 7919L) * Math.PI * 2.0;
 			double dist = zone.radius() * (0.25 + noise01(zone.id() * 17L + i * 104729L) * 0.35);
@@ -238,12 +239,17 @@ public final class AnomalyEffects {
 			double az = zone.z() + Math.sin(angle) * dist;
 			if (Math.hypot(ax - player.getX(), az - player.getZ()) > 96.0) {
 				// в трёхкилометровой зоне якорь на 0.25–0.6 радиуса — это 375–900 блоков от игрока:
-				// внутри не на что смотреть. Тогда ставим неподвижную точку взвеси рядом, но всё
-				// равно привязанную к id зоны, а не к игроку
-				double near = 24.0 + noise01(zone.id() * 53L + i * 977L) * 36.0;
-				double nearAngle = angle + 0.7;
-				ax = player.getX() + Math.cos(nearAngle) * near;
-				az = player.getZ() + Math.sin(nearAngle) * near;
+				// внутри не на что смотреть. Ставим точку в сетке 64×64 (она не едет за игроком
+				// в пределах клетки), но внутри зоны
+				if (sd > 0.0) {
+					continue;
+				}
+				double cellX = Math.floor(player.getX() / 64.0) * 64.0 + 32.0;
+				double cellZ = Math.floor(player.getZ() / 64.0) * 64.0 + 32.0;
+				double jitterX = (noise01(zone.id() * 53L + i * 977L) - 0.5) * 48.0;
+				double jitterZ = (noise01(zone.id() * 71L + i * 131L) - 0.5) * 48.0;
+				ax = cellX + jitterX;
+				az = cellZ + jitterZ;
 			}
 			int bx = (int) Math.floor(ax);
 			int bz = (int) Math.floor(az);
@@ -348,9 +354,10 @@ public final class AnomalyEffects {
 		}
 		double arc = 2.0 * half * radius;
 		// полное кольцо у мелкой зоны: шаг 3 блока вместо 8 — иначе между точками провалы
-		// в 6–8 блоков, и кольцо читается как пунктир/конфетти
+		// в 6–8 блоков, и кольцо читается как пунктир/конфетти. Потолок 56: при 160 точках
+		// и пяти пакетах на точку один кадр давал 600+ пакетов в тике
 		double spacing = full ? 3.0 : 4.0;
-		int cap = full ? 160 : 56;
+		int cap = full ? 56 : 56;
 		int points = Math.max(24, Math.min(cap, (int) (arc / spacing)));
 		// полное кольцо — это в 5 раз больше точек: плотность на точку вдвое ниже, иначе
 		// один кадр такой зоны вытесняет все остальные частицы у клиента
@@ -376,7 +383,7 @@ public final class AnomalyEffects {
 			// у стены есть толщина: нулевой разброс давал плоскость в один пиксель, которую
 			// видно только строго сбоку
 			level.sendParticles(player, dust, true, true, point[0], y, point[1], count, 0.6, spread, 0.6, 0.0);
-			if (i % 5 == 0) {
+			if (i % 5 == 0 && !full) {
 				// приземная полоса: в лесу и на склоне стена не должна висеть только на уровне глаз
 				level.sendParticles(player, dust, true, true, point[0], y - 0.4, point[1],
 						Math.max(2, count / 2), 0.5, 1.0, 0.5, 0.0);

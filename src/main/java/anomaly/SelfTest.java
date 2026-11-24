@@ -1569,7 +1569,8 @@ public final class SelfTest {
 		report(result, "вложенная не рождается в запретной зоне",
 				AnomalyField.spawnNested(field, cfg, new Random(5L), 0L, blocked) == null);
 		// столкновение с родителем — не столкновение: иначе вложенность невозможна
-		report(result, "родитель не считается столкновением", field.anomalies.contains(child));
+		long nestedCount = field.anomalies.stream().filter(a -> a.parent_id != 0L).count();
+		report(result, "в поле ровно одна вложенная зона", nestedCount == 1L);
 		report(result, "статистика видит вложенную",
 				AnomalyField.stats().nested() >= 0);
 	}
@@ -1592,8 +1593,8 @@ public final class SelfTest {
 				AnomalyMadness.period(45, 0.15), 0);
 		check(result, "нулевая сила молчит", Integer.MAX_VALUE,
 				AnomalyMadness.period(45, 0.0), 0);
-		report(result, "окно детерминировано",
-				AnomalyMadness.window(100L, 7L, 60, 1) == AnomalyMadness.window(100L, 7L, 60, 1));
+		report(result, "окно зависит от фазы",
+				AnomalyMadness.window(0L, 0L, 60, 7) != AnomalyMadness.window(0L, 30L, 60, 7));
 		report(result, "в окне семи секунд из минуты событие есть",
 				AnomalyMadness.window(0L, 0L, 60, 7));
 		report(result, "вне окна события нет", !AnomalyMadness.window(30L, 0L, 60, 7));
@@ -1664,14 +1665,20 @@ public final class SelfTest {
 	// --- экономика и частота кадров ---
 
 	private static void checkEconomy(Result result, AnomalyConfig config, Random rnd) {
-		// стена: один кадр в секунду независимо от фаз, а не каждый тик
-		int frames = 0;
-		for (int tick = 0; tick < 20; tick += 10) {
-			if (AnomalyEffects.frameDue(tick, 3, 20, 10)) {
-				frames++;
+		// стена: один кадр в секунду при любой фазе и любом периоде тика эффектов
+		boolean cadence = true;
+		for (int step : new int[]{5, 10, 20}) {
+			for (int phase = 0; phase < 20; phase++) {
+				int count = 0;
+				for (int pulse = 0; pulse < 20; pulse += step) {
+					if (AnomalyEffects.frameDue(pulse, phase, 20, step)) {
+						count++;
+					}
+				}
+				cadence &= count == 1;
 			}
 		}
-		check(result, "стена рисуется один раз в секунду", 1, frames, 0);
+		report(result, "стена рисуется ровно раз в секунду при любом шаге и фазе", cadence);
 		report(result, "фаза не совпадает с нулём и это не ломает кадр",
 				AnomalyEffects.frameDue(20, 3, 20, 10));
 		report(result, "в чужой половине периода кадра нет",

@@ -564,8 +564,10 @@ public enum AnomalyComponent {
 				}
 			}
 			case DARK_SUCKING -> {
-				// свет в зоне не держится: свечи и костры гаснут, двери закрываются сами
-				if (rnd.nextInt(30) == 0) {
+				// свет в зоне не держится: свечи и костры гаснут, двери закрываются сами.
+				// Только там, где зоне разрешено менять мир: в 6-км полосе и при выключенных
+				// разрушениях базу игрока не трогаем
+				if (rnd.nextInt(30) == 0 && canMark(level, player.getX(), player.getZ())) {
 					darkSuck(level, player);
 				}
 			}
@@ -591,8 +593,9 @@ public enum AnomalyComponent {
 				}
 			}
 			case ANVIL_RAIN -> {
-				// наковальня с неба: то, чего никто не ждёт и что трудно списать на баг
-				if (rnd.nextInt(60) == 0) {
+				// наковальня с неба: то, чего никто не ждёт и что трудно списать на баг.
+				// Раз в ~100 с, только там, где зоне вообще разрешено менять мир
+				if (rnd.nextInt(200) == 0 && canMark(level, player.getX(), player.getZ())) {
 					anvilRain(level, player, rnd);
 				}
 			}
@@ -776,11 +779,12 @@ public enum AnomalyComponent {
 		if (surface <= level.getMinY() + 2 || surface >= level.getMaxY() - 16) {
 			return;
 		}
-		int startY = Math.min(level.getMaxY() - 4, surface + 12);
+		int startY = Math.min(level.getMaxY() - 4, surface + 6);
 		FallingBlockEntity anvil = FallingBlockEntity.fall(level, new BlockPos(bx, startY, bz),
 				Blocks.ANVIL.defaultBlockState());
 		if (anvil != null) {
-			anvil.setHurtsEntities(2.0f, 40);
+			// с шести блоков — не ваншот без брони, но всё ещё больно
+			anvil.setHurtsEntities(1.2f, 20);
 		}
 	}
 

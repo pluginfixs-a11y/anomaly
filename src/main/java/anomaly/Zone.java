@@ -95,7 +95,7 @@ public record Zone(Anomaly anomaly, long now, double x, double z, double radius,
 		} else if (delta < -180f) {
 			delta += 360f;
 		}
-		float hue = baseHsv[0] + Math.max(-12f, Math.min(12f, delta));
+		float hue = baseHsv[0] + Math.max(-6f, Math.min(6f, delta));
 		if (hue < 0f) {
 			hue += 360f;
 		}
