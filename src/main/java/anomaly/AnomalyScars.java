@@ -438,6 +438,18 @@ public final class AnomalyScars {
 	 */
 	public static boolean tick(MinecraftServer server, ServerLevel level, AnomalyFieldData data,
 			AnomalyConfig config) {
+		try {
+			return pass(server, level, data, config);
+		} finally {
+			// дедлайн держим только внутри тика. Раньше он оставался в прошлом, и любой
+			// вызов вне прохода (/anomaly demo, /anomaly event) получал «время вышло»
+			// и обрезал каждую колонку на восьми блоках: шип вырастал плоской нашлёпкой
+			passDeadline = 0L;
+		}
+	}
+
+	private static boolean pass(MinecraftServer server, ServerLevel level, AnomalyFieldData data,
+			AnomalyConfig config) {
 		if (!config.scar_enabled) {
 			return false;
 		}

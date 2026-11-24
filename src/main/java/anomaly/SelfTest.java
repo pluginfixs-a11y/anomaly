@@ -767,8 +767,8 @@ public final class SelfTest {
 			level.setBlock(new BlockPos(sx, spikeSurface - 1, bz), Blocks.STONE.defaultBlockState(), Block.UPDATE_ALL);
 			AnomalyScars.applyColumn(level, ScarOp.spike(sx, bz, 3.0, 14, 11L), sx, bz);
 			int spikeAfter = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, sx, bz);
-			report(result, "пик поднимает колонку на " + (spikeAfter - spikeSurface) + " блоков",
-					spikeAfter >= spikeSurface + 4);
+			report(result, "пик поднимает колонку на " + (spikeAfter - spikeSurface) + " блоков из 14",
+					spikeAfter >= spikeSurface + 10);
 			restore(level, spikeBefore);
 
 			// трещина выедает колонку

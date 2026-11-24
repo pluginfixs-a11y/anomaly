@@ -97,6 +97,12 @@ public final class AnomalyCommand {
 												.executes(context -> probe(context.getSource(),
 														IntegerArgumentType.getInteger(context, "x"),
 														IntegerArgumentType.getInteger(context, "z"))))))
+						.then(Commands.literal("demo")
+								.then(Commands.argument("type", StringArgumentType.word())
+										.then(Commands.argument("radius", DoubleArgumentType.doubleArg(2.0, 60.0))
+												.executes(context -> demo(context.getSource(),
+														StringArgumentType.getString(context, "type"),
+														DoubleArgumentType.getDouble(context, "radius"))))))
 						.then(Commands.literal("event")
 								.executes(context -> eventList(context.getSource()))
 								.then(Commands.literal("list").executes(context -> eventList(context.getSource())))
@@ -317,6 +323,57 @@ public final class AnomalyCommand {
 			}
 		}
 		return 1;
+	}
+
+	/**
+	 * Показать след здесь и сейчас: собирает op нужного типа в точке источника и применяет
+	 * его колонки немедленно. Для съёмки и проверки «как это выглядит» — в игре ждать
+	 * очереди поля и подхода чанков бессмысленно.
+	 */
+	private static int demo(CommandSourceStack source, String type, double radius) {
+		ServerLevel level = source.getLevel();
+		var at = source.getPosition();
+		int bx = (int) Math.floor(at.x);
+		int bz = (int) Math.floor(at.z);
+		ScarOp op = switch (type) {
+			case "spike" -> ScarOp.spike(at.x, at.z, radius, 60, 20261124L);
+			case "sinkhole" -> ScarOp.sinkhole(at.x, at.z, radius, 4, 20261124L);
+			case "uplift" -> ScarOp.uplift(at.x, at.z, radius, 10, 20261124L);
+			case "crack" -> ScarOp.line("crack", at.x, at.z, 0.6, (int) radius * 6, 2, 4, 20261124L);
+			case "lava_fault" -> ScarOp.line("lava_fault", at.x, at.z, 0.6, (int) radius * 6, 2, 5, 20261124L);
+			case "dead_soil" -> ScarOp.disk("dead_soil", at.x, at.z, radius, 20261124L);
+			case "rubble" -> ScarOp.disk("rubble", at.x, at.z, radius, 20261124L);
+			case "forest" -> ScarOp.forest(at.x, at.z, radius, 20261124L);
+			case "ruin" -> ScarOp.ruin(at.x, at.z, radius, 20261124L);
+			default -> null;
+		};
+		if (op == null) {
+			reply(source, "Типы: spike, sinkhole, uplift, crack, lava_fault, dead_soil, rubble, forest, ruin",
+					ChatFormatting.RED);
+			return 0;
+		}
+		// один угол на все типы: демо снимают с одной точки, и следы должны читаться
+		// с одного направления, а не веером на 360°
+		op.angle = 0.9;
+		int reach = (int) Math.ceil(op.radius) + Math.abs(op.length) + 2;
+		for (int cx = (bx - reach) >> 4; cx <= (bx + reach) >> 4; cx++) {
+			for (int cz = (bz - reach) >> 4; cz <= (bz + reach) >> 4; cz++) {
+				level.getChunk(cx, cz);
+			}
+		}
+		int changed = 0;
+		int columns = 0;
+		for (int i = 0; i < op.columnCount(); i++) {
+			int[] column = op.column(i);
+			if (column == null) {
+				continue;
+			}
+			columns++;
+			changed += Math.max(0, AnomalyScars.applyColumn(level, op, column[0], column[1]));
+		}
+		reply(source, "След " + op.describe() + ": колонок " + columns + ", блоков " + changed
+				+ ". Отойди и посмотри — и /anomaly demo другой тип рядом", ChatFormatting.GREEN);
+		return changed;
 	}
 
 	/** Что сейчас в колонке: для проверки следов и «почему тут камень». */
@@ -951,3 +1008,4 @@ public final class AnomalyCommand {
 		source.sendSuccess(() -> Component.literal(text).withStyle(format), false);
 	}
 }
+
