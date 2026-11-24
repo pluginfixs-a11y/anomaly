@@ -127,7 +127,20 @@ public final class AnomalyResidue {
 	}
 
 	public static boolean save() {
-		return !dirty || saveNow();
+		if (!dirty) {
+			return true;
+		}
+		// ждём фоновую запись, иначе sync-сейв на /stop уйдёт раньше неё и остаток
+		// откатится на минуту назад
+		if (writing) {
+			try {
+				RESIDUE_WRITER.submit(() -> {
+				}).get(1, java.util.concurrent.TimeUnit.SECONDS);
+			} catch (Exception ignored) {
+				// не дождались — ниже пишем синхронно, seq отменит старый снимок
+			}
+		}
+		return saveNow();
 	}
 
 	/** Фоновая запись: файл остатка маленький, но и он не должен блокировать тик. */
@@ -151,9 +164,11 @@ public final class AnomalyResidue {
 		Path file = path;
 		RESIDUE_WRITER.execute(() -> {
 			boolean ok = true;
-			// синхронный сейв на /stop успел раньше — старый снимок файл не перетирает
-			if (mySeq == seq) {
-				ok = writeText(file, json);
+			try {
+				ok = writeText(file, json, mySeq);
+			} catch (RuntimeException e) {
+				ok = false;
+				AnomalyMod.LOGGER.error("Anomaly: фоновая запись остатка упала", e);
 			}
 			writing = false;
 			if (!ok) {
@@ -183,12 +198,51 @@ public final class AnomalyResidue {
 		return writeText(file, GSON.toJson(payload));
 	}
 
+	private static final Object SAVE_LOCK = new Object();
+
+	/** Запись со сверкой номера снимка под замком: старый воркер не откатывает новый файл. */
+	private static boolean writeText(Path file, String json, long mySeq) {
+		try {
+			Path parent = file.getParent();
+			if (parent != null) {
+				Files.createDirectories(parent);
+			}
+			Path tmp = file.resolveSibling(file.getFileName() + "." + System.nanoTime() + ".tmp");
+			Files.writeString(tmp, json, StandardCharsets.UTF_8);
+			synchronized (SAVE_LOCK) {
+				if (mySeq != seq) {
+					// синхронный сейв успел раньше: этот снимок старше и в файл не идёт
+					try {
+						Files.deleteIfExists(tmp);
+					} catch (IOException ignored) {
+						// уберёт следующая запись
+					}
+					return true;
+				}
+				move(tmp, file);
+			}
+			return true;
+		} catch (IOException e) {
+			AnomalyMod.LOGGER.error("Anomaly: не смог записать остаток в {}", file, e);
+			return false;
+		}
+	}
+
+	private static void move(Path tmp, Path file) throws IOException {
+		try {
+			Files.move(tmp, file, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+		} catch (IOException atomicFailed) {
+			Files.move(tmp, file, StandardCopyOption.REPLACE_EXISTING);
+		}
+	}
+
 	private static boolean writeText(Path file, String json) {
 		try {
 			Path parent = file.getParent();
 			if (parent != null) {
 				Files.createDirectories(parent);
 			}
+			cleanTmp(parent, file);
 			Path tmp = file.resolveSibling(file.getFileName() + "." + System.nanoTime() + ".tmp");
 			Files.writeString(tmp, json, StandardCharsets.UTF_8);
 			try {
@@ -200,6 +254,31 @@ public final class AnomalyResidue {
 		} catch (IOException e) {
 			AnomalyMod.LOGGER.error("Anomaly: не смог записать остаток в {}", file, e);
 			return false;
+		}
+	}
+
+	/**
+	 * Убрать брошенные временные файлы: kill -9 в момент записи оставлял их в world/data.
+	 * Чужие (свежие) не трогаем — их может писать остановленный поток.
+	 */
+	private static void cleanTmp(Path parent, Path file) {
+		if (parent == null) {
+			return;
+		}
+		String prefix = file.getFileName().toString() + ".";
+		long cutoff = System.currentTimeMillis() - 30 * 60_000L;
+		try (var list = Files.newDirectoryStream(parent, prefix + "*.tmp")) {
+			for (Path stale : list) {
+				try {
+					if (Files.getLastModifiedTime(stale).toMillis() < cutoff) {
+						Files.deleteIfExists(stale);
+					}
+				} catch (IOException ignored) {
+					// следующий сейв попробует снова
+				}
+			}
+		} catch (IOException ignored) {
+			// нет каталога или прав — не повод падать
 		}
 	}
 

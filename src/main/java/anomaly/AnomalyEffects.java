@@ -64,9 +64,17 @@ public final class AnomalyEffects {
 			state.hazardTicks += AnomalyState.stepTicks(seconds);
 			if (state.hazardTicks >= 120) {
 				state.hazardTicks = 0;
-				float damage = (float) ((0.6 + 2.8 * depth) * Math.max(0.25, state.dose));
+				float damage = (float) ((0.6 + 3.6 * depth) * Math.max(0.25, state.dose));
 				player.hurt(level.damageSources().magic(), damage);
 			}
+		}
+		// карман тишины у кладовой: раз в ~3 с тихий звон. Без метки исчезновение урона
+		// в 12 блоках и возвращение в 13 читается как баг мода, а не как «тут тихо»
+		if (zone.cls() == AnomalyClass.DEADLY && !zone.remnant() && !player.isCreative()
+				&& !player.isSpectator() && nearNodePocket(zone, player, 12.0)
+				&& state.pulseTicks % 12 == 0) {
+			level.playSound(null, player.getX(), player.getY(), player.getZ(),
+					SoundEvents.AMETHYST_BLOCK_CHIME, SoundSource.AMBIENT, 0.35f, 0.55f);
 		}
 		for (AnomalyComponent component : components) {
 			if (!component.isVisible()) {
@@ -226,8 +234,9 @@ public final class AnomalyEffects {
 
 	/**
 	 * Маяк ядра: столб end rod от земли. Издалека видно, куда тянет зона, и что у неё есть центр,
-	 * а не только край. Раз в секунду, если ядро в пределах 320 блоков; в незагруженном чанке
-	 * косметику не рисуем — генерация ради одного столба не стоит того.
+	 * а не только край. Раз в секунду. Если ядро далеко (или его чанк не загружен), вместо
+	 * столба над ядром рисуется указатель у самого игрока — иначе из середины крупной зоны
+	 * ориентира нет вовсе, а грузить чанки ради косметики нельзя.
 	 */
 	private static void coreBeacon(ServerLevel level, ServerPlayer player, Zone zone, AnomalyState state) {
 		// не player.tickCount: его фаза относительно серверного тика эффектов может не совпасть
@@ -238,32 +247,47 @@ public final class AnomalyEffects {
 			return;
 		}
 		double dist = Math.hypot(zone.coreX() - player.getX(), zone.coreZ() - player.getZ());
-		// 448 блоков: от середины трёхкилометровой зоны до ядра 1.5 км, и 192–256 блоков
-		// не хватало, чтобы маяк вообще попал в кадр. Дальше клиент частицы всё равно срежет
-		if (dist > 448.0) {
-			return;
-		}
 		int bx = (int) Math.floor(zone.coreX());
 		int bz = (int) Math.floor(zone.coreZ());
-		if (!level.getChunkSource().hasChunk(bx >> 4, bz >> 4)) {
+		boolean loaded = level.getChunkSource().hasChunk(bx >> 4, bz >> 4);
+		if (dist > 448.0 || !loaded) {
+			// ядро вне кадра или его чанк не загружен: указатель на него в 28 блоках от игрока,
+			// туда же смотрит столб. Так ориентир есть и в середине трёхкилометровой зоны
+			bearing(level, player, zone, dist);
 			return;
 		}
 		double base = level.getHeight(Heightmap.Types.MOTION_BLOCKING, bx, bz);
-		// столб до 96 блоков над землёй (и выше, если игрок далеко: издалека нужен ориентир),
-		// ниже 56 он не поднимается над лесным пологом
+		// столб до 140 блоков: у крупной зоны дальний маяк должен читаться как столб света
 		int top = (int) Math.min(140.0, Math.max(56.0, player.getY() + 20.0 - base + dist * 0.15));
-		// три пакета вместо одного: основание шириной полтора блока, тело столба и верхушка.
-		// Один пакет на 28 частиц давал белую нитку в один пиксель — это читалось как баг
 		int color = zone.edgeColor();
 		var glow = new DustColorTransitionOptions(color, darken(color), 0.5f);
 		level.sendParticles(player, glow, true, true, zone.coreX(), base + 1.2, zone.coreZ(),
 				10, 1.5, 0.8, 1.5, 0.01);
-		// тело столба — одним пакетом с числом частиц по высоте: 24 на высоту 43 блока были
-		// облаком искр, а не столбом
-		level.sendParticles(player, ParticleTypes.END_ROD, true, true,
-				zone.coreX(), base + top * 0.45, zone.coreZ(), top, 0.35, top * 0.45, 0.35, 0.0);
-		level.sendParticles(player, ParticleTypes.END_ROD, true, true,
-				zone.coreX(), base + top * 0.9, zone.coreZ(), 12, 0.2, top * 0.12, 0.2, 0.0);
+		// четыре пакета по высоте вместо одного: один пакет на top частиц с dy = top·0.45 —
+		// это гауссово облако с плотным центром, а не столб
+		int segments = 4;
+		int per = Math.max(4, top / segments);
+		for (int k = 0; k < segments; k++) {
+			level.sendParticles(player, ParticleTypes.END_ROD, true, true,
+					zone.coreX(), base + top * (k + 0.5) / segments, zone.coreZ(), per, 0.25, 2.0, 0.25, 0.0);
+		}
+	}
+
+	/** Указатель на ядро: короткий столб пыли в его сторону, в 28 блоках от игрока. */
+	private static void bearing(ServerLevel level, ServerPlayer player, Zone zone, double dist) {
+		if (dist < 32.0) {
+			return;
+		}
+		double dx = (zone.coreX() - player.getX()) / dist;
+		double dz = (zone.coreZ() - player.getZ()) / dist;
+		double x = player.getX() + dx * 28.0;
+		double z = player.getZ() + dz * 28.0;
+		int color = zone.edgeColor();
+		var dust = new DustColorTransitionOptions(color, darken(color), 0.45f);
+		for (int k = 0; k < 3; k++) {
+			level.sendParticles(player, dust, true, true, x, player.getY() + 1.0 + k * 3.0, z,
+					4, 0.6, 2.5, 0.6, 0.0);
+		}
 	}
 
 	/**
@@ -286,10 +310,9 @@ public final class AnomalyEffects {
 				if (sd > 0.0) {
 					continue;
 				}
-				double cellX = Math.floor(player.getX() / 64.0) * 64.0 + 32.0 + (i - 1) * 64.0;
-				// по Z — другой шаг, иначе все три якоря встают на одну диагональ и
-				// разом прыгают на 64 блока при переходе границы клетки
-				double cellZ = Math.floor(player.getZ() / 64.0) * 64.0 + 32.0 + (i - 2) * 64.0;
+				// своя клетка на каждый якорь: иначе все три прыгают на 64 блока разом
+				double cellX = Math.floor((player.getX() + i * 32.0) / 64.0) * 64.0 + 32.0;
+				double cellZ = Math.floor((player.getZ() + i * 21.0) / 64.0) * 64.0 + 32.0;
 				double jitterX = (noise01(zone.id() * 53L + i * 977L) - 0.5) * 48.0;
 				double jitterZ = (noise01(zone.id() * 71L + i * 131L) - 0.5) * 48.0;
 				ax = cellX + jitterX;
@@ -685,3 +708,4 @@ public final class AnomalyEffects {
 		return time >= 13000L && time <= 23000L;
 	}
 }
+

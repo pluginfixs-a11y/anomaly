@@ -732,23 +732,29 @@ public final class SelfTest {
 					!level.getBlockState(new BlockPos(lx, bottomY, bz)).is(Blocks.LAVA));
 			restore(level, lavaBefore);
 
-			// снег слоем над льдом: guard видит SNOW, а не ICE. Трещина в леднике — законный
-			// след (иначе ледяные пики и ледниковые шапки остаются нетронутыми), а шип на льду —
-			// нет: он рос бы из льдины посреди холодного океана
+			// ледник: трещина вынимает лёд (иначе ледяные пики и шапки остаются нетронутыми),
+			// а шип на льду запрещён — он рос бы из льдины посреди холодного океана
 			int sx2 = bx + 96;
 			level.getChunk(sx2 >> 4, bz >> 4);
 			int snowSurface = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, sx2, bz);
-			Map<BlockPos, BlockState> snowBefore = snapshot(level, sx2, bz, 2, snowSurface - 2, snowSurface + 2);
+			Map<BlockPos, BlockState> snowBefore = snapshot(level, sx2, bz, 6, snowSurface - 4, snowSurface + 2);
 			snapshots.add(snowBefore);
-			level.setBlock(new BlockPos(sx2, snowSurface, bz), Blocks.SNOW.defaultBlockState(), Block.UPDATE_ALL);
-			level.setBlock(new BlockPos(sx2, snowSurface - 1, bz), Blocks.ICE.defaultBlockState(), Block.UPDATE_ALL);
-			level.setBlock(new BlockPos(sx2, snowSurface - 2, bz), Blocks.ICE.defaultBlockState(), Block.UPDATE_ALL);
+			for (int dz = -1; dz <= 1; dz++) {
+				level.setBlock(new BlockPos(sx2, snowSurface + 1, bz + dz), Blocks.SNOW.defaultBlockState(), Block.UPDATE_ALL);
+				level.setBlock(new BlockPos(sx2, snowSurface, bz + dz), Blocks.ICE.defaultBlockState(), Block.UPDATE_ALL);
+				level.setBlock(new BlockPos(sx2, snowSurface - 1, bz + dz), Blocks.ICE.defaultBlockState(), Block.UPDATE_ALL);
+			}
 			AnomalyScars.applyColumn(level, ScarOp.line("crack", sx2, bz, 0.0, 12, 1, 2, 29L), sx2, bz);
-			boolean crackInIce = level.getBlockState(new BlockPos(sx2, snowSurface - 1, bz)).isAir()
-					|| level.getBlockState(new BlockPos(sx2, snowSurface - 1, bz)).is(Blocks.ICE);
+			boolean crackInIce = level.getBlockState(new BlockPos(sx2, snowSurface, bz)).isAir()
+					&& level.getBlockState(new BlockPos(sx2, snowSurface - 1, bz)).isAir();
 			AnomalyScars.applyColumn(level, ScarOp.spike(sx2 + 4, bz, 3.0, 6, 31L), sx2 + 4, bz);
-			boolean spikeBlocked = !level.getBlockState(new BlockPos(sx2 + 4, snowSurface, bz)).is(Blocks.STONE);
-			report(result, "ледник: трещина можно, шип нельзя", crackInIce && spikeBlocked);
+			boolean spikeBlocked = true;
+			for (int y = snowSurface; y <= snowSurface + 6; y++) {
+				if (level.getBlockState(new BlockPos(sx2 + 4, y, bz)).is(Blocks.STONE)) {
+					spikeBlocked = false;
+				}
+			}
+			report(result, "ледник: трещина вынимает лёд, шип не встаёт", crackInIce && spikeBlocked);
 			restore(level, snowBefore);
 
 			// дерево: ствол и крона — иначе на мёртвой земле висит зелёный навес

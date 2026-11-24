@@ -47,7 +47,7 @@
   .sw { width: 12px; height: 12px; border-radius: 2px; opacity: .85; flex: none; }
   .sw-line { background: none; border: 1px solid #cbbfa5; }
   .sw-dash { background: none; border: 1px dashed #cbbfa5; }
-  .sw-dark { background: radial-gradient(circle, #0a0806 40%, #4a3a26 100%); }
+  .sw-dark { background: radial-gradient(circle, #261e16 40%, #4a3a26 100%); }
   .stats { display: grid; grid-template-columns: 1fr auto; gap: 4px 10px; font-family: Consolas, monospace;
     font-size: 12px; }
   .stats .k { color: var(--muted); }
@@ -90,7 +90,7 @@
       <div><span class="sw" style="background:var(--danger)"></span>10–15к: опасные</div>
       <div><span class="sw" style="background:var(--deadly)"></span>15к+: смертельные</div>
       <div><span class="sw sw-line"></span>сплошной контур — край зоны</div>
-      <div><span class="sw sw-dash"></span>пунктир — ядро 45 % радиуса</div>
+      <div><span class="sw sw-dash"></span>пунктир — ядро 45 % и контур мёртвой зоны</div>
       <div><span class="sw sw-dark"></span>тёмное пятно — следы разрушения</div>
     </div>
 
@@ -649,8 +649,8 @@ function drawDamage(a, st) {
     ctx.lineWidth = Math.max(1, s * 1.2);
     for (let i = 0; i < logs; i++) {
       const ang = rnd() * Math.PI * 2;
-      const dist = Math.sqrt(rnd()) * st.radius * 0.42;
-      const [sx, sy] = toScreen(st.x + Math.cos(ang) * dist, st.z + Math.sin(ang) * dist);
+      const dist = Math.sqrt(rnd()) * Math.max(4, patchR * 1.2);
+      const [sx, sy] = toScreen(px + Math.cos(ang) * dist, pz + Math.sin(ang) * dist);
       const len = Math.max(3, (4 + rnd() * 3) * s);
       ctx.beginPath();
       ctx.moveTo(sx, sy);
@@ -664,8 +664,8 @@ function drawDamage(a, st) {
     const houses = 1 + Math.round(2 * strength);
     for (let i = 0; i < houses; i++) {
       const ang = rnd() * Math.PI * 2;
-      const dist = Math.sqrt(rnd()) * st.radius * 0.4;
-      const [sx, sy] = toScreen(st.x + Math.cos(ang) * dist, st.z + Math.sin(ang) * dist);
+      const dist = Math.sqrt(rnd()) * Math.max(4, patchR * 1.1);
+      const [sx, sy] = toScreen(px + Math.cos(ang) * dist, pz + Math.sin(ang) * dist);
       const w = Math.max(3, (8 + rnd() * 8) * s);
       ctx.fillStyle = `rgba(150, 146, 138, ${0.35 + 0.3 * strength})`;
       ctx.fillRect(sx - w / 2, sy - w / 2, w, w);
@@ -678,10 +678,10 @@ function drawDamage(a, st) {
   // поднятая плита: светлый пласт с тенью по нижнему краю
   if (a.geo && a.geo.uplift) {
     const ang = rnd() * Math.PI * 2;
-    const dist = rnd() * st.radius * 0.3;
-    const cx = st.x + Math.cos(ang) * dist;
-    const cz = st.z + Math.sin(ang) * dist;
-    const rr = st.radius * (0.12 + rnd() * 0.08);
+    const dist = rnd() * Math.max(4, patchR * 0.9);
+    const cx = px + Math.cos(ang) * dist;
+    const cz = pz + Math.sin(ang) * dist;
+    const rr = Math.max(3, patchR * (0.25 + rnd() * 0.2));
     polygonPath(shapePoints(a, { x: cx, z: cz, radius: rr }));
     ctx.fillStyle = `rgba(188, 178, 152, ${0.30 + 0.35 * strength})`;
     ctx.fill();
@@ -870,6 +870,7 @@ window.anomalyPreview = {
 </script>
 </body>
 </html>
+
 
 
 

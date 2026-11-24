@@ -329,16 +329,10 @@ public final class AnomalyScars {
 			}
 			while (anomaly.scar_next < anomaly.scars.size()) {
 				ScarOp op = anomaly.scars.get(anomaly.scar_next);
-				if (anomaly.scar_cursor == 0 && wetOp(level, op)) {
-					// след не режет берег пополам: у озера, реки и океана воронка обрывалась
-					// по урезу вертикальной стеной. Такой op пропускаем целиком
-					anomaly.scar_next++;
-					anomaly.scar_cursor = 0;
-					continue;
-				}
 				int count = op.columnCount();
 				boolean finished = true;
 				boolean limitHit = false;
+				boolean wetSkip = false;
 				while (anomaly.scar_cursor < count) {
 					int[] column = op.column(anomaly.scar_cursor);
 					if (column == null) {
@@ -380,12 +374,23 @@ public final class AnomalyScars {
 							break;
 						}
 					}
+					// вода проверяется на первой колонке и только после загрузки чанка: до загрузки
+					// сэмплы wetOp всегда «не загружены» и проверка молча не работала
+					if (anomaly.scar_cursor == 0 && wetOp(level, op)) {
+						wetSkip = true;
+						break;
+					}
 					// курсор двигаем только после проверок: иначе колонка на стыке бюджета чанков теряется
 					anomaly.scar_cursor++;
 					columnsThisTick++;
 					int applied = 0;
 					try {
-						applied = applyColumn(level, op, column[0], column[1]);
+						// повтор после обрыва по дереву: op уже применён, доделываем только дерево,
+						// иначе воронка копается второй раз уже по дну ямы
+						applied = anomaly.scar_retry_tree
+								? finishTree(level, column[0], column[1])
+								: applyColumn(level, op, column[0], column[1]);
+						anomaly.scar_retry_tree = false;
 					} catch (RuntimeException e) {
 						// одна строка на проход, а не на колонку: устойчивое исключение иначе
 						// давало до 6000 строк со стеком в секунду
@@ -399,6 +404,7 @@ public final class AnomalyScars {
 						// дерево не доделано: возвращаем курсор, иначе остаток кроны останется
 						// висеть навсегда — колонка не считается обработанной
 						anomaly.scar_cursor--;
+						anomaly.scar_retry_tree = true;
 						finished = false;
 						break;
 					}
@@ -409,6 +415,12 @@ public final class AnomalyScars {
 						finished = false;
 						break;
 					}
+				}
+				if (wetSkip) {
+					// след целиком в воде: пропускаем op, а не режем берег половинками
+					anomaly.scar_next++;
+					anomaly.scar_cursor = 0;
+					continue;
 				}
 				if (!finished) {
 					// уперлись в лимит/бюджет чанков — идём к следующей зоне, иначе всё поле
@@ -444,8 +456,7 @@ public final class AnomalyScars {
 		if (!ground.getFluidState().isEmpty() || builtBlock(ground)) {
 			return 0;
 		}
-		if (isFragileSurface(ground) && !op.type.equals("crack") && !op.type.equals("lava_fault")
-				&& !op.type.equals("sinkhole")) {
+		if (isFragileSurface(ground) && !op.type.equals("crack") && !op.type.equals("sinkhole")) {
 			return 0;
 		}
 		int changed = switch (op.type) {
@@ -498,7 +509,9 @@ public final class AnomalyScars {
 		int changed = 0;
 		BlockPos ground = new BlockPos(x, surface - 1, z);
 		BlockState state = level.getBlockState(ground);
-		if (!protectedBlock(state) && !state.isAir() && state.getFluidState().isEmpty()) {
+		if (!protectedBlock(state) && !state.isAir() && state.getFluidState().isEmpty()
+				// грядки и тропинки — работа игрока, а не рельеф: их не штукатурим
+				&& !state.is(Blocks.FARMLAND) && !state.is(Blocks.DIRT_PATH)) {
 			int hash = (int) ((x * 73856093L) ^ (z * 19349663L) ^ seed);
 			// в пустыне, бэдлендах и на камне «мёртвая земля» из грубой земли — клякса:
 			// выгоревший грунт берёт материал биома, как и обломки
@@ -565,6 +578,14 @@ public final class AnomalyScars {
 		if (!hasFoliage(level, x, height, z)) {
 			return 0;
 		}
+		return deforestForce(level, x, height, z);
+	}
+
+	/**
+	 * Снос без проверки «это дерево»: нужен на повторе, когда ствол уже снесён прошлым проходом,
+	 * а крона осталась. Границы держим те же 9×9.
+	 */
+	private static int deforestForce(ServerLevel level, int x, int height, int z) {
 		int changed = 0;
 		// крона дуба/тёмного дуба шире 5×5: с радиусом 2 оставались висящие кольца листвы
 		for (int dx = -4; dx <= 4; dx++) {
@@ -586,6 +607,15 @@ public final class AnomalyScars {
 			}
 		}
 		return changed;
+	}
+
+	/** Повтор колонки, у которой op уже применён, а дерево не доделано: только снос. */
+	private static int finishTree(ServerLevel level, int x, int z) {
+		int height = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, x, z);
+		if (height <= level.getMinY() + 3 || height >= level.getMaxY() - 2) {
+			return 0;
+		}
+		return deforestForce(level, x, height, z);
 	}
 
 	/** Листва или грибные шляпы вокруг ствола: по ним дерево отличается от сруба из брёвен. */
@@ -658,6 +688,11 @@ public final class AnomalyScars {
 		}
 		Block log = top.getBlock();
 		int changed = clearTreeColumn(level, x, height, z);
+		if (changed < 0) {
+			// ствол не доснесён по дедлайну: колонку нельзя считать обработанной, иначе рядом
+			// с лежащим бревном останется обрубок
+			return -1;
+		}
 		int hash = (int) ((x * 31L) ^ (z * 17L) ^ op.seed);
 		int length = 4 + Math.floorMod(hash, 4);
 		BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
@@ -870,9 +905,11 @@ public final class AnomalyScars {
 	 */
 	private static boolean wetOp(ServerLevel level, ScarOp op) {
 		double radius = Math.max(1.0, op.radius);
-		for (int i = 0; i < 5; i++) {
-			double angle = i * Math.PI * 2.0 / 5.0;
-			double r = i == 0 ? 0.0 : radius * 0.75;
+		for (int i = 0; i < 9; i++) {
+			// центр, кольцо 0.75 и кольцо 1.0: воронка на берегу касается воды краем,
+			// и проверка только внутреннего кольца её пропускала
+			double angle = i * Math.PI * 2.0 / 8.0;
+			double r = i == 0 ? 0.0 : radius * (i % 2 == 0 ? 1.0 : 0.75);
 			int x = (int) Math.floor(op.x + Math.cos(angle) * r);
 			int z = (int) Math.floor(op.z + Math.sin(angle) * r);
 			if (!level.getChunkSource().hasChunk(x >> 4, z >> 4)) {
@@ -901,7 +938,10 @@ public final class AnomalyScars {
 				break;
 			}
 			BlockState state = level.getBlockState(pos.set(x, y, z));
+			// провал на леднике — законный след (шапка из снежного блока и пакета льда), но
+			// ICE трогать нельзя: под ним вода, и дыра в припае заливается сбоку
 			if (protectedBlock(state) || builtBlock(state) || isFragileSurface(state)
+					&& (state.is(Blocks.ICE) || state.is(Blocks.FROSTED_ICE) || state.is(Blocks.POWDER_SNOW))
 					|| !state.getFluidState().isEmpty()) {
 				break;
 			}

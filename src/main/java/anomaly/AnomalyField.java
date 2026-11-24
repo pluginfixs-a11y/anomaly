@@ -390,7 +390,11 @@ public final class AnomalyField {
 					new Random(anomaly.id * 0x9E3779B97F4A7C15L), config, anomaly.r0));
 			anomaly.invalidateComponents();
 		}
-		if (anomaly.scars == null || anomaly.scars.isEmpty()) {
+		// план следов не создаём на нулевом радиусе: зона растёт первые часы, и следы легли бы
+		// в 1–2 км от точки, где аномалии ещё нет. Планирует trail(), когда зона доросла;
+		// исключение — тестовая (pinned) зона, она сразу полноразмерная
+		if ((anomaly.scars == null || anomaly.scars.isEmpty())
+				&& (anomaly.pinned || anomaly.radius(anomaly.ageHours(now)) >= anomaly.r0 * 0.85)) {
 			anomaly.scars = AnomalyScars.planAt(anomaly.x0, anomaly.z0, anomaly.r0, AnomalyClass.byId(anomaly.cls),
 					new Random(anomaly.id * 0x2545F4914F6CDD1DL), false, anomaly.components);
 			anomaly.scar_cx = anomaly.x0;
@@ -846,22 +850,29 @@ public final class AnomalyField {
 			saving = true;
 			dirty = false;
 		}
-		WRITER.execute(() -> {
-			try {
-				// без внешнего замка: writeLocked сам берёт его коротко на сверку и move,
-				// а запись 1.3 МБ идёт вне лока — иначе /stop ждал бы диск
-				boolean ok = writeLocked(file, json, seq);
-				if (!ok) {
+		try {
+			WRITER.execute(() -> {
+				try {
+					// без внешнего замка: writeLocked сам берёт его коротко на сверку и move,
+					// а запись 1.3 МБ идёт вне лока — иначе /stop ждал бы диск
+					boolean ok = writeLocked(file, json, seq);
+					if (!ok) {
+						dirty = true;
+					}
+				} catch (RuntimeException e) {
+					// воркер не должен умереть молча: иначе поле перестанет сохраняться совсем
+					AnomalyMod.LOGGER.error("Anomaly: фоновая запись поля упала", e);
 					dirty = true;
+				} finally {
+					saving = false;
 				}
-			} catch (RuntimeException e) {
-				// воркер не должен умереть молча: иначе поле перестанет сохраняться совсем
-				AnomalyMod.LOGGER.error("Anomaly: фоновая запись поля упала", e);
-				dirty = true;
-			} finally {
-				saving = false;
-			}
-		});
+			});
+		} catch (RuntimeException rejected) {
+			// пул отказал: иначе saving останется true и поле перестанет сохраняться до рестарта
+			saving = false;
+			dirty = true;
+			AnomalyMod.LOGGER.error("Anomaly: не смог поставить запись поля в очередь", rejected);
+		}
 	}
 
 	public static boolean save() {
@@ -1238,4 +1249,5 @@ public final class AnomalyField {
 		return Math.max(0.2, Math.min(config.lifetime_max_hours, hours));
 	}
 }
+
 

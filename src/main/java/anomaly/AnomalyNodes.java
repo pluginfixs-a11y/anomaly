@@ -187,10 +187,29 @@ public final class AnomalyNodes {
 				if (zone.remnant() || zone.precursor()) {
 					continue;
 				}
-				if (Math.hypot(zone.coreX() - player.getX(), zone.coreZ() - player.getZ()) > REACH + NODE_SPREAD) {
+				Anomaly anomaly = zone.anomaly();
+				if (anomaly == null) {
 					continue;
 				}
-				placeNodes(level, zone.anomaly(), zone);
+				// у зоны побольше узлы стоят не в ядре, а на 30 % радиуса рейда (до 360 блоков):
+				// мерить до ядра значило бы, что алтарь и внешний якорь такой зоны не встанут никогда.
+				// Геометрия — ровно та же, что в placeNodes
+				double r = Double.isFinite(anomaly.node_r) && anomaly.node_r > 0.0
+						? anomaly.node_r : nodeRadius(zone.radius());
+				double cx = Double.isFinite(anomaly.node_cx) && anomaly.node_r > 0.0
+						? anomaly.node_cx : zone.coreX() + Math.cos(baseAngle(anomaly)) * r;
+				double cz = Double.isFinite(anomaly.node_cz) && anomaly.node_r > 0.0
+						? anomaly.node_cz : zone.coreZ() + Math.sin(baseAngle(anomaly)) * r;
+				double reach = REACH + NODE_SPREAD + r;
+				if (Math.hypot(cx - player.getX(), cz - player.getZ()) > reach) {
+					continue;
+				}
+				// чанки узлов грузим сами: surface() на незагруженном чанке возвращает null,
+				// и узел молча не появляется (это и резало алтарь и якоря у крупных зон)
+				for (double[] at : nodeSpots(anomaly, cx, cz, r)) {
+					level.getChunk((int) Math.floor(at[0]) >> 4, (int) Math.floor(at[1]) >> 4);
+				}
+				placeNodes(level, anomaly, zone);
 			}
 		}
 		// восстановление кладовой — для всех зон с узлами, а не только для тех, что рядом с игроком:
@@ -220,8 +239,8 @@ public final class AnomalyNodes {
 	 */
 	private static boolean placeNodes(ServerLevel level, Anomaly anomaly, Zone zone) {
 		if (!Double.isFinite(anomaly.node_r) || anomaly.node_r <= 0.0) {
-			// кладовую ставим НЕ в ядре: в ядре 15 HP/мин, и «приз» за рейд обходился дороже
-			// дропа. Точка узлов на 45 % радиуса рейда — это уже риск, но ещё достижимо
+			// кладовую ставим НЕ в ядре: в ядре 34 HP/мин, и «приз» за рейд обходился дороже
+			// дропа. Точка узлов на 30 % радиуса зоны — это уже риск, но ещё достижимо
 			anomaly.node_r = nodeRadius(zone.radius());
 			double angle = baseAngle(anomaly);
 			anomaly.node_cx = zone.coreX() + Math.cos(angle) * anomaly.node_r;
@@ -690,7 +709,7 @@ public final class AnomalyNodes {
 		}
 		Zone zone = anomaly.zone(AnomalyClock.now());
 		if (!Double.isFinite(anomaly.node_r) || anomaly.node_r <= 0.0) {
-			// ту же привязку, что делает placeNodes: узлы на 45 % радиуса рейда от ядра
+			// ту же привязку, что делает placeNodes: узлы на 30 % радиуса зоны от ядра
 			anomaly.node_r = nodeRadius(zone.radius());
 			double angle = baseAngle(anomaly);
 			anomaly.node_cx = zone.coreX() + Math.cos(angle) * anomaly.node_r;
@@ -813,6 +832,7 @@ public final class AnomalyNodes {
 				: String.valueOf(Math.round(value));
 	}
 }
+
 
 
 

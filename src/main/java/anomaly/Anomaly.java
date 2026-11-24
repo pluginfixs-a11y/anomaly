@@ -108,6 +108,9 @@ public final class Anomaly {
 	/** Родилась на этом тике: один сигнал для игроков рядом (не пишется в файл). */
 	public transient boolean justBorn;
 
+	/** Колонка следа: op уже применён, осталось доделать снос дерева (не пишется в файл). */
+	public transient boolean scar_retry_tree;
+
 	/** Рейдовые узлы: кладовая, алтарь и три якоря. Появляются при первом подходе к ядру. */
 	public boolean nodes_placed;
 	public double node_cx;
@@ -396,6 +399,9 @@ public final class Anomaly {
 		}
 		fed_hours = Math.min(fed_hours, life_hours * 4.0);
 		cache_restores = Math.max(0, Math.min(64, cache_restores));
+		// лимит обменов тоже из файла: отрицательное значение из правленого файла
+		// отменяло бы ограничение навсегда
+		altar_trades = Math.max(0, Math.min(64, altar_trades));
 		if (!(Double.isFinite(scar_cx) && Double.isFinite(scar_cz))) {
 			scar_cx = 0.0;
 			scar_cz = 0.0;
@@ -447,5 +453,6 @@ public final class Anomaly {
 		return false;
 	}
 }
+
 
 
