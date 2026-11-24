@@ -476,6 +476,29 @@ public final class SelfTest {
 		report(result, "следы не выходят за зону и доходят до внешней половины", insideZone && outer);
 		report(result, "у смертельной бывают пики", kinds);
 
+		// кольцо раны: пятна мёртвой земли по настоящему контуру, а не по кругу
+		double ringAge = deadly.ageHours(0L);
+		List<ScarOp> wound = AnomalyScars.woundRing(deadly, ringAge, new Random(5L));
+		boolean woundTypes = true;
+		boolean woundOnContour = true;
+		boolean notCircle = false;
+		for (ScarOp op : wound) {
+			woundTypes &= "dead_soil".equals(op.type);
+			// точка на контуре: по её же углу boundaryPoint даёт тот же радиус
+			double angle = Math.atan2(op.z - deadly.z0, op.x - deadly.x0);
+			double[] edge = deadly.boundaryPoint(angle, ringAge, deadly.r0);
+			double got = Math.hypot(op.x - deadly.x0, op.z - deadly.z0);
+			double want = Math.hypot(edge[0] - deadly.x0, edge[1] - deadly.z0);
+			woundOnContour &= Math.abs(got - want) < Math.max(1.0, want * 0.01);
+			notCircle |= Math.abs(got - deadly.r0) > deadly.r0 * 0.2;
+		}
+		report(result, "кольцо раны — 10–24 пятна мёртвой земли (" + wound.size() + ")",
+				wound.size() >= 10 && wound.size() <= 24 && woundTypes);
+		report(result, "кольцо раны лежит на контуре зоны", woundOnContour && notCircle);
+		Anomaly tiny = new Anomaly();
+		tiny.r0 = 200;
+		report(result, "у мелкой зоны кольца нет", AnomalyScars.woundRing(tiny, 1.0, new Random(1L)).isEmpty());
+
 		List<ScarOp> safePlan = AnomalyScars.plan(
 				AnomalyField.create(new AnomalyFieldData(), config, rnd, 0L, 12000, 0, 1500.0,
 						AnomalyClass.SAFE, false),
@@ -872,6 +895,9 @@ public final class SelfTest {
 			report(result, "хлопок проламывает землю на блок",
 					level.getBlockState(new BlockPos(mx, microSurface - 1, bz)).isAir()
 							&& !level.getBlockState(new BlockPos(mx, microSurface - 2, bz)).isAir());
+			// дно пломбируется булыжником: по нему следующий хлопок узнаёт выбитую клетку
+			report(result, "хлопок пломбирует дно воронки булыжником",
+					level.getBlockState(new BlockPos(mx, microSurface - 2, bz)).is(Blocks.COBBLESTONE));
 			restore(level, microBefore);
 
 			// контейнер под грунтом не выкапывается: дно воронки не затирает block entity

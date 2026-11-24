@@ -281,6 +281,7 @@ public final class AnomalyScars {
 			if (!cls.damages() || config == null || !config.scar_enabled) {
 				continue;
 			}
+			boolean firstPlan = anomaly.scars.isEmpty();
 			List<ScarOp> planned = planAt(pos[0], pos[1], Math.min(anomaly.r0, 900.0), cls,
 					new Random(anomaly.id * 31L + (long) (moved * 7.0)), false, anomaly.components);
 			// остаток бюджета зоны, а не фиксированная доля: план при рождении уже взял 0.4–0.9,
@@ -300,6 +301,20 @@ public final class AnomalyScars {
 				anomaly.scars.add(op);
 				used += op.blocks;
 				changed = true;
+			}
+			// кольцо раны — один раз, вместе с первым планом: у настоящей зоны план рождается
+			// здесь (в born() радиус ещё нулевой, и её следы планирует trail)
+			if (firstPlan) {
+				for (ScarOp ring : woundRing(anomaly, anomaly.ageHours(now), new Random(anomaly.id * 0x5DEECE66DL))) {
+					if (anomaly.scars.size() >= MAX_OPS) {
+						break;
+					}
+					if (overlaps(anomaly.scars, ring)) {
+						continue;
+					}
+					anomaly.scars.add(ring);
+					changed = true;
+				}
 			}
 		}
 		return changed;
@@ -914,14 +929,16 @@ public final class AnomalyScars {
 			return 0;
 		}
 		clearPlant(level, x, surface, z);
-		int changed = 0;
-		BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
+		// игрок на плите сверху — не повод ставить ему камень в ноги; проверяем весь объём
+		// до первого блока, иначе колонка обрывается и остаётся шахта 1×1 на всю высоту
 		for (int i = 0; i < height; i++) {
-			// игрок на плите сверху — не повод ставить ему камень в ноги; колонку пропускаем
-			// целиком, иначе останется шахта 1×1 на всю высоту
 			if (playersNear(level, x, surface + i, z)) {
 				return 0;
 			}
+		}
+		int changed = 0;
+		BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
+		for (int i = 0; i < height; i++) {
 			BlockState at = level.getBlockState(pos.set(x, surface + i, z));
 			if (protectedBlock(at) || (!at.isAir() && at.blocksMotion() && !at.canBeReplaced())) {
 				break;
@@ -1228,12 +1245,15 @@ public final class AnomalyScars {
 		BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
 		int changed = 0;
 		int top = Math.min(level.getMaxY() - 2, surface + height);
+		// игрок выше земли (на скале, в полёте) тоже не должен получить камень в голову.
+		// Проверяем весь объём ДО первого блока: иначе колонка обрывается на высоте головы
+		// и остаётся обрубок, а колонка считается обработанной
 		for (int y = surface; y <= top; y++) {
-			// игрок выше земли (на скале, в полёте) тоже не должен получить камень в голову;
-			// колонку пропускаем целиком, иначе остаётся обрубок до высоты головы
 			if (playersNear(level, x, y, z)) {
 				return 0;
 			}
+		}
+		for (int y = surface; y <= top; y++) {
 			BlockState state = level.getBlockState(pos.set(x, y, z));
 			if (protectedBlock(state)) {
 				break;
@@ -1430,12 +1450,13 @@ public final class AnomalyScars {
 					dug = y;
 				}
 				// дно воронки пломбируем всегда: иначе следующий хлопок видит новый грунт ниже
-				// и воронка углубляется без предела (у стоянки выгрызается терраса)
+				// и воронка углубляется без предела (у стоянки выгрызается терраса). Пломба —
+				// первый НЕвыкопанный блок под последней вынутой клеткой
 				if (dug < surface) {
-					BlockPos floorPos = new BlockPos(x0, Math.max(level.getMinY() + 1, dug), z0);
+					BlockPos floorPos = new BlockPos(x0, Math.max(level.getMinY() + 1, dug - 1), z0);
 					BlockState floor = level.getBlockState(floorPos);
 					if (!protectedBlock(floor) && !builtBlock(floor) && !floor.isAir()) {
-						level.setBlock(floorPos, seal(ground), Block.UPDATE_ALL);
+						level.setBlock(floorPos, seal(floor), Block.UPDATE_ALL);
 					}
 				}
 			}
