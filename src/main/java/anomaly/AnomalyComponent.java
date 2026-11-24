@@ -453,9 +453,12 @@ public enum AnomalyComponent {
 					// радиус слышимости ванильного звука = max(16, 16·vol): 0.35 до игрока не доходил
 					level.playSound(null, x, y, z, SoundEvents.GENERIC_EXPLODE.value(), SoundSource.AMBIENT, 1.6f, 1.6f);
 					// хлопок — не только картинка: маленькая воронка на 1–2 блока. Только у
-					// классов, которые вообще рушат мир: у безопасной зоны бюджет нулевой
+					// классов, которые вообще рушат мир: у безопасной зоны бюджет нулевой.
+					// nearY — поверхность этой колонки, а не высота игрока: дальняя воронка
+					// иначе отказывала бы, потому что рельеф там на 10 блоков выше
 					if (zone.cls().damages() && canMark(level, x, z)) {
-						AnomalyScars.microCrater(level, x, z, 2.2 + rnd.nextDouble() * 0.8, 1 + rnd.nextInt(2), player.getY());
+						AnomalyScars.microCrater(level, x, z, 2.2 + rnd.nextDouble() * 0.8,
+								1 + rnd.nextInt(2), surfaceOr(level, x, z, player.getY()));
 					}
 				}
 			}

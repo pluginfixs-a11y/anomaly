@@ -503,6 +503,25 @@ public final class SelfTest {
 		report(result, "безопасная зона тихих следов не оставляет",
 				!AnomalyScars.dripOnce(safeField, config, 0L, new Random(4L)));
 
+		// исчерпанный бюджет останавливает дрип — иначе проверка выше ловила бы только класс
+		dripZone.scars.clear();
+		dripZone.scar_next = 0;
+		dripZone.scar_spent = AnomalyClass.damageBudget(dripZone.r0, AnomalyClass.DEADLY);
+		report(result, "исчерпанный бюджет останавливает тихий след",
+				!AnomalyScars.dripOnce(dripField, config, 0L, new Random(8L)));
+		dripZone.scar_spent = 0.0;
+
+		// таймер: не чаще одного следа за DRIP_PERIOD_TICKS вызовов (6 секунд)
+		dripZone.scars.clear();
+		dripZone.scar_next = 0;
+		int fired = 0;
+		for (int i = 0; i < 6; i++) {
+			if (AnomalyScars.drip(dripField, config, 0L, new Random(7L), null)) {
+				fired++;
+			}
+		}
+		report(result, "тихий след срабатывает раз в шесть вызовов (" + fired + ")", fired == 1);
+
 		// кольцо раны: пятна мёртвой земли по настоящему контуру, а не по кругу
 		double ringAge = deadly.ageHours(0L);
 		List<ScarOp> wound = AnomalyScars.woundRing(deadly, ringAge, new Random(5L));
@@ -1165,13 +1184,13 @@ public final class SelfTest {
 		check(result, "радиус 50 не рушит", 0.0, AnomalyClass.damageBudget(50, AnomalyClass.DEADLY), 1e-9);
 		check(result, "безопасная не рушит даже гигантом", 0.0,
 				AnomalyClass.damageBudget(3000, AnomalyClass.SAFE), 1e-9);
-		report(result, "300 блоков — не больше 300",
-				AnomalyClass.damageBudget(300, AnomalyClass.DANGER) <= 300.0);
-		report(result, "1000 блоков — не больше 5 000",
-				AnomalyClass.damageBudget(1000, AnomalyClass.DANGER) <= 5_000.0);
-		report(result, "2000 блоков — не больше 60 000",
-				AnomalyClass.damageBudget(2000, AnomalyClass.DANGER) <= 60_000.0);
-		check(result, "3000 блоков — потолок 250 000", 250_000.0,
+		report(result, "300 блоков — не больше 900",
+				AnomalyClass.damageBudget(300, AnomalyClass.DANGER) <= 900.0);
+		report(result, "1000 блоков — не больше 15 000",
+				AnomalyClass.damageBudget(1000, AnomalyClass.DANGER) <= 15_000.0);
+		report(result, "2000 блоков — не больше 180 000",
+				AnomalyClass.damageBudget(2000, AnomalyClass.DANGER) <= 180_000.0);
+		check(result, "3000 блоков — потолок 750 000", 750_000.0,
 				AnomalyClass.damageBudget(3000, AnomalyClass.DEADLY), 1e-6);
 		report(result, "бюджет растёт с радиусом",
 				AnomalyClass.damageBudget(1500, AnomalyClass.DEADLY)

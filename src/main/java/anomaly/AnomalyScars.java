@@ -5,7 +5,9 @@ import net.minecraft.core.Direction;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.server.level.TicketType;
 import net.minecraft.tags.BlockTags;
+import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.RotatedPillarBlock;
@@ -321,8 +323,8 @@ public final class AnomalyScars {
 			}
 			List<ScarOp> planned = planAt(pos[0], pos[1], Math.min(anomaly.r0, 900.0), cls,
 					new Random(anomaly.id * 31L + (long) (moved * 7.0)), false, anomaly.components);
-			// остаток бюджета зоны, а не фиксированная доля: план при рождении уже взял 0.4–0.9,
-			// и дрейфовые добавки утраивали обещанный damageBudget
+			// остаток бюджета зоны, а не фиксированная доля: план при рождении берёт 0.3–0.7,
+			// остальное делят дрейфовые добавки и тихие следы
 			double budget = AnomalyClass.damageBudget(anomaly.r0, cls)
 					- anomaly.scar_spent - plannedBlocks(anomaly.scars);
 			if (budget <= 0.0) {
@@ -422,8 +424,16 @@ public final class AnomalyScars {
 	 * часах: {@code /anomaly timescale 3600} не должен превращать дрип в поток.
 	 */
 	private static final int DRIP_PERIOD_TICKS = 6;
+	/**
+	 * Тикет прогрузки для тихого следа: чанк генерируется штатной очередью чанков (по чуть-чуть
+	 * за тик, без 50-мс стопа), гаснет сам по таймауту и, в отличие от forceload, не попадает
+	 * в сейв мира. 300 с — с запасом на проход поля.
+	 */
+	private static final TicketType DRIP_TICKET = new TicketType(300L, TicketType.FLAG_LOADING);
 	private static final Random DRIP_RANDOM = new Random(0x5EED5CA7L);
 	private static int dripTicks;
+	/** Прошлый проход поля не двигался из-за mspt: дрип не должен копить следы. */
+	private static boolean lagging;
 	private static boolean dripLogged;
 	private static int dripDebug;
 
@@ -439,7 +449,8 @@ public final class AnomalyScars {
 	 * лёг, не загружен — ждёт. Синхронной генерации чанков это не добавляет: она по-прежнему
 	 * разрешена только на пустом сервере и под суточным лимитом.
 	 */
-	static boolean drip(AnomalyFieldData data, AnomalyConfig config, long now, Random rnd) {
+	static boolean drip(AnomalyFieldData data, AnomalyConfig config, long now, Random rnd,
+			ServerLevel level) {
 		if (config == null || !config.scar_enabled) {
 			return false;
 		}
@@ -447,11 +458,19 @@ public final class AnomalyScars {
 			return false;
 		}
 		dripTicks = 0;
-		return dripOnce(data, config, now, rnd);
+		return dripOnce(data, config, now, rnd, level);
 	}
 
 	/** Один тихий след в случайную повреждённую зону. Вынесено от таймера ради самопроверки. */
 	static boolean dripOnce(AnomalyFieldData data, AnomalyConfig config, long now, Random rnd) {
+		return dripOnce(data, config, now, rnd, null);
+	}
+
+	/**
+	 * @param level мир для проверки «в зоне стоит игрок»; в самопроверке он не нужен и равен null
+	 */
+	static boolean dripOnce(AnomalyFieldData data, AnomalyConfig config, long now, Random rnd,
+			ServerLevel level) {
 		if (data == null || data.anomalies.isEmpty() || totalOps(data) >= MAX_OPS_WORLD) {
 			return false;
 		}
@@ -474,34 +493,89 @@ public final class AnomalyScars {
 			if (!Double.isFinite(pos[0]) || !Double.isFinite(pos[1])) {
 				continue;
 			}
-			// та же касса, что у плана: бюджет зоны один на всех, и дрип не должен
-			// съедать больше, чем осталось после уже обещанного
+			double radius = Math.max(12.0, anomaly.radius(age));
+			// пока в зоне стоит игрок, следы и так делает игрок: дрип там выглядел бы
+			// как земля, вспухающая у него на глазах
+			if (level != null && playerInside(level, pos[0], pos[1], radius)) {
+				reason = "зона #" + anomaly.id + ": в ней игрок";
+				continue;
+			}
+			// та же касса, что у плана. Считаем только ждущее: применённое уже ушло
+			// в scar_spent, и без вычета очереди бюджет считался дважды
 			double budget = AnomalyClass.damageBudget(anomaly.r0, cls);
-			double used = anomaly.scar_spent + plannedBlocks(anomaly.scars);
-			ScarOp op = dripOp(pos[0], pos[1], Math.max(12.0, anomaly.radius(age)), rnd);
+			List<ScarOp> queue = anomaly.scars.subList(Math.max(0, anomaly.scar_next), anomaly.scars.size());
+			double used = anomaly.scar_spent + plannedBlocks(queue);
+			ScarOp op = dripOp(pos[0], pos[1], radius, rnd);
 			roomy++;
 			if (used + op.blocks > budget) {
 				reason = "зона #" + anomaly.id + ": " + Math.round(used) + " занято из "
 						+ Math.round(budget) + ", op просит " + op.blocks;
 				continue;
 			}
-			// уже применённое не мешает: сравниваем только с тем, что ещё в очереди
-			List<ScarOp> queue = anomaly.scars.subList(Math.max(0, anomaly.scar_next), anomaly.scars.size());
-			if (overlaps(queue, op)) {
+			// сверяемся со всем списком, включая применённое: иначе плоское пятно ляжет
+			// поверх уже стоящего пика или руины и перезапишет их верх
+			if (overlaps(anomaly.scars, op)) {
 				continue;
 			}
 			anomaly.scars.add(op);
+			// чанки следа грузим тикетом: иначе в 3000 блоках от игрока он лежит в очереди
+			// и «появляется» только когда кто-то придёт. Генерацию считаем в суточный лимит
+			int chunks = level == null ? 0 : loadAround(level, data, config, now, op);
+			// следующий проход поля начинаем с этой зоны: чанк к тому моменту уже подгружен
+			rotate = (start + step) % size;
 			AnomalyField.markDirty();
 			// одна строка за сессию: по ней в логе видно, что механизм живой, без спама
 			if (!dripLogged) {
 				dripLogged = true;
-				AnomalyMod.LOGGER.info("Anomaly: тихий след в зоне #{} — {}", anomaly.id, op.describe());
+				AnomalyMod.LOGGER.info("Anomaly: тихий след в зоне #{} — {} (чанков на прогрузку {})",
+						anomaly.id, op.describe(), chunks);
 			}
 			return true;
 		}
 		if (dripDebug++ % 30 == 0) {
 			AnomalyMod.LOGGER.info("Anomaly: тихий след не нашёл места (зон {}, дошли до бюджета {}, причина: {})",
 					size, roomy, reason);
+		}
+		return false;
+	}
+
+	/**
+	 * Просит чанки под op у штатной системы чанков: тикет с таймаутом, не больше четырёх
+	 * чанков (2×2 — тот же «малый хвост», что видно вокруг хлопка). Каждый чанк идёт в
+	 * суточный лимит генерации, иначе поле тихо застроит полмира.
+	 *
+	 * @return сколько чанков удалось попросить
+	 */
+	private static int loadAround(ServerLevel level, AnomalyFieldData data, AnomalyConfig config,
+			long now, ScarOp op) {
+		double half = Math.max(4.0, op.radius) + Math.abs(op.length) * 0.5;
+		int x0 = (int) Math.floor(op.x - half) >> 4;
+		int x1 = (int) Math.floor(op.x + half) >> 4;
+		int z0 = (int) Math.floor(op.z - half) >> 4;
+		int z1 = (int) Math.floor(op.z + half) >> 4;
+		int asked = 0;
+		for (int cx = x0; cx <= x1 && asked < 4; cx++) {
+			for (int cz = z0; cz <= z1 && asked < 4; cz++) {
+				if (!chunkBudgetAllows(data, config, now)) {
+					return asked;
+				}
+				level.getChunkSource().addTicketWithRadius(DRIP_TICKET, new ChunkPos(cx, cz), 0);
+				data.gen_count++;
+				asked++;
+			}
+		}
+		return asked;
+	}
+
+	/** Стоит ли игрок в этой зоне: там дрип не нужен, следы появляются и без него. */
+	private static boolean playerInside(ServerLevel level, double x, double z, double radius) {
+		double r2 = Math.max(16.0, radius) * Math.max(16.0, radius);
+		for (ServerPlayer player : level.players()) {
+			double dx = player.getX() - x;
+			double dz = player.getZ() - z;
+			if (dx * dx + dz * dz < r2) {
+				return true;
+			}
 		}
 		return false;
 	}
@@ -546,8 +620,11 @@ public final class AnomalyScars {
 	public static boolean tick(MinecraftServer server, ServerLevel level, AnomalyFieldData data,
 			AnomalyConfig config) {
 		try {
-			boolean dripped = drip(data, config, AnomalyClock.now(), DRIP_RANDOM);
-			return pass(server, level, data, config) || dripped;
+			boolean moved = pass(server, level, data, config);
+			// дрип только если проход не задохнулся по mspt: иначе очередь копила бы следы,
+			// а применять их было бы некому
+			boolean dripped = !lagging && drip(data, config, AnomalyClock.now(), DRIP_RANDOM, level);
+			return moved || dripped;
 		} finally {
 			// дедлайн держим только внутри тика. Раньше он оставался в прошлом, и любой
 			// вызов вне прохода (/anomaly demo, /anomaly event) получал «время вышло»
@@ -564,8 +641,10 @@ public final class AnomalyScars {
 		boolean changed = trail(data, config, AnomalyClock.now());
 		// средний mspt — грубый предохранитель с памятью в 100 тиков; точный — по часам внутри прохода
 		if (server.getAverageTickTimeNanos() / 1_000_000.0 > Math.min(config.mspt_limit, 30.0)) {
+			lagging = true;
 			return changed;
 		}
+		lagging = false;
 		long deadline = System.nanoTime() + NANOS_PER_PASS;
 		passDeadline = deadline;
 		int chunksThisTick = 0;
