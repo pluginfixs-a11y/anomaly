@@ -127,7 +127,12 @@ public final class ScarOp {
 		int side = side();
 		int ix = index % side - (side - 1) / 2;
 		int iz = index / side - (side - 1) / 2;
-		if (ix * ix + iz * iz > radius * radius) {
+		// край не по циркулю: у идеального круга с 20 блоков видно, что это циркуль, а не провал.
+		// Радиус гуляет по углу на ±12 %, поэтому пятно, провал и пик получают рваную кромку
+		double angle = Math.atan2(iz, ix);
+		double wobble = 1.0 + 0.09 * Math.sin(angle * 3.0 + seed * 0.0001)
+				+ 0.05 * Math.sin(angle * 7.0 + seed * 0.0007);
+		if (ix * ix + iz * iz > radius * radius * wobble * wobble) {
 			return null;
 		}
 		return new int[]{baseX + ix, baseZ + iz};

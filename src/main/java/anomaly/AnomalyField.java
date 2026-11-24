@@ -44,6 +44,8 @@ public final class AnomalyField {
 	private static Path path;
 	private static Random random = new Random(1L);
 	private static long lastSaveMs;
+	/** Период снимка поля: сериализация 1.3 МБ идёт на тик-потоке, чаще нельзя. */
+	private static final long SAVE_INTERVAL_MS = 5L * 60_000L;
 	private static long lastTickFieldMs;
 	private static volatile boolean dirty;
 	private AnomalyField() {
@@ -173,10 +175,11 @@ public final class AnomalyField {
 			dirty = true;
 		}
 		long real = System.currentTimeMillis();
-		// файл на 600 зон — 1.3 МБ: сериализация на тик-потоке, запись — в отдельном потоке.
-		// Пишем только когда есть что писать: пустой сервер не должен сериализовать поле
-		boolean due = real - lastSaveMs > 60_000L;
-		if (dirty && due) {
+		// Файл на 600 зон — 1.3 МБ: Gson-сериализация идёт на тик-потоке (20–50 мс), поэтому
+		// не чаще раза в 5 минут и только когда сервер не задыхается. Запись на диск — в фоне
+		boolean due = real - lastSaveMs > SAVE_INTERVAL_MS;
+		boolean calm = server.getAverageTickTimeNanos() / 1_000_000.0 < 40.0;
+		if (dirty && due && calm) {
 			saveAsync();
 		}
 	}

@@ -42,8 +42,11 @@ public abstract class PortalProcessorMixin {
 			return;
 		}
 		// дальний портал не работает и гаснет: иначе ад — бесплатный телепорт за 10 км.
-		// Предел считается в блоках Верхнего мира, из ада — ×8
-		if (cir.getReturnValue() && entity instanceof ServerPlayer far
+		// Предел считается в блоках Верхнего мира, из ада — ×8.
+		// Гасим только при выходе ИЗ Верхнего мира: игрок, который уже забрался в ад дальше
+		// 1250 блоков, должен иметь возможность вернуться, иначе он заперт в Нижнем
+		if (cir.getReturnValue() && level.dimension() == Level.OVERWORLD
+				&& entity instanceof ServerPlayer far
 				&& AnomalyPortals.tooFar(level, far)) {
 			AnomalyPortals.collapse(level, far);
 			cir.setReturnValue(false);

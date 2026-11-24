@@ -64,13 +64,17 @@ public final class AnomalyEffects {
 			state.hazardTicks += AnomalyState.stepTicks(seconds);
 			if (state.hazardTicks >= 120) {
 				state.hazardTicks = 0;
-				// пол по урону: 2.0 HP за 6 с выше медленной регенерации (0.25 HP/с), иначе
-				// внешняя четверть радиуса лечила в плюс и там можно было стоять с едой
-				float damage = (float) Math.max(2.0, (0.6 + 3.6 * depth) * Math.max(0.4, state.dose));
+				// Урон растёт от края к ядру без «пола»: на кромке он ниже медленной регенерации
+				// (можно отступить), в ядре обгоняет её вдвое. Пол 2.0 HP делал внешнюю
+				// четверть радиуса безобидной, а глубину — неразличимой
+				float damage = (float) Math.max(0.6, (0.5 + 4.6 * depth * depth) * Math.max(0.35, state.dose));
 				player.hurt(level.damageSources().magic(), damage);
 				// зона высасывает силы: с полной сатурацией ванильная регенерация даёт до 2 HP/с,
 				// и урон ядра её не обгонял — сытый игрок кемпил ядро на стейках
 				player.getFoodData().setSaturation(0.0f);
+				// удар без признака читается как баг сервера: короткий вдох зоны на каждом ударе
+				level.playSound(null, player.getX(), player.getY(), player.getZ(),
+						SoundEvents.SCULK_BLOCK_SPREAD, SoundSource.AMBIENT, 0.7f, 0.6f);
 			}
 		}
 		// карман тишины у кладовой: раз в ~3 с тихий звон. Без метки исчезновение урона

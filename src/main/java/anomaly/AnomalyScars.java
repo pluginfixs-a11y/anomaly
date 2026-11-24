@@ -39,6 +39,24 @@ public final class AnomalyScars {
 	private static final int COLUMNS_PER_PASS = 6000;
 	/** Часы на проход: средний mspt помнит 100 тиков, этого мало для 2000 setBlock подряд. */
 	private static final long NANOS_PER_PASS = 5_000_000L;
+	/** Пауза между сигналом перед следом и первыми блоками: игрок успевает обернуться. */
+	private static final long TELEGRAPH_HOLD_MS = 2_000L;
+
+	/**
+	 * Микрособытия (хлопок, гарь) идут из компонентов, а не из прохода следов: в грозу
+	 * у ядра их десятки за тик на каждого игрока. Потолок на тик — общий, а не на игрока.
+	 */
+	private static int microThisTick;
+	private static long microTickStamp;
+
+	private static boolean microBudget(ServerLevel level) {
+		long tick = level.getServer().overworld().getGameTime();
+		if (tick != microTickStamp) {
+			microTickStamp = tick;
+			microThisTick = 0;
+		}
+		return ++microThisTick <= 8;
+	}
 	private static final Block[] SPIKE_BLOCKS = {
 			Blocks.STONE, Blocks.TUFF, Blocks.ANDESITE, Blocks.DEEPSLATE
 	};
@@ -407,6 +425,14 @@ public final class AnomalyScars {
 						anomaly.scar_cursor++;
 						continue;
 					}
+					// Пауза между сигналом и блоками: игрок должен успеть обернуться на звук
+					// и пыль, а не обнаружить гору через тик. Ждём до 2 с, op не теряется
+					if (anomaly.scar_hold_for == anomaly.scar_next
+							&& AnomalyClock.now() < anomaly.scar_hold_until) {
+						finished = false;
+						limitHit = true;
+						break;
+					}
 					// бюджет проверяем ДО загрузки чанка: getChunk — синхронная генерация
 					if (blocksThisTick >= config.blocks_per_tick || columnsThisTick >= COLUMNS_PER_PASS
 							|| System.nanoTime() > deadline) {
@@ -416,10 +442,11 @@ public final class AnomalyScars {
 					int chunkX = column[0] >> 4;
 					int chunkZ = column[1] >> 4;
 					if (!level.getChunkSource().hasChunk(chunkX, chunkZ)) {
-						// суточный лимит: остаток плана ждёт следующего дня, а не съедает worldgen.
-						// ВАЖНО: сдвигаем очередь — иначе следующая зона тоже упрётся в лимит
-						// и всё поле замирает до смены полевых суток
-						if (chunksThisTick >= config.chunks_per_tick
+						// Чанк не загружен. Синхронная генерация — это 10–50 мс прямо в тик-потоке,
+						// поэтому при живых игроках след ждёт: чанк загрузится сам, когда игрок
+						// подойдёт (раньше он всё равно следа не видит). Добор идёт только на
+						// пустом сервере и под суточным лимитом
+						if (!level.players().isEmpty() || chunksThisTick >= config.chunks_per_tick
 								|| !chunkBudgetAllows(data, config, AnomalyClock.now())) {
 							finished = false;
 							limitHit = true;
@@ -474,6 +501,12 @@ public final class AnomalyScars {
 					AnomalyEffects.scarTelegraph(level, column[0], column[1],
 							AnomalyClass.byId(anomaly.cls).color);
 					anomaly.scar_telegraph_for = anomaly.scar_next;
+					// и сразу откладываем блоки: 2 с между пылью и камнем
+					anomaly.scar_hold_for = anomaly.scar_next;
+					anomaly.scar_hold_until = AnomalyClock.now() + TELEGRAPH_HOLD_MS;
+					finished = false;
+					limitHit = true;
+					break;
 				}
 					// курсор двигаем только после проверок: иначе колонка на стыке бюджета чанков теряется
 					anomaly.scar_cursor++;
@@ -598,8 +631,8 @@ public final class AnomalyScars {
 		int changed = switch (op.type) {
 			case "dead_soil" -> deadSoil(level, x, surface, z, op.seed);
 			case "rubble" -> rubble(level, x, surface, z, op.seed);
-			case "crack" -> trench(level, x, surface, z, op.depth, false);
-			case "lava_fault" -> trench(level, x, surface, z, op.depth, true);
+			case "crack" -> trench(level, op, x, surface, z, op.depth, false);
+			case "lava_fault" -> trench(level, op, x, surface, z, op.depth, true);
 			case "spike" -> spike(level, op, x, surface, z, ground);
 			case "sinkhole" -> sinkhole(level, op, x, surface, z);
 			case "fallen_forest" -> fallenForest(level, op, x, surface, z, height);
@@ -1010,16 +1043,24 @@ public final class AnomalyScars {
 		return blocks[Math.floorMod(hash, blocks.length)];
 	}
 
-	private static int trench(ServerLevel level, int x, int surface, int z, int depth, boolean lava) {
+	private static int trench(ServerLevel level, ScarOp op, int x, int surface, int z, int depth, boolean lava) {
 		// у воды лава гаснет в камень, а траншея заливается сбоку: там нужна обычная трещина
 		if (lava && fluidNear(level, x, surface, z)) {
 			lava = false;
 		}
+		// трещина сужается к концам: щель одной глубины обрывается, как /fill. Мелкие
+		// трещины (2–3 блока) не трогаем — там сужение съедает всю глубину
+		double cos = Math.cos(op.angle);
+		double sin = Math.sin(op.angle);
+		double along = (x - Math.floor(op.x)) * cos + (z - Math.floor(op.z)) * sin;
+		double span = Math.max(1.0, op.length - 1);
+		double t = Math.min(1.0, Math.abs(along - span * 0.5) / (span * 0.5));
+		int here = depth >= 4 ? Math.max(2, (int) Math.round(depth * (1.0 - 0.5 * t * t))) : depth;
 		// трава и цветы в трещине сносятся ванилью с дропом — убираем сами
 		clearPlant(level, x, surface, z);
 		int changed = 0;
 		BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
-		for (int i = 0; i < depth; i++) {
+		for (int i = 0; i < here; i++) {
 			int y = surface - 1 - i;
 			if (y <= level.getMinY() + 1) {
 				break;
@@ -1031,7 +1072,7 @@ public final class AnomalyScars {
 			if (protectedBlock(state) || builtBlock(state) || !state.getFluidState().isEmpty()) {
 				return changed;
 			}
-			boolean bottom = i == depth - 1;
+			boolean bottom = i == here - 1;
 			BlockState target = bottom && lava ? Blocks.LAVA.defaultBlockState() : Blocks.AIR.defaultBlockState();
 			level.setBlock(pos.set(x, y, z), target, Block.UPDATE_ALL);
 			changed++;
@@ -1117,7 +1158,12 @@ public final class AnomalyScars {
 			int chunkZ = bz >> 4;
 			if (!level.getChunkSource().hasChunk(chunkX, chunkZ)) {
 				// в свежей местности загружен только чанк первой колонки, и все сэмплы молча
-				// пропускались — проверка воды не работала вовсе
+				// пропускались — проверка воды не работала вовсе. Генерировать в тик-потоке
+				// при живых игроках нельзя: след ждёт, пока чанк загрузится сам
+				if (!level.players().isEmpty()) {
+					budgetStop = true;
+					break;
+				}
 				if (!chunkBudgetAllows(data, config, AnomalyClock.now())) {
 					// суточный лимит генераций: след ждёт следующего дня, а не выбрасывается
 					budgetStop = true;
@@ -1158,25 +1204,35 @@ public final class AnomalyScars {
 
 	/** Провал: вынимаем колонку на depth блоков, стенки остаются как есть. */
 	private static int sinkhole(ServerLevel level, ScarOp op, int x, int surface, int z) {
-		// кромка провала: грунт вывернут и обломан. Ровная круглая яма с вертикальными
-		// стенками с 20–200 блоков не читается вовсе
 		double distance = Math.hypot(x - op.x, z - op.z);
-		if (op.radius >= 3.0 && distance > op.radius - 1.2) {
+		int hash = (int) ((x * 73856093L) ^ (z * 19349663L) ^ op.seed);
+		int cell = ((x >> 1) * 31) ^ ((z >> 1) * 17) ^ (int) op.seed;
+		// кромка провала: грунт вывернут и обломан. Ровная круглая яма с вертикальными
+		// стенками с 20–200 блоков не читается вовсе. Губа ровно в один блок и только
+		// у настоящих провалов: прежние 1.2 радиуса съедали почти весь диск 3×3, и провал
+		// оставался шахтой 1×1 с обломками вокруг
+		if (op.radius >= 4.0 && distance > op.radius - 1.2) {
 			BlockState ground = level.getBlockState(new BlockPos(x, surface - 1, z));
 			if (protectedBlock(ground) || builtBlock(ground) || !ground.getFluidState().isEmpty()
 					|| isFragileSurface(ground)) {
 				return 0;
 			}
-			int hash = (int) ((x * 73856093L) ^ (z * 19349663L) ^ op.seed);
-			level.setBlock(new BlockPos(x, surface - 1, z),
-					rubbleBlock(ground, hash).defaultBlockState(), Block.UPDATE_ALL);
+			Block rim = rubbleBlock(ground, hash);
+			level.setBlock(new BlockPos(x, surface - 1, z), rim.defaultBlockState(), Block.UPDATE_ALL);
+			// каждый четвёртый блок губы — валун сверху: край обвалился, а не подрезан
+			if (Math.floorMod(cell, 4) == 0 && level.getBlockState(new BlockPos(x, surface, z)).isAir()) {
+				level.setBlock(new BlockPos(x, surface, z), rim.defaultBlockState(), Block.UPDATE_ALL);
+			}
 			clearPlant(level, x, surface, z);
 			return 1;
 		}
 		clearPlant(level, x, surface, z);
 		BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
 		int changed = 0;
-		int depth = Math.max(1, Math.min(10, op.depth));
+		// глубина гуляет по клеткам 2×2 и мельчает к краю: ровное дно читалось как /fill
+		double taper = op.radius >= 4.0 ? 0.55 + 0.45 * (1.0 - distance / Math.max(0.5, op.radius)) : 1.0;
+		int depth = (int) Math.round(op.depth * taper * (0.8 + Math.floorMod(cell, 100) / 250.0));
+		depth = Math.max(1, Math.min(10, depth));
 		for (int i = 0; i < depth; i++) {
 			int y = surface - 1 - i;
 			if (y <= level.getMinY()) {
@@ -1224,24 +1280,34 @@ public final class AnomalyScars {
 		double dx = x - op.x;
 		double dz = z - op.z;
 		double falloff = 1.0 - Math.min(1.0, Math.sqrt(dx * dx + dz * dz) / Math.max(0.5, op.radius));
-		int hash = (int) ((x * 341873128L) ^ (z * 132897987L) ^ op.seed);
-		double jitter = 0.9 + Math.floorMod(hash, 100) / 500.0;
-		int height = (int) Math.round(op.height * (0.3 + 0.7 * falloff) * jitter);
+		// высота и камень — по ячейке 2×2, а не по колонке: «перец с солью» на грани пика
+		// читался как ошибка генерации (то же уже сделано для плиты)
+		int cell = ((x >> 1) * 31) ^ ((z >> 1) * 17) ^ (int) op.seed;
+		// профиль шипа, а не зиккурата: 0.06 + 0.94·falloff^0.55 даёт тонкую вершину и широкое
+		// основание, а прежние 0.3 + 0.7·falloff росли ступенями по ~6 блоков
+		double profile = 0.06 + 0.94 * Math.pow(Math.max(0.0, falloff), 0.55);
+		int height = (int) Math.round(op.height * profile * (0.9 + Math.floorMod(cell, 100) / 500.0));
 		height = Math.max(2, Math.min(MAX_HEIGHT, height));
 		// кромка: вывернутый грунт и обломки вокруг основания. Без него конус растёт прямо
-		// из целой травы, и с 20–200 блоков это читается как «камень из ничего»
-		if (falloff < 0.18) {
+		// из целой травы, и с 20–200 блоков это читается как «камень из ничего». Через две
+		// клетки — пропуск: сплошная плита обломков вокруг пика выглядела насыпью
+		if (falloff < 0.16) {
 			if (protectedBlock(ground) || builtBlock(ground) || !ground.getFluidState().isEmpty()) {
 				return 0;
 			}
-			Block rim = rubbleBlock(ground, hash);
+			if (Math.floorMod(cell, 3) == 0) {
+				return 0;
+			}
+			Block rim = rubbleBlock(ground, cell);
 			level.setBlock(new BlockPos(x, surface - 1, z), rim.defaultBlockState(), Block.UPDATE_ALL);
 			clearPlant(level, x, surface, z);
 			return 1;
 		}
 		// камень из того же биома: песчаник в пустыне, терракота в бэдлендах, туф на камне.
 		// Серый булыжник посреди песка читается как чужая постройка, а не как след аномалии
-		Block block = spikeBlock(ground, hash);
+		Block block = spikeBlock(ground, cell);
+		// нижняя треть — тот же камень, но темнее: у настоящей скалы основание всегда в тени
+		Block core = spikeCore(ground, cell);
 		BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
 		int changed = 0;
 		int top = Math.min(level.getMaxY() - 2, surface + height);
@@ -1253,7 +1319,12 @@ public final class AnomalyScars {
 				return 0;
 			}
 		}
+		int shadow = surface + Math.max(1, (int) Math.round((top - surface) * 0.3));
 		for (int y = surface; y <= top; y++) {
+			// масса камня не может съесть весь тик: у пика до 150 блоков в одной колонке
+			if (passDeadline != 0L && (changed & 7) == 7 && System.nanoTime() > passDeadline) {
+				return changed > 0 ? changed : -1;
+			}
 			BlockState state = level.getBlockState(pos.set(x, y, z));
 			if (protectedBlock(state)) {
 				break;
@@ -1262,10 +1333,26 @@ public final class AnomalyScars {
 				// столб растёт только по воздуху: раньше он перепрыгивал крону и торчал из неё
 				break;
 			}
-			level.setBlock(pos.set(x, y, z), block.defaultBlockState(), Block.UPDATE_ALL);
+			// внутренним блокам не нужны обновления соседей и пересвет: их ставят тысячи
+			int flags = y < top ? Block.UPDATE_CLIENTS | Block.UPDATE_KNOWN_SHAPE : Block.UPDATE_ALL;
+			level.setBlock(pos.set(x, y, z), (y < shadow ? core : block).defaultBlockState(), flags);
 			changed++;
 		}
 		return changed;
+	}
+
+	/** Нижний пояс пика: тот же камень биома, но тёмный — тень у основания. */
+	private static Block spikeCore(BlockState ground, int cell) {
+		if (ground.is(BlockTags.SAND)) {
+			return pick(cell, Blocks.STONE, Blocks.SANDSTONE);
+		}
+		if (ground.is(BlockTags.TERRACOTTA)) {
+			return pick(cell, Blocks.TERRACOTTA, Blocks.STONE);
+		}
+		if (ground.is(Blocks.DEEPSLATE)) {
+			return Blocks.DEEPSLATE;
+		}
+		return pick(cell, Blocks.TUFF, Blocks.STONE);
 	}
 
 	/**
@@ -1388,6 +1475,9 @@ public final class AnomalyScars {
 	 * вырезало бы крышу у него над головой (или правило бы невидимый пол в 50 блоках наверху).
 	 */
 	public static int microCrater(ServerLevel level, double x, double z, double radius, int depth, double nearY) {
+		if (!microBudget(level)) {
+			return 0;
+		}
 		int bx = (int) Math.floor(x);
 		int bz = (int) Math.floor(z);
 		if (!level.getChunkSource().hasChunk(bx >> 4, bz >> 4)) {
@@ -1466,6 +1556,9 @@ public final class AnomalyScars {
 
 	/** Гарь от молнии: мёртвая земля и снесённые растения в маленьком пятне. */
 	public static int scorch(ServerLevel level, double x, double z, double radius, double nearY) {
+		if (!microBudget(level)) {
+			return 0;
+		}
 		int bx = (int) Math.floor(x);
 		int bz = (int) Math.floor(z);
 		if (!level.getChunkSource().hasChunk(bx >> 4, bz >> 4)) {

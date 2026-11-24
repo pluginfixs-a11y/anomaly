@@ -1243,10 +1243,10 @@ public final class SelfTest {
 		broken.node_r = 1.0e9;
 		report(result, "битый узел из файла отменяется", broken.valid() && !broken.nodes_placed);
 
-		// радиус рейда не тянется за радиусом зоны, но у большой зоны узлы не в самом ядре
-		report(result, "радиус узлов: 30 % зоны в пределах 20..360",
-				AnomalyNodes.nodeRadius(20.0) == 20.0 && AnomalyNodes.nodeRadius(700.0) == 210.0
-						&& AnomalyNodes.nodeRadius(3000.0) == 360.0);
+		// узлы — неглубокий заход от края: радиус почти равен радиусу зоны
+		report(result, "радиус узлов: в 120..360 блоках от края",
+				AnomalyNodes.nodeRadius(20.0) >= 20.0 && AnomalyNodes.nodeRadius(700.0) == 700.0 - 245.0
+						&& AnomalyNodes.nodeRadius(3000.0) == 2640.0);
 
 		// все пять точек узлов: кладовая, алтарь и три якоря — внутри зоны
 		java.util.List<double[]> spots = AnomalyNodes.nodeSpots(anomaly, 1000.0, -500.0, 160.0);

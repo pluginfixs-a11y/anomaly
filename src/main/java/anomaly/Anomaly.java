@@ -120,6 +120,13 @@ public final class Anomaly {
 	/** Для какого op уже сыгран сигнал перед следом (не пишется в файл). */
 	public transient int scar_telegraph_for = -1;
 
+	/**
+	 * Пауза между сигналом и блоками: игрок должен успеть обернуться, а не увидеть гору
+	 * через тик после пыли. Номер op и тик, до которого след не применяется.
+	 */
+	public transient int scar_hold_for = -1;
+	public transient long scar_hold_until;
+
 	/** Попытки поставить узлы и время последней: зона в океане не должна грузить чанки вечно. */
 	public transient int node_tries;
 	public transient long node_try_ms;

@@ -249,7 +249,15 @@ public class AnomalyMod implements ModInitializer {
 		state.netherTicks += AnomalyState.stepTicks(seconds);
 		if (state.netherTicks >= 120) {
 			state.netherTicks = 0;
-			player.hurt(player.level().damageSources().magic(), (float) (1.6 + 1.6 * depth));
+			// оброк должен читаться, а не бить из пустоты: гул душ и пепел вокруг игрока
+			// за пару секунд до урона — иначе это выглядит как случайный урон от сервера
+			player.level().playSound(null, player.getX(), player.getY(), player.getZ(),
+					net.minecraft.sounds.SoundEvents.SOUL_ESCAPE.value(),
+					net.minecraft.sounds.SoundSource.AMBIENT, 1.6f, 0.55f);
+			((net.minecraft.server.level.ServerLevel) player.level()).sendParticles(
+					new net.minecraft.core.particles.DustColorTransitionOptions(0x6B1A1A, 0x1F1013, 0.7f),
+					player.getX(), player.getY() + 1.0, player.getZ(), 24, 0.9, 0.7, 0.9, 0.01);
+			player.hurt(player.level().damageSources().magic(), (float) (2.0 + 2.4 * depth));
 			// сатурация в аду тоже сливается: иначе полный стейк даёт реген 2 HP/с и оброк не виден
 			player.getFoodData().setSaturation(0.0f);
 		}
