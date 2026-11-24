@@ -721,14 +721,16 @@ public enum AnomalyComponent {
 	 * заканчивается голодной смертью от одного невидимого эффекта.
 	 */
 	private static void sourFood(ServerPlayer player) {
+		// один бросок на событие, а не на каждый стак: иначе с пятью видами еды
+		// «один предмет» превращалось в один предмет каждые несколько секунд
+		if (player.getRandom().nextInt(4) != 0) {
+			return;
+		}
 		var inventory = player.getInventory();
 		for (int i = 0; i < inventory.getContainerSize(); i++) {
 			ItemStack stack = inventory.getItem(i);
 			if (stack.isEmpty() || !stack.has(DataComponents.FOOD) || stack.is(Items.ROTTEN_FLESH)
 					|| stack.is(Items.GOLDEN_APPLE) || stack.is(Items.ENCHANTED_GOLDEN_APPLE)) {
-				continue;
-			}
-			if (player.getRandom().nextInt(4) != 0) {
 				continue;
 			}
 			stack.shrink(1);
@@ -825,9 +827,9 @@ public enum AnomalyComponent {
 	 */
 	public SoundEvent signature() {
 		return switch (this) {
-			case HUNGER_DRAIN -> SoundEvents.GENERIC_EAT.value();
+			case HUNGER_DRAIN -> SoundEvents.SCULK_CATALYST_BLOOM;
 			case SATURATION_BURN -> SoundEvents.GENERIC_DRINK.value();
-			case XP_LEAK -> SoundEvents.EXPERIENCE_ORB_PICKUP;
+			case XP_LEAK -> SoundEvents.ENCHANTMENT_TABLE_USE;
 			case COLD_CREEP -> SoundEvents.GLASS_STEP;
 			case AIR_DRAIN -> SoundEvents.PLAYER_HURT_DROWN;
 			case PRESSURE -> SoundEvents.BONE_BLOCK_STEP;
@@ -836,7 +838,7 @@ public enum AnomalyComponent {
 			case TRACTION -> SoundEvents.BONE_MEAL_USE;
 			case REPULSION -> SoundEvents.ANVIL_STEP;
 			case BAD_SLEEP -> SoundEvents.PLAYER_BREATH;
-			case MOB_EARS -> SoundEvents.GRASS_STEP;
+			case MOB_EARS -> SoundEvents.BAT_TAKEOFF;
 			case DARK_SUCKING -> SoundEvents.CANDLE_EXTINGUISH;
 			case HUSK_BLOOM -> SoundEvents.SCULK_BLOCK_SPREAD;
 			case WEAR -> SoundEvents.ANVIL_HIT;
@@ -852,6 +854,14 @@ public enum AnomalyComponent {
 			case ANVIL_RAIN -> SoundEvents.ANVIL_LAND;
 			case MADNESS_RING -> SoundEvents.RESPAWN_ANCHOR_AMBIENT;
 		};
+	}
+
+	/**
+	 * Питч подписи: у каждого компонента свой, чтобы два разных сигнала не сливались
+	 * в один и тот же «звук зоны». 0.60–1.37 по номеру компонента.
+	 */
+	public float signaturePitch() {
+		return 0.60f + (ordinal() % 12) * 0.07f;
 	}
 
 	/** Высота рельефа для точки или запасное значение, если чанк не загружен. */
@@ -875,3 +885,4 @@ public enum AnomalyComponent {
 				+ cost + ")";
 	}
 }
+

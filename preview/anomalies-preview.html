@@ -45,6 +45,9 @@
   .legend { display: grid; gap: 6px; }
   .legend div { display: flex; align-items: center; gap: 8px; color: var(--muted); }
   .sw { width: 12px; height: 12px; border-radius: 2px; opacity: .85; flex: none; }
+  .sw-line { background: none; border: 1px solid #cbbfa5; }
+  .sw-dash { background: none; border: 1px dashed #cbbfa5; }
+  .sw-dark { background: radial-gradient(circle, #0a0806 40%, #4a3a26 100%); }
   .stats { display: grid; grid-template-columns: 1fr auto; gap: 4px 10px; font-family: Consolas, monospace;
     font-size: 12px; }
   .stats .k { color: var(--muted); }
@@ -83,11 +86,12 @@
 
     <h2>Классы</h2>
     <div class="legend">
-      <div><span class="sw" style="background:var(--home)"></span>дом 0–3к: всё гаснет</div>
-      <div><span class="sw" style="background:#7d6f58"></span>3–6к: занос и затухание</div>
       <div><span class="sw" style="background:var(--safe)"></span>6–10к: безопасные</div>
       <div><span class="sw" style="background:var(--danger)"></span>10–15к: опасные</div>
       <div><span class="sw" style="background:var(--deadly)"></span>15к+: смертельные</div>
+      <div><span class="sw sw-line"></span>сплошной контур — край зоны</div>
+      <div><span class="sw sw-dash"></span>пунктир — ядро 45 % радиуса</div>
+      <div><span class="sw sw-dark"></span>тёмное пятно — следы разрушения</div>
     </div>
 
     <h2>Поле</h2>
@@ -151,8 +155,8 @@ function classAt(d, jitter = 0) {
 
 // вероятность появления аномалии в точке: до 5к ноль, дальше растёт
 function spawnChance(d) {
-  if (d < 5000) return 0;
-  if (d < RING_HOME) return 0.10;
+  if (d < RING_HOME) return 0; // мод ближе 6к зон не рождает вовсе
+  if (d < RING_HOME + 800) return 0.10;
   if (d < RING_SAFE) return 0.45;
   if (d < RING_DANGER) return 0.85;
   return 1.0;
@@ -260,15 +264,17 @@ function damageBlocks(a) {
   if (a.cls.key === "safe") return 0;
   const r = a.baseRadius;
   if (r <= DAMAGE_TABLE[0][0]) return 0;
+  // пол бюджета как в игре: у мелких 120/40 блоков, иначе превью показывает «ничего»
+  const floor = r >= 150 ? 120 : 40;
   for (let i = 1; i < DAMAGE_TABLE.length; i++) {
     const [r1, b1] = DAMAGE_TABLE[i];
     const [r0, b0] = DAMAGE_TABLE[i - 1];
     if (r <= r1) {
       const k = (r - r0) / (r1 - r0);
-      return Math.round(b0 + (b1 - b0) * k * k);
+      return Math.max(floor, Math.round(b0 + (b1 - b0) * k * k));
     }
   }
-  return DAMAGE_TABLE[DAMAGE_TABLE.length - 1][1];
+  return Math.max(floor, DAMAGE_TABLE[DAMAGE_TABLE.length - 1][1]);
 }
 
 function radiusAt(a, t) {  const age = t - a.birth;
@@ -561,21 +567,26 @@ function drawDamage(a, st) {
   const blocks = damageBlocks(a);
   if (blocks <= 0) return;
   const strength = Math.min(1, Math.log10(blocks + 1) / 5.4); // 300 → ~0.46, 250k → 1.0
+  const rnd = mulberry32(a.id * 7919 + 13);
 
-  // выжженное пятно в ядре — по бюджету, а не «полрадиуса у каждой»: у r=200 бюджет 120 блоков,
-  // и полрадиуса было бы 31 тыс. — превью врало про масштаб разрушений в 250 раз
+  // выжженное пятно — по бюджету и смещённое от центра: в игре следы живут в полосе
+  // 0.18–0.85 радиуса, а не ровно в ядре (у r=200 бюджет 120 блоков, полрадиуса было бы 31 тыс.)
   const patchR = Math.min(st.radius * 0.5, Math.sqrt(blocks / Math.PI) * 1.6);
-  polygonPath(shapePoints(a, { x: st.x, z: st.z, radius: patchR }, 1));
+  const patchAngle = rnd() * Math.PI * 2;
+  const patchDist = st.radius * (0.18 + 0.5 * rnd());
+  polygonPath(shapePoints(a, {
+    x: st.x + Math.cos(patchAngle) * patchDist,
+    z: st.z + Math.sin(patchAngle) * patchDist,
+    radius: patchR
+  }, 1));
   ctx.fillStyle = `rgba(10, 8, 6, ${0.32 + 0.45 * strength})`;
   ctx.fill();
   ctx.strokeStyle = `rgba(120, 96, 62, ${0.30 + 0.45 * strength})`;
   ctx.lineWidth = 1;
   ctx.stroke();
 
-  const rnd = mulberry32(a.id * 7919 + 13);
-
   // обломки: видны даже когда зона мелкая и пятно крошечное
-  const specks = Math.min(30, Math.round(3 + blocks / 3500));
+  const specks = Math.min(48, Math.round(8 + blocks / 600));
   for (let i = 0; i < specks; i++) {
     const ang = rnd() * Math.PI * 2;
     const dist = Math.sqrt(rnd()) * st.radius * 0.45;
@@ -585,8 +596,8 @@ function drawDamage(a, st) {
     ctx.fillRect(sx - size / 2, sy - size / 2, size, size);
   }
 
-  if (blocks < 5000) return;
-  const spikes = Math.min(6, 1 + Math.floor(blocks / 50000));
+  if (blocks < 2000) return; // пики — это настоящие блоки камня, у мелких зон их нет
+  const spikes = Math.min(8, 2 + Math.floor(blocks / 2000));
   const tallest = Math.min(150, 20 + Math.sqrt(blocks) * 0.22);
   const s = baseScale();
   for (let i = 0; i < spikes; i++) {
@@ -838,4 +849,7 @@ window.anomalyPreview = {
 </script>
 </body>
 </html>
+
+
+
 

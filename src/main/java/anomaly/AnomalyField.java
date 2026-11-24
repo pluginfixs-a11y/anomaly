@@ -174,9 +174,9 @@ public final class AnomalyField {
 		}
 		long real = System.currentTimeMillis();
 		// файл на 600 зон — 1.3 МБ: сериализация на тик-потоке, запись — в отдельном потоке.
-		// Не чаще раза в 30 с на изменения и раз в пять минут для часов; на остановке пишем синхронно
-		boolean due = real - lastSaveMs > 30_000L;
-		if ((dirty && due) || real - lastSaveMs > 5 * 60_000L) {
+		// Пишем только когда есть что писать: пустой сервер не должен сериализовать поле
+		boolean due = real - lastSaveMs > 60_000L;
+		if (dirty && due) {
 			saveAsync();
 		}
 	}

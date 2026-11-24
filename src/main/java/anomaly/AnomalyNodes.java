@@ -30,11 +30,11 @@ import java.util.Random;
 /**
  * Рейды в аномалии: то, ради чего в неё вообще идут.
  * <p>
- * Три узла, которые появляются лениво — когда игрок впервые подошёл к ядру зоны на 96 блоков
- * (никакой генерации чанков ради этого):
+ * Три узла, которые появляются лениво — когда игрок впервые подошёл к точке узлов ближе 96 блоков
+ * или к ядру ближе 256 (никакой генерации чанков ради этого):
  * <ul>
  *   <li><b>кладовая</b> — сундук с лутом по классу зоны; восстанавливается, пока зона жива;</li>
- *   <li><b>алтарь</b> — обмен 5 уровней опыта на редкое, но остаток растёт на 1.5–3 ч;</li>
+ *   <li><b>алтарь</b> — обмен 15 уровней опыта на редкое, но остаток растёт на 1.5–3 ч;</li>
  *   <li><b>три якоря</b> — снёс все три, зона схлопывается: волна мобов, взрыв и награда из кладовой.</li>
  * </ul>
  * Позиции узлов фиксируются при постановке и живут в файле поля: зона может уехать, узлы остаются
@@ -54,16 +54,6 @@ public final class AnomalyNodes {
 	/** Сколько уровней стоит один обмен на алтаре. */
 	private static final int ALTAR_LEVELS = 15;
 	private static final long ALTAR_COOLDOWN_MS = 1500L;
-	/** Обменов на зону на игрока: «риск как валюта» не должен превращаться в станок. */
-	private static final int ALTAR_MAX_TRADES = 2;
-	/** Счётчик обменов: зона+игрок → сколько раз. Живёт в памяти, сбрасывается рестартом. */
-	private static final java.util.Map<String, Integer> ALTAR_TRADES =
-			new java.util.LinkedHashMap<>(64, 0.75f, true) {
-				@Override
-				protected boolean removeEldestEntry(java.util.Map.Entry<String, Integer> eldest) {
-					return size() > 4096;
-				}
-			};
 	/** Максимальная плата за обмен, часы остатка: под потолком должно оставаться место на неё. */
 	private static final double PAY_MAX = 3.0;
 
@@ -105,6 +95,38 @@ public final class AnomalyNodes {
 			}
 			useAltar(serverLevel, serverPlayer, anomaly);
 			return InteractionResult.SUCCESS;
+		});
+
+		// Якоря: ломать можно только изнутри зоны. Иначе якоря, оставшиеся в чистом поле
+		// после дрейфа, снимались бы без входа в аномалию — а это награда без риска.
+		PlayerBlockBreakEvents.BEFORE.register((level, player, pos, state, blockEntity) -> {
+			if (!AnomalyMod.config.enabled || !AnomalyMod.config.nodes_enabled) {
+				return true;
+			}
+			if (!(level instanceof ServerLevel serverLevel)
+					|| !serverLevel.dimension().equals(net.minecraft.world.level.Level.OVERWORLD)) {
+				return true;
+			}
+			if (!state.is(Blocks.CRYING_OBSIDIAN)) {
+				return true;
+			}
+			Anomaly anomaly = anchorAt(serverLevel, pos);
+			if (anomaly == null || !(player instanceof ServerPlayer serverPlayer)) {
+				return true;
+			}
+			Zone zone = anomaly.zone(AnomalyClock.now());
+			if (zone.contains(serverPlayer.getX(), serverPlayer.getZ())) {
+				return true;
+			}
+			// у мелкой зоны якорь может торчать за край: 62 % от 160 блоков — это 100 блоков
+			// от ядра, а зона может быть меньше. Такой зоне разрешаем, но у большой — только
+			// изнутри: иначе дрейф выносит якоря в чистое поле и рейд становится бесплатным
+			if (zone.radius() < 180.0) {
+				return true;
+			}
+			serverLevel.playSound(null, pos.getX() + 0.5, pos.getY(), pos.getZ() + 0.5,
+					SoundEvents.VILLAGER_NO, SoundSource.BLOCKS, 0.7f, 0.6f);
+			return false;
 		});
 
 		// Якоря: сломал третий — зона схлопывается.
@@ -171,12 +193,19 @@ public final class AnomalyNodes {
 		}
 		// восстановление кладовой — для всех зон с узлами, а не только для тех, что рядом с игроком:
 		// у недрейфовавшей зоны кладовая в 0–160 блоках от ядра, то есть всегда «рядом», и проверка
-		// занятости по 512 блокам отменяла бы восстановление навсегда
+		// занятости по 512 блокам отменяла бы восстановление навсегда. Один лоад чанка на тик:
+		// после простоя сотни зон могут быть «готовы», и все лоады в одном тике — это фриз
+		int budget = 1;
 		for (Anomaly anomaly : AnomalyField.raw()) {
+			if (budget <= 0) {
+				break;
+			}
 			if (!anomaly.nodes_placed || anomaly.remnant || !anomaly.node_cache_ok) {
 				continue;
 			}
-			restoreCache(level, anomaly, occupied(server, level, anomaly));
+			if (restoreCache(level, anomaly, occupied(server, level, anomaly))) {
+				budget--;
+			}
 		}
 	}
 
@@ -189,9 +218,12 @@ public final class AnomalyNodes {
 	 */
 	private static boolean placeNodes(ServerLevel level, Anomaly anomaly, Zone zone) {
 		if (!Double.isFinite(anomaly.node_r) || anomaly.node_r <= 0.0) {
-			anomaly.node_cx = zone.coreX();
-			anomaly.node_cz = zone.coreZ();
+			// кладовую ставим НЕ в ядре: в ядре 15 HP/мин, и «приз» за рейд обходился дороже
+			// дропа. Точка узлов на 45 % радиуса рейда — это уже риск, но ещё достижимо
 			anomaly.node_r = nodeRadius(zone.radius());
+			double angle = baseAngle(anomaly);
+			anomaly.node_cx = zone.coreX() + Math.cos(angle) * anomaly.node_r * 0.45;
+			anomaly.node_cz = zone.coreZ() + Math.sin(angle) * anomaly.node_r * 0.45;
 			anomaly.anchors_broken = 0;
 			anomaly.anchors_placed = 0;
 			anomaly.node_cache_ok = false;
@@ -260,42 +292,60 @@ public final class AnomalyNodes {
 	}
 
 	/**
-	 * Кладовая: если её разобрали, а зона жива, раз в 10 минут сундук появляется снова.
+	 * Кладовая: если её разобрали, а зона жива, раз в 25 минут сундук появляется снова.
 	 * Пока в зоне стоит игрок, кладовая не восстанавливается: иначе кемпинг у сундука —
 	 * бесконечный лут, а «кемпинг невыгоден» — правило мода, а не пожелание.
+	 * <p>
+	 * Чанк грузим только когда восстанавливать реально есть что: пока сундук на месте,
+	 * лоад каждые 25 минут на каждую зону поля — это сотни блокирующих чтений с диска впустую.
 	 */
-	private static void restoreCache(ServerLevel level, Anomaly anomaly, boolean occupied) {
+	private static boolean restoreCache(ServerLevel level, Anomaly anomaly, boolean occupied) {
 		if (!anomaly.node_cache_ok || anomaly.remnant || anomaly.cache_restores >= CACHE_MAX_RESTORES) {
-			return;
+			return false;
 		}
 		long now = System.currentTimeMillis();
+		BlockPos pos = blockPos(anomaly.node_cx, anomaly.node_cy, anomaly.node_cz);
 		if (occupied) {
-			// отсчёт начинается с момента, когда рядом никого не осталось, а не с прошлой выдачи
+			// отсчёт начинается с момента, когда рядом никого не осталось, а не с прошлой выдачи.
+			// Игрок рядом — чанк загружен, значит бесплатно видно, забрали ли сундук: без этого
+			// рефилл узнавал бы о пропаже лишь при следующей загрузке чанка
 			anomaly.node_cache_ms = now;
-			return;
+			if (!anomaly.cache_looted && level.getChunkSource().hasChunk(pos.getX() >> 4, pos.getZ() >> 4)
+					&& !level.getBlockState(pos).is(Blocks.CHEST)) {
+				anomaly.cache_looted = true;
+				AnomalyField.markDirty();
+			}
+			return false;
+		}
+		if (!anomaly.cache_looted) {
+			// восстанавливать нечего: сундук на месте (или его никто не трогал)
+			return false;
 		}
 		if (!cacheDue(anomaly.node_cache_ms, now, false)) {
-			return;
+			return false;
 		}
-		BlockPos pos = blockPos(anomaly.node_cx, anomaly.node_cy, anomaly.node_cz);
 		if (!level.getChunkSource().hasChunk(pos.getX() >> 4, pos.getZ() >> 4)) {
 			// чанк выгружен — а без игрока рядом он всегда выгружен, и «занято» его и не пускало:
 			// рефилл был недостижим. Грузим сами; восстановлений не больше трёх за жизнь зоны
 			level.getChunk(pos.getX() >> 4, pos.getZ() >> 4);
 		}
 		if (level.getBlockState(pos).is(Blocks.CHEST)) {
+			// сундук уже вернули (или его не ломали): флаг снимаем, ждём следующего раза
+			anomaly.cache_looted = false;
 			anomaly.node_cache_ms = now;
-			return;
+			return true;
 		}
 		if (!level.getBlockState(pos).canBeReplaced()) {
 			// место заняли (постройка, обвал): ждём следующего окна, а не проверяем каждый тик
 			anomaly.node_cache_ms = now;
-			return;
+			return false;
 		}
 		placeChest(level, anomaly, pos);
 		anomaly.node_cache_ms = now;
 		anomaly.cache_restores++;
+		anomaly.cache_looted = false;
 		AnomalyField.markDirty();
+		return true;
 	}
 
 	/** Пора ли восстанавливать кладовую: чистая функция, по ней же гоняется самопроверка. */
@@ -462,22 +512,8 @@ public final class AnomalyNodes {
 		if (last != null && now - last < ALTAR_COOLDOWN_MS) {
 			return;
 		}
-		// обмен только внутри зоны: дрейф уносит узлы из зоны, и алтарь в чистом поле —
-		// это магазин без риска
-		Zone zone = anomaly.zone(AnomalyClock.now());
-		if (!zone.contains(player.getX(), player.getZ())) {
-			level.playSound(null, player.getX(), player.getY(), player.getZ(),
-					SoundEvents.VILLAGER_NO, SoundSource.BLOCKS, 0.8f, 0.6f);
-			return;
-		}
-		// и не больше двух обменов на зону: иначе 21 час остатка превращается в поток тотемов
-		String key = player.getUUID() + ":" + anomaly.id;
-		int trades = ALTAR_TRADES.getOrDefault(key, 0);
-		if (trades >= ALTAR_MAX_TRADES) {
-			level.playSound(null, player.getX(), player.getY(), player.getZ(),
-					SoundEvents.VILLAGER_NO, SoundSource.BLOCKS, 0.8f, 0.5f);
-			return;
-		}
+		// обмен по клику: узел может уехать из зоны вместе с дрейфом, и требование «внутри»
+		// делало алтарь мёртвым. Цена — урон от самой зоны, а не формальная проверка
 		if (player.experienceLevel < ALTAR_LEVELS) {
 			level.playSound(null, player.getX(), player.getY(), player.getZ(),
 					SoundEvents.VILLAGER_NO, SoundSource.BLOCKS, 0.8f, 0.7f);
@@ -492,7 +528,6 @@ public final class AnomalyNodes {
 			return;
 		}
 		ALTAR_LAST.put(player.getUUID(), now);
-		ALTAR_TRADES.put(key, trades + 1);
 		player.giveExperienceLevels(-ALTAR_LEVELS);
 		AnomalyClass cls = AnomalyClass.byId(anomaly.cls);
 		Random rnd = new Random(player.getUUID().getLeastSignificantBits() ^ System.nanoTime());
@@ -643,12 +678,15 @@ public final class AnomalyNodes {
 			return false;
 		}
 		Zone zone = anomaly.zone(AnomalyClock.now());
-		double cx = Double.isFinite(anomaly.node_r) && anomaly.node_r > 0.0 ? anomaly.node_cx : zone.coreX();
-		double cz = Double.isFinite(anomaly.node_r) && anomaly.node_r > 0.0 ? anomaly.node_cz : zone.coreZ();
-		double r = Double.isFinite(anomaly.node_r) && anomaly.node_r > 0.0
-				? anomaly.node_r : nodeRadius(zone.radius());
+		if (!Double.isFinite(anomaly.node_r) || anomaly.node_r <= 0.0) {
+			// ту же привязку, что делает placeNodes: узлы на 45 % радиуса рейда от ядра
+			anomaly.node_r = nodeRadius(zone.radius());
+			double angle = baseAngle(anomaly);
+			anomaly.node_cx = zone.coreX() + Math.cos(angle) * anomaly.node_r * 0.45;
+			anomaly.node_cz = zone.coreZ() + Math.sin(angle) * anomaly.node_r * 0.45;
+		}
 		// команда — отладка: чанки узлов грузим сами, иначе ставить некуда
-		for (double[] at : nodeSpots(anomaly, cx, cz, r)) {
+		for (double[] at : nodeSpots(anomaly, anomaly.node_cx, anomaly.node_cz, anomaly.node_r)) {
 			level.getChunk((int) Math.floor(at[0]) >> 4, (int) Math.floor(at[1]) >> 4);
 		}
 		return placeNodes(level, anomaly, zone);
@@ -763,4 +801,5 @@ public final class AnomalyNodes {
 				: String.valueOf(Math.round(value));
 	}
 }
+
 

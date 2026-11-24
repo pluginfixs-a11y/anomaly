@@ -115,6 +115,13 @@ public class AnomalyMod implements ModInitializer {
 			return;
 		}
 
+		// Нижний мир — тот же мир в масштабе 1:8. Рейд в аду на 2 тыс. блоков — это 16 км
+		// по Верхнему, и бесплатного обхода поля быть не должно. Проверка стоит ДО выхода по
+		// overworld_only: иначе оброк был бы мёртвым кодом
+		if (level.dimension() == Level.NETHER) {
+			netherToll(player, state, config, seconds);
+		}
+
 		// вне Верхнего мира и у наблюдателей доза просто спадает, а не замирает;
 		// остаток при этом продолжает таять — иначе Нижний стал бы бесплатной паузой
 		if ((config.overworld_only && level.dimension() != Level.OVERWORLD) || player.isSpectator()) {
@@ -129,12 +136,6 @@ public class AnomalyMod implements ModInitializer {
 		// предвестник: за 10–30 минут до рождения зона уже шумит. Это не зона, дозы нет
 		for (Anomaly herald : AnomalyField.heralds(level, player.getX(), player.getZ(), 192.0)) {
 			AnomalyEffects.herald(level, player, herald, AnomalyClock.now());
-		}
-
-		// Нижний мир — тот же мир в масштабе 1:8. Рейд в аду на 2 тыс. блоков — это 16 км
-		// по Верхнему, и бесплатного обхода поля быть не должно
-		if (level.dimension() == Level.NETHER) {
-			netherToll(player, state, config, seconds);
 		}
 
 		List<Zone> near = AnomalyField.near(level, player.getX(), player.getZ(), config.view_range);

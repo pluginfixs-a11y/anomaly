@@ -89,6 +89,12 @@ public final class Anomaly {
 	/** Сколько раз кладовая наполнялась за жизнь зоны: ограничено, см. {@link AnomalyNodes}. */
 	public int cache_restores;
 
+	/**
+	 * Сундук кто-то забрал или сломал. Пока флага нет, восстанавливать нечего, и чанк
+	 * кладовой не грузится по таймеру зря (было: лоад каждые 25 минут на каждую зону).
+	 */
+	public boolean cache_looted;
+
 	/** План следов разрушения. Хранится правилами, а не списком блоков. */
 	public List<ScarOp> scars = new ArrayList<>();
 
@@ -105,7 +111,7 @@ public final class Anomaly {
 	public double node_cz;
 	public double node_cy;
 	public double node_r;
-	/** Кладовая поставлена: если её разобрали, раз в 10 минут она возвращается. */
+	/** Кладовая поставлена: если её разобрали, раз в 25 минут она возвращается. */
 	public boolean node_cache_ok;
 	/** Алтарь поставлен и его высота: без y любой lodestone в той же колонке считался бы алтарём. */
 	public boolean node_altar_ok;
@@ -114,7 +120,7 @@ public final class Anomaly {
 	public int[] anchor_ys = new int[3];
 	/** Биты поставленных якорей: каждый появляется сам, когда загружен его чанк. */
 	public int anchors_placed;
-	/** Когда кладовая была поставлена: раз в 10 минут её можно восстановить, если зона жива. */
+	/** Когда кладовая была поставлена: раз в 25 минут её можно восстановить, если зона жива. */
 	public long node_cache_ms;
 	/** Биты сломанных якорей: три из трёх — зона схлопывается. */
 	public int anchors_broken;
@@ -438,4 +444,5 @@ public final class Anomaly {
 		return false;
 	}
 }
+
 

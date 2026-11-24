@@ -51,8 +51,15 @@ public final class AnomalyEffects {
 		// головой дороже, чем с чистой
 		intensity *= AnomalyResidue.hazardScale(player);
 		// у смертельной зоны есть и своя цена за время внутри: раз в 6 с, 0.8–1.5 HP по глубине
-		// и дозе. Без неё «смертельная» остаётся неприятным фоном, и в даль ходят за лутом без риска
-		if (zone.cls() == AnomalyClass.DEADLY && !zone.remnant() && !player.isCreative() && !player.isSpectator()) {
+		// и дозе. Класс фиксируется при рождении, а зона дрейфует: если она приехала в 6–10 км,
+		// она больше не «смертельная» — иначе таблица классов в README врёт. У своего
+		// респавна deadly не бьёт: иначе база превращается в death loop. И у самого узла
+		// кладовой — карман тишины: иначе приз стоит дороже дропа и даль невыгодна
+		boolean deadlyActive = zone.cls() == AnomalyClass.DEADLY && !zone.remnant()
+				&& Math.hypot(zone.x(), zone.z()) > config.deadly_from - config.class_blur
+				&& !nearOwnRespawn(player, 32.0)
+				&& !nearNodePocket(zone, player, 12.0);
+		if (deadlyActive && !player.isCreative() && !player.isSpectator()) {
 			state.hazardTicks += AnomalyState.stepTicks(seconds);
 			if (state.hazardTicks >= 120) {
 				state.hazardTicks = 0;
@@ -116,9 +123,31 @@ public final class AnomalyEffects {
 		interior(level, player, zone, sd, state);
 	}
 
+	/** У своего респавна deadly не бьёт: база в зоне не должна быть death loop. */
+	static boolean nearOwnRespawn(ServerPlayer player, double radius) {
+		var respawn = player.getRespawnConfig();
+		if (respawn == null || respawn.respawnData() == null) {
+			return false;
+		}
+		var pos = respawn.respawnData().pos();
+		return Math.hypot(player.getX() - (pos.getX() + 0.5), player.getZ() - (pos.getZ() + 0.5)) < radius;
+	}
+
 	/**
-	 * Пора ли рисовать кадр стены. Вынесено из ambience, чтобы это проверялось тестом:
-	 * при {@code period == step} условие было истинным всегда, и стена у края рисовалась
+	 * Карман тишины у кладовой: в смертельной зоне урон идёт везде, и без паузы у самого
+	 * узла приз (незерит/тотем) стоил бы дороже, чем дроп. Пауза только на радиус узла —
+	 * кемпинг всё равно невыгоден: кладовая молчит, пока рядом кто-то есть.
+	 */
+	static boolean nearNodePocket(Zone zone, ServerPlayer player, double radius) {
+		var anomaly = zone.anomaly();
+		if (anomaly == null || !Double.isFinite(anomaly.node_cx) || anomaly.node_r <= 0.0) {
+			return false;
+		}
+		return Math.hypot(player.getX() - anomaly.node_cx, player.getZ() - anomaly.node_cz) < radius;
+	}
+
+	/**
+	 * Пора ли рисовать кадр стены. Вынесено из ambience, чтобы это проверялось тестом:	 * при {@code period == step} условие было истинным всегда, и стена у края рисовалась
 	 * 2 раза в секунду вне зависимости от фаз зон — залп из сотен пакетов в одном тике.
 	 */
 	static boolean frameDue(int tick, int phase, int period, int step) {
@@ -197,8 +226,8 @@ public final class AnomalyEffects {
 			return;
 		}
 		double dist = Math.hypot(zone.coreX() - player.getX(), zone.coreZ() - player.getZ());
-		// дальше 192 блоков клиент маяк уже не отрисует: пакеты ушли бы в никуда
-		if (dist > 192.0) {
+		// дальше 256 блоков клиент маяк уже не отрисует: пакеты ушли бы в никуда
+		if (dist > 256.0) {
 			return;
 		}
 		int bx = (int) Math.floor(zone.coreX());
@@ -207,8 +236,9 @@ public final class AnomalyEffects {
 			return;
 		}
 		double base = level.getHeight(Heightmap.Types.MOTION_BLOCKING, bx, bz);
-		// столб до 40 блоков над землёй, но не выше 64 и не ниже уровня глаз игрока в горах
-		int top = (int) Math.min(64.0, Math.max(40.0, player.getY() + 16.0 - base));
+		// столб до 96 блоков над землёй — это ориентир из середины трёхкилометровой зоны,
+		// где своего края не видно; ниже 56 он не поднимается над лесным пологом
+		int top = (int) Math.min(96.0, Math.max(56.0, player.getY() + 20.0 - base));
 		// три пакета вместо одного: основание шириной полтора блока, тело столба и верхушка.
 		// Один пакет на 28 частиц давал белую нитку в один пиксель — это читалось как баг
 		int color = zone.edgeColor();
@@ -241,8 +271,8 @@ public final class AnomalyEffects {
 				if (sd > 0.0) {
 					continue;
 				}
-				double cellX = Math.floor(player.getX() / 64.0) * 64.0 + 32.0;
-				double cellZ = Math.floor(player.getZ() / 64.0) * 64.0 + 32.0;
+				double cellX = Math.floor(player.getX() / 64.0) * 64.0 + 32.0 + (i - 1) * 64.0;
+				double cellZ = Math.floor(player.getZ() / 64.0) * 64.0 + 32.0 + (i - 1) * 64.0;
 				double jitterX = (noise01(zone.id() * 53L + i * 977L) - 0.5) * 48.0;
 				double jitterZ = (noise01(zone.id() * 71L + i * 131L) - 0.5) * 48.0;
 				ax = cellX + jitterX;
@@ -324,12 +354,12 @@ public final class AnomalyEffects {
 	}
 
 	/**
-	 * Дуга пыли по краю вблизи игрока. Шаг ~4 блока, высота каждой точки — по рельефу: на склоне
+	 * Дуга пыли по краю вблизи игрока. Шаг ~3 блока, высота каждой точки — по рельефу: на склоне
 	 * дуга иначе уходит в землю или висит в воздухе. {@code count} разбрасывает частицы по
 	 * вертикали (полоса стены), {@code spread} — её высота. Пакет адресован одному игроку: общая
 	 * рассылка уходила бы всем в измерении, а {@code overrideLimiter} ещё и на 512 блоков.
 	 * Chunk-и не грузим: в незагруженном чанке {@code getHeight} отдаёт дно мира, а косметика
-	 * не стоит генерации. {@code radiusFactor} — второй контур внутри зоны (для light_wall).
+	 * не стоит генерации. {@code radiusFactor} — доля радиуса зоны (1.0: сам край).
 	 */
 	static void edgeBand(ServerLevel level, ServerPlayer player, Zone zone, double reach, float scale,
 			int count, double spread, double radiusFactor) {
@@ -354,12 +384,12 @@ public final class AnomalyEffects {
 		// втрое больше, а дальняя сторона полного кольца выходит за reach и пропадает
 		arc *= 0.5 * (1.0 + Math.min(2.0, Math.max(0.2, zone.anomaly().stretch)));
 		boolean far = zone.signedDistance(player.getX(), player.getZ()) > 96.0;
-		// полное кольцо у мелкой зоны: шаг 3 блока вместо 8 — иначе между точками провалы
-		// в 6–8 блоков, и кольцо читается как пунктир/конфетти. Потолок 56: при 160 точках
-		// и пяти пакетах на точку один кадр давал 600+ пакетов в тике. Дальше 96 блоков от
-		// края режем вдвое: там стена и так в пару пикселей
+		// полное кольцо у мелкой зоны: 128 точек. При 56 на r=150 шаг был 20 блоков и
+		// кольцо читалось как пунктир; 128 даёт 7.4, а у мелких — 3–5. Лишние ветки
+		// (вертикальный язык, акцент) на полном кольце режем: они нужны для читаемости
+		// с 100+ блоков, а тут игрок и так близко
 		double spacing = 3.0;
-		int cap = far ? 28 : 56;
+		int cap = far ? 28 : 128;
 		int points = Math.max(24, Math.min(cap, (int) (arc / spacing)));
 		// полное кольцо — это в 5 раз больше точек: плотность на точку вдвое ниже, иначе
 		// один кадр такой зоны вытесняет все остальные частицы у клиента
@@ -385,22 +415,22 @@ public final class AnomalyEffects {
 			// у стены есть толщина: нулевой разброс давал плоскость в один пиксель, которую
 			// видно только строго сбоку
 			level.sendParticles(player, dust, true, true, point[0], y, point[1], count, 0.6, spread, 0.6, 0.0);
-			if (i % 5 == 0 && !full) {
+			if (i % 5 == 0) {
 				// приземная полоса: в лесу и на склоне стена не должна висеть только на уровне глаз
 				level.sendParticles(player, dust, true, true, point[0], y - 0.4, point[1],
 						Math.max(2, count / 2), 0.5, 1.0, 0.5, 0.0);
 			}
-			if (i % 4 == 0) {
+			if (i % (full ? 6 : 4) == 0 && !far) {
 				// верхние клочья: стена выше и не обрывается ровной линией по грудь
 				level.sendParticles(player, dust, true, true, point[0], y + spread + 2.5, point[1],
 						2, 0.3, 1.5, 0.3, 0.0);
 			}
-			if (i % 6 == 0) {
+			if (i % 6 == 0 && !far && !full) {
 				// вертикальный «язык»: один пакет на шесть точек, а край читается и с 40–60 блоков
 				level.sendParticles(player, dust, true, true, point[0], y + 2.5, point[1],
 						6, 0.25, 5.0, 0.25, 0.0);
 			}
-			if (i % 3 == 0) {
+			if (i % (full ? 6 : 3) == 0) {
 				level.sendParticles(player, accent, true, true, point[0], y + rnd.nextDouble() * spread,
 						point[1], 1, 0.2, 0.3, 0.2, 0.0);
 			}
@@ -439,7 +469,7 @@ public final class AnomalyEffects {
 		for (int i = 0; i < components.size() && played < 2; i++) {
 			AnomalyComponent component = components.get((start + i) % components.size());
 			level.playSound(null, player.getX(), player.getY(), player.getZ(), component.signature(),
-					SoundSource.AMBIENT, 0.6f, played == 0 ? 0.75f : 1.15f);
+					SoundSource.AMBIENT, 0.6f, component.signaturePitch());
 			played++;
 		}
 	}

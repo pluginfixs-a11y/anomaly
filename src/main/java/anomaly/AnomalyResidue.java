@@ -129,21 +129,58 @@ public final class AnomalyResidue {
 		return !dirty || saveNow();
 	}
 
+	/** Фоновая запись: файл остатка маленький, но и он не должен блокировать тик. */
+	private static void saveAsync() {
+		if (writing || path == null) {
+			return;
+		}
+		writing = true;
+		dirty = false;
+		String json;
+		try {
+			json = GSON.toJson(data);
+		} catch (RuntimeException e) {
+			writing = false;
+			dirty = true;
+			return;
+		}
+		Path file = path;
+		RESIDUE_WRITER.execute(() -> {
+			boolean ok = writeText(file, json);
+			writing = false;
+			if (!ok) {
+				dirty = true;
+			}
+		});
+	}
+
+	private static final java.util.concurrent.ExecutorService RESIDUE_WRITER =
+			java.util.concurrent.Executors.newSingleThreadExecutor(runnable -> {
+				Thread thread = new Thread(runnable, "anomaly-residue-save");
+				thread.setDaemon(true);
+				return thread;
+			});
+	private static volatile boolean writing;
+
 	static boolean saveNow() {
 		lastSaveMs = System.currentTimeMillis();
-		boolean ok = path != null && write(path, data);
+		boolean ok = path != null && writeText(path, GSON.toJson(data));
 		dirty = !ok;
 		return ok;
 	}
 
 	static boolean write(Path file, Data payload) {
+		return writeText(file, GSON.toJson(payload));
+	}
+
+	private static boolean writeText(Path file, String json) {
 		try {
 			Path parent = file.getParent();
 			if (parent != null) {
 				Files.createDirectories(parent);
 			}
-			Path tmp = file.resolveSibling(file.getFileName() + ".tmp");
-			Files.writeString(tmp, GSON.toJson(payload), StandardCharsets.UTF_8);
+			Path tmp = file.resolveSibling(file.getFileName() + "." + System.nanoTime() + ".tmp");
+			Files.writeString(tmp, json, StandardCharsets.UTF_8);
 			try {
 				Files.move(tmp, file, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
 			} catch (IOException atomicFailed) {

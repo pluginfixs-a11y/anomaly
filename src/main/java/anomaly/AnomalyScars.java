@@ -191,13 +191,13 @@ public final class AnomalyScars {
 	}
 
 	/**
-	 * Точка в зоне, где ставится след. Не только ядро: у зоны на 3000 блоков следы в 35 %
-	 * радиуса означали, что игрок идёт два километра по нетронутому рельефу и не понимает,
-	 * что уже внутри. Теперь от 45 % до 85 % радиуса — полоса, которую он пересекает.
+	 * Точка в зоне, где ставится след. Не только ядро и не только край: ядро должно быть
+	 * изуродовано, иначе игрок идёт по чистому диску к маяку, а полоса 45–85 % оставляла
+	 * 1.35 км стерильного центра у зоны на 3000.
 	 */
 	private static double[] spot(double cx, double cz, double r0, Random rnd) {
 		double angle = rnd.nextDouble() * TAU;
-		double distance = r0 * (0.45 + 0.40 * Math.sqrt(rnd.nextDouble()));
+		double distance = r0 * (0.18 + 0.67 * Math.sqrt(rnd.nextDouble()));
 		return new double[]{
 				cx + Math.cos(angle) * distance,
 				cz + Math.sin(angle) * distance
@@ -297,7 +297,7 @@ public final class AnomalyScars {
 		}
 		boolean changed = trail(data, config, AnomalyClock.now());
 		// средний mspt — грубый предохранитель с памятью в 100 тиков; точный — по часам внутри прохода
-		if (server.getAverageTickTimeNanos() / 1_000_000.0 > config.mspt_limit) {
+		if (server.getAverageTickTimeNanos() / 1_000_000.0 > Math.min(config.mspt_limit, 30.0)) {
 			return changed;
 		}
 		long deadline = System.nanoTime() + NANOS_PER_PASS;
@@ -305,7 +305,6 @@ public final class AnomalyScars {
 		int chunksThisTick = 0;
 		int columnsThisTick = 0;
 		int blocksThisTick = 0;
-		int failures = 0;
 		long failedAt = 0L;
 		boolean progressed = changed;
 
@@ -322,6 +321,9 @@ public final class AnomalyScars {
 			if (anomaly.scars == null || anomaly.scars.isEmpty() || anomaly.scar_next >= anomaly.scars.size()) {
 				continue;
 			}
+			// зона ещё могла не дорасти: план строится по зрелому радиусу, и на новорождённой
+			// зоне следы падали бы в 1–2 км от неё, где аномалии ещё нет
+			double grownR = anomaly.zone(AnomalyClock.now()).radius() * 1.05;
 			while (anomaly.scar_next < anomaly.scars.size()) {
 				ScarOp op = anomaly.scars.get(anomaly.scar_next);
 				int count = op.columnCount();
@@ -338,6 +340,13 @@ public final class AnomalyScars {
 					if (Math.hypot(column[0], column[1]) < config.suppress_until) {
 						anomaly.scar_cursor++;
 						continue;
+					}
+					// зона ещё не покрывает эту колонку: ждём, пока дорастёт. К следующей зоне,
+					// а не «стоп на этой»: иначе первая недоросшая зона держала бы всё поле
+					if (Math.hypot(column[0] - anomaly.scar_cx, column[1] - anomaly.scar_cz) > grownR) {
+						finished = false;
+						limitHit = true;
+						break;
 					}
 					// бюджет проверяем ДО загрузки чанка: getChunk — синхронная генерация
 					if (blocksThisTick >= config.blocks_per_tick || columnsThisTick >= COLUMNS_PER_PASS
@@ -376,7 +385,6 @@ public final class AnomalyScars {
 					} catch (RuntimeException e) {
 						// одна строка на проход, а не на колонку: устойчивое исключение иначе
 						// давало до 6000 строк со стеком в секунду
-						failures++;
 						if (failedAt == 0L) {
 							failedAt = System.nanoTime();
 							AnomalyMod.LOGGER.warn("Anomaly: след #{} в {}, {} не применён ({})",
@@ -573,6 +581,11 @@ public final class AnomalyScars {
 		int bottom = Math.max(level.getMinY() + 1, height - 40);
 		int changed = 0;
 		for (int y = top; y >= bottom; y--) {
+			// дерево — это до 48 setBlock в одной колонке: проверяем бюджет внутри, иначе
+			// проход перелетает 5 мс и лимит блоков
+			if (passDeadline != 0L && System.nanoTime() > passDeadline) {
+				return changed;
+			}
 			BlockState state = level.getBlockState(pos.set(x, y, z));
 			// азалия — не листва: после сноса ствола куст остаётся висеть в воздухе
 			if (isTreePart(state) || state.is(BlockTags.LEAVES) || state.is(Blocks.AZALEA)
@@ -1049,4 +1062,5 @@ public final class AnomalyScars {
 		return sum;
 	}
 }
+
 
