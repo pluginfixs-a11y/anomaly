@@ -54,22 +54,43 @@ public final class AnomalyScars {
 
 	// --- планирование ---
 
+	/**
+	 * Опоясывающая рана по настоящему контуру зоны: пятна мёртвой земли на {@code boundaryPoint},
+	 * а не по кругу. Круг у вытянутой зоны уходит вдвое внутрь или наружу, и граница класса
+	 * остаётся нематериальной. Планируется один раз при рождении, стоит 1–3 % бюджета.
+	 */
+	public static List<ScarOp> woundRing(Anomaly anomaly, double ageHours, Random rnd) {
+		List<ScarOp> ops = new ArrayList<>();
+		double r0 = anomaly.r0;
+		if (r0 < 300.0) {
+			return ops;
+		}
+		int count = Math.max(10, Math.min(24, (int) Math.round(2.0 * Math.PI * r0 / 260.0)));
+		double budget = AnomalyClass.damageBudget(r0, AnomalyClass.byId(anomaly.cls)) * 0.03;
+		double used = 0.0;
+		for (int i = 0; i < count; i++) {
+			double angle = i * Math.PI * 2.0 / count + rnd.nextDouble() * 0.12;
+			double[] point = anomaly.boundaryPoint(angle, ageHours, r0);
+			if (!Double.isFinite(point[0]) || !Double.isFinite(point[1])) {
+				continue;
+			}
+			ScarOp spot = ScarOp.disk("dead_soil", point[0], point[1], 2.5 + rnd.nextDouble() * 1.5, rnd.nextLong());
+			if (used + spot.blocks > budget) {
+				break;
+			}
+			ops.add(spot);
+			used += spot.blocks;
+		}
+		return ops;
+	}
+
 	public static List<ScarOp> plan(Anomaly anomaly, AnomalyClass cls, Random rnd) {
-		return planAt(anomaly.x0, anomaly.z0, anomaly.r0, cls, rnd, anomaly.pinned, anomaly.components, true);
+		return planAt(anomaly.x0, anomaly.z0, anomaly.r0, cls, rnd, anomaly.pinned, anomaly.components);
 	}
 
 	/** План вокруг точки: при миграции старой зоны это её нынешнее место, а не точка рождения. */
 	public static List<ScarOp> planAt(double x, double z, double r0, AnomalyClass cls, Random rnd,
 			boolean pinned, List<String> components) {
-		return planAt(x, z, r0, cls, rnd, pinned, components, false);
-	}
-
-	/**
-	 * @param ring опоясывающая рана по контуру — только при рождении: у дрейфующей зоны кольцо
-	 *             каждый шаг ставилось бы вокруг нового центра и сыпалось вдоль пути
-	 */
-	static List<ScarOp> planAt(double x, double z, double r0, AnomalyClass cls, Random rnd,
-			boolean pinned, List<String> components, boolean ring) {
 		List<ScarOp> ops = new ArrayList<>();
 		double budget = AnomalyClass.damageBudget(r0, cls);
 		if (budget < 20.0 || pinned) {
@@ -89,26 +110,6 @@ public final class AnomalyScars {
 			}
 			ops.add(op);
 			used += op.blocks;
-		}
-		// опоясывающая рана по контуру: граница класса становится материальной, иначе край
-		// трёхкилометровой зоны ничем не отмечен и «вход» не читается
-		if (ring && r0 >= 300.0 && used < budget) {
-			int ringCount = 24;
-			for (int i = 0; i < ringCount; i++) {
-				double angle = i * Math.PI * 2.0 / ringCount + rnd.nextDouble() * 0.15;
-				double rr = r0 * (0.90 + rnd.nextDouble() * 0.07);
-				double ox = x + Math.cos(angle) * rr;
-				double oz = z + Math.sin(angle) * rr;
-				ScarOp spot = ScarOp.disk("dead_soil", ox, oz, 2.5 + rnd.nextDouble() * 1.5, rnd.nextLong());
-				if (used + spot.blocks > budget) {
-					break;
-				}
-				if (overlaps(ops, spot)) {
-					continue;
-				}
-				ops.add(spot);
-				used += spot.blocks;
-			}
 		}
 		return ops;
 	}
@@ -1539,6 +1540,7 @@ public final class AnomalyScars {
 		return sum;
 	}
 }
+
 
 
 

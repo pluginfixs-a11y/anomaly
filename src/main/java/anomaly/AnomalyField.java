@@ -399,6 +399,9 @@ public final class AnomalyField {
 					new Random(anomaly.id * 0x2545F4914F6CDD1DL), false, anomaly.components);
 			anomaly.scar_cx = anomaly.x0;
 			anomaly.scar_cz = anomaly.z0;
+			// опоясывающая рана по настоящему контуру: один раз при рождении, по boundaryPoint
+			anomaly.scars.addAll(AnomalyScars.woundRing(anomaly, anomaly.ageHours(now),
+					new Random(anomaly.id * 0x5DEECE66DL)));
 		}
 		anomaly.scar_next = 0;
 		anomaly.scar_cursor = 0;
