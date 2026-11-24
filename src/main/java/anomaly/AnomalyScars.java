@@ -122,7 +122,9 @@ public final class AnomalyScars {
 		if (budget < 20.0 || pinned) {
 			return ops;
 		}
-		double target = budget * (0.4 + rnd.nextDouble() * 0.5);
+		// план рождения берёт не больше 70 % бюджета: остальное — тихим следам (drip) и
+		// дрейфовым добавкам. Раньше он забирал до 90 %, и зона не могла больше сорить
+		double target = budget * (0.3 + rnd.nextDouble() * 0.4);
 		double used = 0.0;
 		int guard = 0;
 		while (used < target && guard++ < 40) {
@@ -418,6 +420,7 @@ public final class AnomalyScars {
 	private static final long DRIP_PERIOD_MS = 6_000L;
 	private static final Random DRIP_RANDOM = new Random(0x5EED5CA7L);
 	private static long dripAt;
+	private static boolean dripLogged;
 
 	/**
 	 * Тихий след: зона должна сорить и без игрока.
@@ -479,6 +482,11 @@ public final class AnomalyScars {
 			}
 			anomaly.scars.add(op);
 			AnomalyField.markDirty();
+			// одна строка за сессию: по ней в логе видно, что механизм живой, без спама
+			if (!dripLogged) {
+				dripLogged = true;
+				AnomalyMod.LOGGER.info("Anomaly: тихий след в зоне #{} — {}", anomaly.id, op.describe());
+			}
 			return true;
 		}
 		return false;
