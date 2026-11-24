@@ -788,6 +788,13 @@ public final class AnomalyField {
 	private static volatile boolean saving;
 
 	static boolean saveNow() {
+		// дожидаемся текущей фоновой записи: иначе stop и воркер пишут один файл одновременно
+		try {
+			WRITER.submit(() -> {
+			}).get(2L, java.util.concurrent.TimeUnit.SECONDS);
+		} catch (Exception ignored) {
+			// воркер занят: пишем сами, уникальный tmp не даст смешать файлы
+		}
 		data.clock_ms = AnomalyClock.now();
 		lastSaveMs = System.currentTimeMillis();
 		boolean ok = path != null && write(path, data);
@@ -836,7 +843,9 @@ public final class AnomalyField {
 			if (parent != null) {
 				Files.createDirectories(parent);
 			}
-			Path tmp = file.resolveSibling(file.getFileName() + ".tmp");
+			// уникальный tmp: фоновый воркер и синхронная запись на stop не должны
+			// писать один и тот же временный файл
+			Path tmp = file.resolveSibling(file.getFileName() + "." + System.nanoTime() + ".tmp");
 			Files.writeString(tmp, json, StandardCharsets.UTF_8);
 			try {
 				Files.move(tmp, file, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
