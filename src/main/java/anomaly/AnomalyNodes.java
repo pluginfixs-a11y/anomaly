@@ -230,7 +230,19 @@ public final class AnomalyNodes {
 				anomaly.node_tries++;
 				nodeBudget--;
 				int loads = 0;
+				int spot = -1;
 				for (double[] at : nodeSpots(anomaly, cx, cz, r)) {
+					spot++;
+					// уже стоящий узел не требует загрузки: иначе два лоада всегда уходят на
+					// сундук и алтарь, а до якорей дело не доходит
+					boolean done = switch (spot) {
+						case 0 -> anomaly.node_cache_ok;
+						case 1 -> anomaly.node_altar_ok;
+						default -> (anomaly.anchors_placed & (1 << (spot - 2))) != 0;
+					};
+					if (done) {
+						continue;
+					}
 					int cx2 = (int) Math.floor(at[0]) >> 4;
 					int cz2 = (int) Math.floor(at[1]) >> 4;
 					if (level.getChunkSource().hasChunk(cx2, cz2)) {

@@ -913,6 +913,7 @@ public final class AnomalyScars {
 		// у линии точек вдоль длины, а не кольцо вокруг начала: трещина 40–80 блоков
 		// переходит ручей в середине, и кольцо у старта этого не видит
 		int samples = op.isLine() ? 5 : 9;
+		int loads = 0;
 		for (int i = 0; i < samples; i++) {
 			double x;
 			double z;
@@ -933,13 +934,15 @@ public final class AnomalyScars {
 			int chunkZ = bz >> 4;
 			if (!level.getChunkSource().hasChunk(chunkX, chunkZ)) {
 				// в свежей местности загружен только чанк первой колонки, и все сэмплы молча
-				// пропускались — проверка воды не работала вовсе. Грузим под суточным бюджетом
-				if (!chunkBudgetAllows(data, config, AnomalyClock.now())) {
-					continue;
+				// пропускались — проверка воды не работала вовсе. Не больше двух чанков и только
+				// пока не вышел дедлайн прохода: иначе это залп генераций в одном тике
+				if (loads >= 2 || (passDeadline != 0L && System.nanoTime() > passDeadline)
+						|| !chunkBudgetAllows(data, config, AnomalyClock.now())) {
+					return false;
 				}
 				level.getChunk(chunkX, chunkZ);
 				data.gen_count++;
-				AnomalyField.markDirty();
+				loads++;
 			}
 			int h = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, bx, bz);
 			if (h <= level.getMinY() + 2) {
@@ -948,6 +951,9 @@ public final class AnomalyScars {
 			if (!level.getBlockState(new BlockPos(bx, h - 1, bz)).getFluidState().isEmpty()) {
 				return true;
 			}
+		}
+		if (loads > 0) {
+			AnomalyField.markDirty();
 		}
 		return false;
 	}

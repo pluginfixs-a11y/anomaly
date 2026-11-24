@@ -281,7 +281,7 @@ public final class AnomalyEffects {
 		double dy = Math.max(1.0, top / (segments * 2.0));
 		for (int k = 0; k < segments; k++) {
 			level.sendParticles(player, ParticleTypes.END_ROD, true, true,
-					zone.coreX(), base + top * (k + 0.5) / segments, zone.coreZ(), per, 0.25, dy, 0.25, 0.0);
+					zone.coreX(), base + top * (k + 0.5) / segments, zone.coreZ(), per, 0.8, dy, 0.8, 0.0);
 		}
 	}
 
@@ -303,7 +303,7 @@ public final class AnomalyEffects {
 		double ground = level.getChunkSource().hasChunk(bx >> 4, bz >> 4)
 				? level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, bx, bz)
 				: player.getY() - 1.0;
-		double y = ground + 1.0;
+		double y = Math.max(ground, player.getY() - 16.0) + 1.0;
 		int color = zone.edgeColor();
 		// яркая пыль класса, не затемнённая: указатель должен читаться и ночью
 		var dust = new DustColorTransitionOptions(color, color, 0.6f);
@@ -730,6 +730,8 @@ public final class AnomalyEffects {
 		return time >= 13000L && time <= 23000L;
 	}
 }
+
+
 
 
 

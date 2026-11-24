@@ -402,6 +402,8 @@ public final class AnomalyField {
 		}
 		anomaly.scar_next = 0;
 		anomaly.scar_cursor = 0;
+		// план новый — проверка воды для op 0 должна пройти заново
+		anomaly.scar_wet_for = -1;
 	}
 
 	/** Сколько живых зон, не считая осколков и не родившихся: иначе они занимают слоты. */
@@ -452,6 +454,7 @@ public final class AnomalyField {
 		anomaly.scars = new ArrayList<>();
 		anomaly.scar_next = 0;
 		anomaly.scar_cursor = 0;
+		anomaly.scar_wet_for = -1;
 		List<String> keep = new ArrayList<>();
 		for (String id : anomaly.components) {
 			AnomalyComponent component = AnomalyComponent.byId(id);
@@ -1249,5 +1252,6 @@ public final class AnomalyField {
 		return Math.max(0.2, Math.min(config.lifetime_max_hours, hours));
 	}
 }
+
 
 
