@@ -16,6 +16,7 @@ import net.minecraft.util.Mth;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.levelgen.Heightmap;
 
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -358,14 +359,31 @@ public final class AnomalyCommand {
 		// с одного направления, а не веером на 360°
 		op.angle = 0.9;
 		// У трещины length = 6·radius: прежний охват при r=30 грузил ~625 чанков синхронно
-		// и вешал сервер на минуты. Шестьдесят четыре чанка покрывают любой след демо
+		// и вешал сервер на минуты. Шестьдесят четыре чанка покрывают любой след демо,
+		// и грузятся они от центра опа, а не полосами с угла квадрата: у трещины длина
+		// уходит на северо-восток, и полосы с запада прогревали пустоту
 		int reach = (int) Math.ceil(op.radius) + Math.abs(op.length) + 2;
-		int loaded = 0;
-		for (int cx = (bx - reach) >> 4; cx <= (bx + reach) >> 4 && loaded < 64; cx++) {
-			for (int cz = (bz - reach) >> 4; cz <= (bz + reach) >> 4 && loaded < 64; cz++) {
-				level.getChunk(cx, cz);
-				loaded++;
+		int cx0 = bx >> 4;
+		int cz0 = bz >> 4;
+		List<int[]> chunks = new ArrayList<>();
+		for (int cx = (bx - reach) >> 4; cx <= (bx + reach) >> 4; cx++) {
+			for (int cz = (bz - reach) >> 4; cz <= (bz + reach) >> 4; cz++) {
+				chunks.add(new int[]{cx, cz});
 			}
+		}
+		chunks.sort((a, b) -> Integer.compare(
+				Math.abs(a[0] - cx0) + Math.abs(a[1] - cz0),
+				Math.abs(b[0] - cx0) + Math.abs(b[1] - cz0)));
+		int loaded = 0;
+		for (int[] chunk : chunks) {
+			if (loaded >= 64) {
+				break;
+			}
+			if (level.getChunkSource().hasChunk(chunk[0], chunk[1])) {
+				continue;
+			}
+			level.getChunk(chunk[0], chunk[1]);
+			loaded++;
 		}
 		int changed = 0;
 		int columns = 0;

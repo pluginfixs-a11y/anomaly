@@ -514,11 +514,13 @@ public enum AnomalyComponent {
 							player.addEffect(new MobEffectInstance(MobEffects.SLOW_FALLING, 100, 0, false, true, true));
 						}
 					}
-					// и дроп тоже: «всё, что не приколочено»
+					// и дроп тоже: «всё, что не приколочено» — но, как и мобы, только в зоне
 					for (ItemEntity item : level.getEntitiesOfClass(ItemEntity.class,
 							new AABB(player.getX() - 16.0, player.getY() - 6.0, player.getZ() - 16.0,
 									player.getX() + 16.0, player.getY() + 8.0, player.getZ() + 16.0))) {
-						item.push(0.0, 0.08, 0.0);
+						if (zone.signedDistance(item.getX(), item.getZ()) <= 0.0) {
+							item.push(0.0, 0.08, 0.0);
+						}
 					}
 				}
 			}

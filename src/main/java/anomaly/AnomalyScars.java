@@ -443,6 +443,8 @@ public final class AnomalyScars {
 	private static int dripFails;
 	private static int msptLogged;
 	private static long reticketAt;
+	private static ScarOp reticketOp;
+	private static long reticketOpAt;
 	private static boolean dripLogged;
 	private static int dripDebug;
 
@@ -588,6 +590,11 @@ public final class AnomalyScars {
 			if (asked >= 4 || !chunkBudgetAllows(data, config, now)) {
 				break;
 			}
+			// уже загруженный чанк тикета не требует, и в суточный лимит он не идёт:
+			// иначе повторный запрос выедал 6000 генераций за полчаса впустую
+			if (level.getChunkSource().hasChunk(cell[0], cell[1])) {
+				continue;
+			}
 			level.getChunkSource().addTicketWithRadius(DRIP_TICKET, new ChunkPos(cell[0], cell[1]), 0);
 			data.gen_count++;
 			asked++;
@@ -595,13 +602,22 @@ public final class AnomalyScars {
 		return asked;
 	}
 
-	/** Не чаще одного запроса чанков в секунду на весь проход: заявка на чанк — не бесплатная. */
-	private static boolean reticketBudget() {
+	/**
+	 * Не чаще одного запроса чанков в секунду на весь проход, и не чаще раза в минуту на один op:
+	 * тикет живёт минуту, и повторный запрос того же опа её только продлевает, держа чанки
+	 * в памяти и выедая суточный лимит генерации.
+	 */
+	private static boolean reticketBudget(ScarOp op) {
 		long now = System.currentTimeMillis();
 		if (now - reticketAt < 1_000L) {
 			return false;
 		}
+		if (op == reticketOp && now - reticketOpAt < 60_000L) {
+			return false;
+		}
 		reticketAt = now;
+		reticketOp = op;
+		reticketOpAt = now;
 		return true;
 	}
 
@@ -724,6 +740,7 @@ public final class AnomalyScars {
 				boolean finished = true;
 				boolean limitHit = false;
 				boolean wetSkip = false;
+			boolean removedOp = false;
 				boolean skipped = false;
 				// игрок в объёме опа — проверяем ОДИН раз на op, а не на каждую колонку
 				boolean opPlayerFree = anomaly.scar_retry_tree || !opHasPlayer(level, op);
@@ -769,7 +786,7 @@ public final class AnomalyScars {
 							// при живом игроке синхронно не генерируем, но и не бросаем op
 							// навсегда: он держит всю очередь зоны. Просим чанк тикетом,
 							// не чаще раза в секунду — иначе поле завалит систему чанков
-							if (reticketBudget()) {
+							if (reticketBudget(op)) {
 								loadAround(level, data, config, AnomalyClock.now(), op);
 							}
 							skipped = true;
@@ -817,6 +834,9 @@ public final class AnomalyScars {
 						anomaly.scar_wet_for = -1;
 						anomaly.scars.remove(anomaly.scar_next);
 						AnomalyField.markDirty();
+						// уходим к следующему op: этот снят, finishOp его списывать не должен
+						// (иначе бюджет жжётся за ничто, а scar_next++ съедает соседний)
+						removedOp = true;
 						break;
 					}
 					anomaly.scar_wet_tries = 0;
@@ -897,6 +917,11 @@ public final class AnomalyScars {
 				if (skipped) {
 					// чанк этой зоны не загружен: идём к следующей, а не тратим проход впустую
 					break;
+				}
+				if (removedOp) {
+					// op снят из очереди (мокрый после восьми «не знаю»): ни бюджета, ни scar_next
+					removedOp = false;
+					continue;
 				}
 				if (wetSkip) {
 					// след целиком в воде: пропускаем op, а не режем берег половинками.
@@ -1807,12 +1832,10 @@ public final class AnomalyScars {
 		}
 		int shadow = surface + Math.max(1, (int) Math.round((top - surface) * 0.3));
 		for (int y = surface; y <= top; y++) {
-			// масса камня не может съесть весь тик: у пика до 150 блоков в одной колонке
-			if (passDeadline != 0L && (changed & 7) == 7 && System.nanoTime() > passDeadline) {
-				// колонка не доделана: -1 заставит проход повторить её, иначе пик остаётся
-				// с обрубком, а op считается применённым
-				return -1;
-			}
+			// Колонку пика доводим целиком. Дедлайн внутри неё бесполезен: до 150 блоков это
+			// ~2 мс, а повтор после обрыва упирается в собственный камень и возвращает 0 —
+			// пик навсегда оставался обрубком, хотя op считался применённым. Бюджет прохода
+			// проверяется до каждой колонки, так что один пик тик не съест
 			BlockState state = level.getBlockState(pos.set(x, y, z));
 			if (protectedBlock(state)) {
 				break;
