@@ -417,13 +417,15 @@ public final class AnomalyScars {
 	private static int rotate;
 
 	/**
-	 * Раз в столько тиков миру достаётся один тихий след (120 = 6 с). Счёт на тиках, а не на
-	 * полевых часах: {@code /anomaly timescale 3600} не должен превращать дрип в поток.
+	 * Раз в столько тиков поля миру достаётся один тихий след. Поле тикает раз в секунду, так что
+	 * 6 — это шесть секунд; не путать с тиками сервера (20/с). Счёт на вызовах, а не на полевых
+	 * часах: {@code /anomaly timescale 3600} не должен превращать дрип в поток.
 	 */
-	private static final int DRIP_PERIOD_TICKS = 120;
+	private static final int DRIP_PERIOD_TICKS = 6;
 	private static final Random DRIP_RANDOM = new Random(0x5EED5CA7L);
 	private static int dripTicks;
 	private static boolean dripLogged;
+	private static int dripDebug;
 
 	/**
 	 * Тихий след: зона должна сорить и без игрока.
@@ -455,6 +457,8 @@ public final class AnomalyScars {
 		}
 		int size = data.anomalies.size();
 		int start = rnd.nextInt(size);
+		int roomy = 0;
+		String reason = "все зоны отсеяны до бюджета";
 		for (int step = 0; step < size; step++) {
 			Anomaly anomaly = data.anomalies.get((start + step) % size);
 			if (anomaly.pinned || anomaly.remnant || anomaly.precursor || anomaly.scars == null) {
@@ -475,7 +479,10 @@ public final class AnomalyScars {
 			double budget = AnomalyClass.damageBudget(anomaly.r0, cls);
 			double used = anomaly.scar_spent + plannedBlocks(anomaly.scars);
 			ScarOp op = dripOp(pos[0], pos[1], Math.max(12.0, anomaly.radius(age)), rnd);
+			roomy++;
 			if (used + op.blocks > budget) {
+				reason = "зона #" + anomaly.id + ": " + Math.round(used) + " занято из "
+						+ Math.round(budget) + ", op просит " + op.blocks;
 				continue;
 			}
 			// уже применённое не мешает: сравниваем только с тем, что ещё в очереди
@@ -491,6 +498,10 @@ public final class AnomalyScars {
 				AnomalyMod.LOGGER.info("Anomaly: тихий след в зоне #{} — {}", anomaly.id, op.describe());
 			}
 			return true;
+		}
+		if (dripDebug++ % 30 == 0) {
+			AnomalyMod.LOGGER.info("Anomaly: тихий след не нашёл места (зон {}, дошли до бюджета {}, причина: {})",
+					size, roomy, reason);
 		}
 		return false;
 	}
