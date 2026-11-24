@@ -41,6 +41,8 @@ public final class AnomalyScars {
 	private static final int COLUMNS_PER_PASS = 6000;
 	/** Часы на проход: средний mspt помнит 100 тиков, этого мало для 2000 setBlock подряд. */
 	private static final long NANOS_PER_PASS = 5_000_000L;
+	/** То же на пустом сервере: там некому лагать, а очередь следов должна таять. */
+	private static final long NANOS_PER_PASS_IDLE = 20_000_000L;
 	/** Пауза между сигналом перед следом и первыми блоками: игрок успевает обернуться. */
 	private static final long TELEGRAPH_HOLD_MS = 2_000L;
 
@@ -434,6 +436,9 @@ public final class AnomalyScars {
 	private static int dripTicks;
 	/** Прошлый проход поля не двигался из-за mspt: дрип не должен копить следы. */
 	private static boolean lagging;
+	/** Сколько попыток дрипа подряд ушло впустую: по нему пишется строка в лог. */
+	private static int dripFails;
+	private static int msptLogged;
 	private static boolean dripLogged;
 	private static int dripDebug;
 
@@ -458,7 +463,14 @@ public final class AnomalyScars {
 			return false;
 		}
 		dripTicks = 0;
-		return dripOnce(data, config, now, rnd, level);
+		boolean ok = dripOnce(data, config, now, rnd, level);
+		if (ok) {
+			dripFails = 0;
+		} else if (++dripFails % 10 == 0) {
+			// десять пустых попыток подряд — это минута без единого следа: пишем, почему
+			AnomalyMod.LOGGER.info("Anomaly: тихий след не нашёл места (подряд {})", dripFails);
+		}
+		return ok;
 	}
 
 	/** Один тихий след в случайную повреждённую зону. Вынесено от таймера ради самопроверки. */
@@ -640,12 +652,24 @@ public final class AnomalyScars {
 		}
 		boolean changed = trail(data, config, AnomalyClock.now());
 		// средний mspt — грубый предохранитель с памятью в 100 тиков; точный — по часам внутри прохода
-		if (server.getAverageTickTimeNanos() / 1_000_000.0 > Math.min(config.mspt_limit, 30.0)) {
+		double mspt = server.getAverageTickTimeNanos() / 1_000_000.0;
+		if (mspt > Math.min(config.mspt_limit, 30.0)) {
 			lagging = true;
+			// раз в минуту, пока проход стоит: без этой строки «следы не появляются» выглядит
+			// как мёртвый код, а на деле поле ждёт, пока сервер перестанет задыхаться
+			if (msptLogged++ % 60 == 0) {
+				AnomalyMod.LOGGER.info("Anomaly: проход следов стоит — mspt {}, предел {}",
+						Math.round(mspt), Math.min(config.mspt_limit, 30.0));
+			}
 			return changed;
 		}
 		lagging = false;
-		long deadline = System.nanoTime() + NANOS_PER_PASS;
+		msptLogged = 0;
+		// Бюджет прохода: при живых игроках — 5 мс, чтобы не дрожал тик. На пустом сервере
+		// лагать некому, и там проход получает 20 мс: иначе он набирал ~50 блоков в минуту
+		// при приходе ~2 000 — очередь росла быстрее, чем таяла, и «зона пустая» навсегда
+		long budget = serverHasPlayers(level) ? NANOS_PER_PASS : NANOS_PER_PASS_IDLE;
+		long deadline = System.nanoTime() + budget;
 		passDeadline = deadline;
 		int chunksThisTick = 0;
 		int columnsThisTick = 0;
@@ -727,12 +751,12 @@ public final class AnomalyScars {
 						data.gen_count++;
 						AnomalyField.markDirty();
 						chunksThisTick++;
-						// дедлайн проверяем сразу после генерации: getChunk — это 10–50 мс,
-						// и проверка «до» его не ограничивает
-						if (System.nanoTime() > deadline) {
-							finished = false;
-							break;
-						}
+						// Генерация чанка — разовая плата 10–50 мс, а не признак того, что тик
+						// занят: раньше она съедала весь 5-мс бюджет, проход применял одну
+						// колонку, помечал limitHit и уходил на следующую зону. Зона ждала
+						// своей очереди одиннадцать минут за две колонки — очередь не таяла
+						deadline = System.nanoTime() + budget;
+						passDeadline = deadline;
 					}
 				// вода проверяется один раз на op: column(0) у диска — угол квадрата вне круга
 				// и возвращает null, поэтому привязка к scar_cursor == 0 не срабатывала никогда
