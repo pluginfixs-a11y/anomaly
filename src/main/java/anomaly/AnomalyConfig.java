@@ -63,6 +63,13 @@ public class AnomalyConfig {
 	/** Ниже этого радиуса аномалия в подавленной полосе просто удаляется. */
 	public double dissipate_min_radius = 20.0;
 
+	// --- порталы ---
+	/**
+	 * Портал, который ведёт дальше этого (в блоках Верхнего мира; ад считается ×8), не работает:
+	 * блоки портала гаснут, обсидиановая рама остаётся. 0 — правило выключено.
+	 */
+	public int portal_limit = 10000;
+
 	// --- разрушения ---
 	public boolean scar_enabled = true;
 	/** Чанков за проход: 2 — это 2 в секунду, проход один и только когда mspt ниже порога. */
@@ -188,6 +195,8 @@ public class AnomalyConfig {
 		}
 		dissipate_radius = Math.max(0, Math.min(dissipate_radius, suppress_until));
 		dissipate_min_radius = Math.max(1.0, dissipate_min_radius);
+		// портал за пределом поля: 0 — выключено, иначе не меньше suppress_until
+		portal_limit = portal_limit <= 0 ? 0 : Math.max(1000, Math.min(portal_limit, 200_000));
 		// 100 % в минуту и больше дают отрицательное основание степени и NaN в радиусе
 		dissipate_rate_per_min = Math.max(0.0, Math.min(99.0, dissipate_rate_per_min));
 		if (tick_period < 1) {

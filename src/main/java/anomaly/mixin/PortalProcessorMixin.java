@@ -1,5 +1,6 @@
 package anomaly.mixin;
 
+import anomaly.AnomalyPortals;
 import anomaly.AnomalyResidue;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
@@ -38,6 +39,15 @@ public abstract class PortalProcessorMixin {
 				&& entity instanceof ServerPlayer player && AnomalyResidue.sealsNether(player)) {
 			AnomalyResidue.onPortalRefused(player);
 			cir.setReturnValue(false);
+			return;
+		}
+		// дальний портал не работает и гаснет: иначе ад — бесплатный телепорт за 10 км.
+		// Предел считается в блоках Верхнего мира, из ада — ×8
+		if (cir.getReturnValue() && entity instanceof ServerPlayer far
+				&& AnomalyPortals.tooFar(level, far)) {
+			AnomalyPortals.collapse(level, far);
+			cir.setReturnValue(false);
 		}
 	}
 }
+

@@ -114,6 +114,9 @@ public final class Anomaly {
 	/** Номер op, для которого уже проверена вода: проверка один раз, а не на каждой колонке. */
 	public transient int scar_wet_for = -1;
 
+	/** Сколько раз проверку воды не дали закончить бюджет/дедлайн: после трёх считаем сухим. */
+	public transient int scar_wet_tries;
+
 	/** Попытки поставить узлы и время последней: зона в океане не должна грузить чанки вечно. */
 	public transient int node_tries;
 	public transient long node_try_ms;
@@ -463,6 +466,7 @@ public final class Anomaly {
 		return false;
 	}
 }
+
 
 
 

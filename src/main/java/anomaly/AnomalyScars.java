@@ -381,14 +381,21 @@ public final class AnomalyScars {
 					if (wet == 0) {
 						// бюджет/дедлайн не дали даже одного чанка: это не «сухо», а «не знаю» —
 						// не помечаем op проверенным и возвращаемся к нему в следующем проходе
-						finished = false;
-						limitHit = true;
-						break;
-					}
-					anomaly.scar_wet_for = anomaly.scar_next;
-					if (wet == 2) {
-						wetSkip = true;
-						break;
+						if (++anomaly.scar_wet_tries < 3) {
+							finished = false;
+							limitHit = true;
+							break;
+						}
+						// трижды не смогли — считаем сухим, иначе op держит очередь своей зоны
+						anomaly.scar_wet_tries = 0;
+						anomaly.scar_wet_for = anomaly.scar_next;
+					} else {
+						anomaly.scar_wet_tries = 0;
+						anomaly.scar_wet_for = anomaly.scar_next;
+						if (wet == 2) {
+							wetSkip = true;
+							break;
+						}
 					}
 				}
 					// курсор двигаем только после проверок: иначе колонка на стыке бюджета чанков теряется
@@ -928,6 +935,7 @@ public final class AnomalyScars {
 		int samples = op.isLine() ? Math.max(5, op.length / 8 + 1) : 13;
 		int loads = 0;
 		int wet = 0;
+		boolean budgetStop = false;
 		for (int i = 0; i < samples; i++) {
 			double x;
 			double z;
@@ -951,9 +959,10 @@ public final class AnomalyScars {
 				// в свежей местности загружен только чанк первой колонки, и все сэмплы молча
 				// пропускались — проверка воды не работала вовсе. Не больше двух чанков и только
 				// пока не вышел дедлайн прохода: иначе это залп генераций в одном тике
-				if (loads >= 2 || (passDeadline != 0L && System.nanoTime() > passDeadline)
+				if (loads >= Math.max(1, config.chunks_per_tick) || (passDeadline != 0L && System.nanoTime() > passDeadline)
 						|| !chunkBudgetAllows(data, config, AnomalyClock.now())) {
-					return 0;
+					budgetStop = true;
+					break;
 				}
 				level.getChunk(chunkX, chunkZ);
 				data.gen_count++;
@@ -965,10 +974,17 @@ public final class AnomalyScars {
 			}
 			if (!level.getBlockState(new BlockPos(bx, h - 1, bz)).getFluidState().isEmpty()) {
 				wet++;
+				if (wet >= 2) {
+					// уже мокро: остальные сэмплы ничего не изменят
+					break;
+				}
 			}
 		}
 		if (loads > 0) {
 			AnomalyField.markDirty();
+		}
+		if (budgetStop) {
+			return 0;
 		}
 		// одна лужа у края не повод выбрасывать весь след: у прибрежной зоны иначе не остаётся
 		// ни одного шрама. Мокрым считаем op, если вода в двух и более точках — там воронка
@@ -1257,6 +1273,7 @@ public final class AnomalyScars {
 		return sum;
 	}
 }
+
 
 
 

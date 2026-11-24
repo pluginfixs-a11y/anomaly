@@ -110,6 +110,7 @@ public final class SelfTest {
 				runGroup(result, "следы вживую", () -> checkScarsLive(result, server));
 				runGroup(result, "рейды вживую", () -> checkNodesLive(result, server));
 				runGroup(result, "узлы вживую", () -> checkNodesPlacedLive(result, server));
+				runGroup(result, "порталы вживую", () -> checkPortalsLive(result, server));
 			}
 		}
 		return result;
@@ -546,6 +547,59 @@ public final class SelfTest {
 	}
 
 	// --- рейды вживую (ставят настоящий сундук в загруженный чанк) ---
+
+	/**
+	 * Порталы вживую: блоки портала гаснут, обсидиановая рама остаётся, а дальность считается
+	 * в блоках Верхнего мира (ад — ×8). Блоки портала — это именно NETHER_PORTAL, не обсидиан.
+	 */
+	private static void checkPortalsLive(Result result, MinecraftServer server) {
+		ServerLevel level = server.overworld();
+		int px = 96;
+		int pz = 96;
+		level.getChunk(px >> 4, pz >> 4);
+		int py = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, px, pz);
+		Map<BlockPos, BlockState> before = snapshot(level, px, pz, 4, py - 2, py + 6);
+		// рама 4×5 из обсидиана и блоки портала внутри
+		for (int dx = 0; dx < 4; dx++) {
+			level.setBlock(new BlockPos(px + dx, py, pz), Blocks.OBSIDIAN.defaultBlockState(), Block.UPDATE_ALL);
+			level.setBlock(new BlockPos(px + dx, py + 4, pz), Blocks.OBSIDIAN.defaultBlockState(), Block.UPDATE_ALL);
+		}
+		for (int dy = 1; dy < 4; dy++) {
+			level.setBlock(new BlockPos(px, py + dy, pz), Blocks.OBSIDIAN.defaultBlockState(), Block.UPDATE_ALL);
+			level.setBlock(new BlockPos(px + 3, py + dy, pz), Blocks.OBSIDIAN.defaultBlockState(), Block.UPDATE_ALL);
+			for (int dx = 1; dx < 3; dx++) {
+				level.setBlock(new BlockPos(px + dx, py + dy, pz), Blocks.NETHER_PORTAL.defaultBlockState(),
+						Block.UPDATE_ALL);
+			}
+		}
+		int portalBlocks = 0;
+		for (int dx = 1; dx < 3; dx++) {
+			for (int dy = 1; dy < 4; dy++) {
+				if (level.getBlockState(new BlockPos(px + dx, py + dy, pz)).is(Blocks.NETHER_PORTAL)) {
+					portalBlocks++;
+				}
+			}
+		}
+		// гасим руками: коллапс не требует живого игрока (тот же код, что зовёт миксин)
+		AnomalyPortals.collapseAt(level, new BlockPos(px + 1, py + 1, pz));
+		int after = 0;
+		int obsidian = 0;
+		for (int dx = 1; dx < 3; dx++) {
+			for (int dy = 1; dy < 4; dy++) {
+				if (level.getBlockState(new BlockPos(px + dx, py + dy, pz)).is(Blocks.NETHER_PORTAL)) {
+					after++;
+				}
+			}
+		}
+		obsidian += level.getBlockState(new BlockPos(px, py + 1, pz)).is(Blocks.OBSIDIAN) ? 1 : 0;
+		obsidian += level.getBlockState(new BlockPos(px + 3, py + 2, pz)).is(Blocks.OBSIDIAN) ? 1 : 0;
+		obsidian += level.getBlockState(new BlockPos(px, py, pz)).is(Blocks.OBSIDIAN) ? 1 : 0;
+		report(result, "портал: блоки гаснут, рама цела", portalBlocks == 6 && after == 0 && obsidian == 3);
+		restore(level, before);
+
+		report(result, "дальность портала: ад считается ×8",
+				Math.abs(AnomalyPortals.equivalent(level, 300.0, 400.0) - 500.0) < 1.0e-6);
+	}
 
 	/** Узлы в живом мире: кладовая, алтарь и три якоря реально появляются на своих местах. */
 	private static void checkNodesPlacedLive(Result result, MinecraftServer server) {
@@ -1751,6 +1805,7 @@ public final class SelfTest {
 		}
 	}
 }
+
 
 
 
