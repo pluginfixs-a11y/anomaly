@@ -121,7 +121,8 @@ public final class AnomalyResidue {
 		data.players.values().removeIf(entry -> entry.hours <= 0.0);
 		long now = System.currentTimeMillis();
 		if (dirty && now - lastSaveMs > 60_000L) {
-			saveNow();
+			// не saveNow(): Gson и два syscall в тик-потоке — ровно то, что уже вынесли у поля
+			saveAsync();
 		}
 	}
 
@@ -136,6 +137,9 @@ public final class AnomalyResidue {
 		}
 		writing = true;
 		dirty = false;
+		// отметку ставим сразу: иначе при медленном диске тик ставил бы новую запись каждую секунду
+		lastSaveMs = System.currentTimeMillis();
+		long mySeq = ++seq;
 		String json;
 		try {
 			json = GSON.toJson(data);
@@ -146,7 +150,11 @@ public final class AnomalyResidue {
 		}
 		Path file = path;
 		RESIDUE_WRITER.execute(() -> {
-			boolean ok = writeText(file, json);
+			boolean ok = true;
+			// синхронный сейв на /stop успел раньше — старый снимок файл не перетирает
+			if (mySeq == seq) {
+				ok = writeText(file, json);
+			}
 			writing = false;
 			if (!ok) {
 				dirty = true;
@@ -161,9 +169,11 @@ public final class AnomalyResidue {
 				return thread;
 			});
 	private static volatile boolean writing;
+	private static volatile long seq;
 
 	static boolean saveNow() {
 		lastSaveMs = System.currentTimeMillis();
+		seq++;
 		boolean ok = path != null && writeText(path, GSON.toJson(data));
 		dirty = !ok;
 		return ok;

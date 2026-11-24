@@ -66,11 +66,12 @@ public final class ScarOp {
 
 	/**
 	 * Поваленный лес: круг, в котором каждое дерево сносится и ложится стволом на землю.
-	 * Стоимость — только деревья (ствол + укладка), грунт не портится.
+	 * Стоимость — деревья: в среднем одно на ~25 блоков², ствол с кроной до 48 блоков плюс
+	 * укладка. Прежняя оценка (0.6·πr²) занижала её в восемь раз, и бюджет зоны врал.
 	 */
 	public static ScarOp forest(double x, double z, double radius, long seed) {
 		ScarOp op = disk("fallen_forest", x, z, radius, seed);
-		op.blocks = (int) Math.round(Math.PI * radius * radius * 0.6);
+		op.blocks = (int) Math.round(Math.PI * radius * radius * 4.0);
 		return op;
 	}
 

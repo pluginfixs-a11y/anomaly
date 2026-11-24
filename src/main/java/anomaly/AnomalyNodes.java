@@ -54,6 +54,8 @@ public final class AnomalyNodes {
 	/** Сколько уровней стоит один обмен на алтаре. */
 	private static final int ALTAR_LEVELS = 15;
 	private static final long ALTAR_COOLDOWN_MS = 1500L;
+	/** Обменов на зону: «риск как валюта» не должен превращаться в станок. */
+	private static final int ALTAR_MAX_TRADES = 3;
 	/** Максимальная плата за обмен, часы остатка: под потолком должно оставаться место на неё. */
 	private static final double PAY_MAX = 3.0;
 
@@ -222,8 +224,8 @@ public final class AnomalyNodes {
 			// дропа. Точка узлов на 45 % радиуса рейда — это уже риск, но ещё достижимо
 			anomaly.node_r = nodeRadius(zone.radius());
 			double angle = baseAngle(anomaly);
-			anomaly.node_cx = zone.coreX() + Math.cos(angle) * anomaly.node_r * 0.45;
-			anomaly.node_cz = zone.coreZ() + Math.sin(angle) * anomaly.node_r * 0.45;
+			anomaly.node_cx = zone.coreX() + Math.cos(angle) * anomaly.node_r;
+			anomaly.node_cz = zone.coreZ() + Math.sin(angle) * anomaly.node_r;
 			anomaly.anchors_broken = 0;
 			anomaly.anchors_placed = 0;
 			anomaly.node_cache_ok = false;
@@ -336,9 +338,10 @@ public final class AnomalyNodes {
 			return true;
 		}
 		if (!level.getBlockState(pos).canBeReplaced()) {
-			// место заняли (постройка, обвал): ждём следующего окна, а не проверяем каждый тик
+			// место заняли (постройка, обвал): ждём следующего окна, а не проверяем каждый тик.
+			// true: чанк уже загружен выше, и бюджет «один лоад за проход» должен его учесть
 			anomaly.node_cache_ms = now;
-			return false;
+			return true;
 		}
 		placeChest(level, anomaly, pos);
 		anomaly.node_cache_ms = now;
@@ -513,7 +516,13 @@ public final class AnomalyNodes {
 			return;
 		}
 		// обмен по клику: узел может уехать из зоны вместе с дрейфом, и требование «внутри»
-		// делало алтарь мёртвым. Цена — урон от самой зоны, а не формальная проверка
+		// делало алтарь мёртвым. Цена — урон от самой зоны, а не формальная проверка.
+		// Лимит обменов лежит в файле поля: в памяти он сбрасывался перезаходом на сервер
+		if (anomaly.altar_trades >= ALTAR_MAX_TRADES) {
+			level.playSound(null, player.getX(), player.getY(), player.getZ(),
+					SoundEvents.VILLAGER_NO, SoundSource.BLOCKS, 0.8f, 0.5f);
+			return;
+		}
 		if (player.experienceLevel < ALTAR_LEVELS) {
 			level.playSound(null, player.getX(), player.getY(), player.getZ(),
 					SoundEvents.VILLAGER_NO, SoundSource.BLOCKS, 0.8f, 0.7f);
@@ -528,6 +537,8 @@ public final class AnomalyNodes {
 			return;
 		}
 		ALTAR_LAST.put(player.getUUID(), now);
+		anomaly.altar_trades++;
+		AnomalyField.markDirty();
 		player.giveExperienceLevels(-ALTAR_LEVELS);
 		AnomalyClass cls = AnomalyClass.byId(anomaly.cls);
 		Random rnd = new Random(player.getUUID().getLeastSignificantBits() ^ System.nanoTime());
@@ -682,8 +693,8 @@ public final class AnomalyNodes {
 			// ту же привязку, что делает placeNodes: узлы на 45 % радиуса рейда от ядра
 			anomaly.node_r = nodeRadius(zone.radius());
 			double angle = baseAngle(anomaly);
-			anomaly.node_cx = zone.coreX() + Math.cos(angle) * anomaly.node_r * 0.45;
-			anomaly.node_cz = zone.coreZ() + Math.sin(angle) * anomaly.node_r * 0.45;
+			anomaly.node_cx = zone.coreX() + Math.cos(angle) * anomaly.node_r;
+			anomaly.node_cz = zone.coreZ() + Math.sin(angle) * anomaly.node_r;
 		}
 		// команда — отладка: чанки узлов грузим сами, иначе ставить некуда
 		for (double[] at : nodeSpots(anomaly, anomaly.node_cx, anomaly.node_cz, anomaly.node_r)) {
@@ -693,11 +704,12 @@ public final class AnomalyNodes {
 	}
 
 	/**
-	 * Радиус рейда, а не радиус зоны: якоря в 60 % радиуса трёхкилометровой зоны оказались бы
-	 * в 1860 блоках — сквозь самую смертельную часть, куда не дойдёт ни один рейд.
+	 * Радиус рейда, а не радиус зоны: 30 % радиуса, но не больше 360 блоков. При 60 % от
+	 * трёхкилометровой зоны якоря оказались бы в 1860 блоках — сквозь самую смертельную часть,
+	 * куда не дойдёт ни один рейд. А в ядре (45 % от 160) приз стоил дороже дропа.
 	 */
 	static double nodeRadius(double zoneRadius) {
-		return Math.min(Math.max(20.0, zoneRadius), 160.0);
+		return Math.min(Math.max(20.0, zoneRadius * 0.30), 360.0);
 	}
 
 	/** Позиции всех узлов: кладовая в ядре, алтарь на 32 %, три якоря на 62 %. */
@@ -801,5 +813,6 @@ public final class AnomalyNodes {
 				: String.valueOf(Math.round(value));
 	}
 }
+
 
 

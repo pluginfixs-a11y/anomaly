@@ -50,20 +50,21 @@ public final class AnomalyEffects {
 		// «рейды остатка»: с остатком в крови зона бьёт сильнее — идти в неё с непромытой
 		// головой дороже, чем с чистой
 		intensity *= AnomalyResidue.hazardScale(player);
-		// у смертельной зоны есть и своя цена за время внутри: раз в 6 с, 0.8–1.5 HP по глубине
-		// и дозе. Класс фиксируется при рождении, а зона дрейфует: если она приехала в 6–10 км,
-		// она больше не «смертельная» — иначе таблица классов в README врёт. У своего
-		// респавна deadly не бьёт: иначе база превращается в death loop. И у самого узла
-		// кладовой — карман тишины: иначе приз стоит дороже дропа и даль невыгодна
+		// у смертельной зоны есть и своя цена за время внутри: раз в 6 с. Кромка почти терпима
+		// (0.6 HP), ядро убивает (3.4 HP): иначе сытый игрок со стейками переживал ванильную
+		// регенерацию (1 HP / 4 с) и «смертельная» была безобидной. Класс фиксируется при
+		// рождении, а зона дрейфует: если она приехала в 6–10 км, она больше не «смертельная».
+		// У своего респавна в домашней полосе deadly не бьёт: база не должна быть death loop.
+		// И у самого узла кладовой — карман тишины: иначе приз стоит дороже дропа
 		boolean deadlyActive = zone.cls() == AnomalyClass.DEADLY && !zone.remnant()
 				&& Math.hypot(zone.x(), zone.z()) > config.deadly_from - config.class_blur
-				&& !nearOwnRespawn(player, 32.0)
+				&& !nearOwnRespawn(player, 32.0, config)
 				&& !nearNodePocket(zone, player, 12.0);
 		if (deadlyActive && !player.isCreative() && !player.isSpectator()) {
 			state.hazardTicks += AnomalyState.stepTicks(seconds);
 			if (state.hazardTicks >= 120) {
 				state.hazardTicks = 0;
-				float damage = (float) ((0.8 + 0.7 * depth) * Math.max(0.25, state.dose));
+				float damage = (float) ((0.6 + 2.8 * depth) * Math.max(0.25, state.dose));
 				player.hurt(level.damageSources().magic(), damage);
 			}
 		}
@@ -123,13 +124,24 @@ public final class AnomalyEffects {
 		interior(level, player, zone, sd, state);
 	}
 
-	/** У своего респавна deadly не бьёт: база в зоне не должна быть death loop. */
-	static boolean nearOwnRespawn(ServerPlayer player, double radius) {
+	/**
+	 * У своего респавна deadly не бьёт: база в зоне не должна быть death loop. Но только если
+	 * точка возрождения в домашней полосе (ближе рубежа смертельных) и в Верхнем мире: иначе
+	 * кровать, поставленная внутри смертельной зоны, давала бы круг 64 блока без урона.
+	 */
+	static boolean nearOwnRespawn(ServerPlayer player, double radius, AnomalyConfig config) {
 		var respawn = player.getRespawnConfig();
 		if (respawn == null || respawn.respawnData() == null) {
 			return false;
 		}
-		var pos = respawn.respawnData().pos();
+		var data = respawn.respawnData();
+		if (config != null && data.dimension() != net.minecraft.world.level.Level.OVERWORLD) {
+			return false;
+		}
+		var pos = data.pos();
+		if (config != null && Math.hypot(pos.getX(), pos.getZ()) >= config.deadly_from - config.class_blur) {
+			return false;
+		}
 		return Math.hypot(player.getX() - (pos.getX() + 0.5), player.getZ() - (pos.getZ() + 0.5)) < radius;
 	}
 
@@ -226,8 +238,9 @@ public final class AnomalyEffects {
 			return;
 		}
 		double dist = Math.hypot(zone.coreX() - player.getX(), zone.coreZ() - player.getZ());
-		// дальше 256 блоков клиент маяк уже не отрисует: пакеты ушли бы в никуда
-		if (dist > 256.0) {
+		// 448 блоков: от середины трёхкилометровой зоны до ядра 1.5 км, и 192–256 блоков
+		// не хватало, чтобы маяк вообще попал в кадр. Дальше клиент частицы всё равно срежет
+		if (dist > 448.0) {
 			return;
 		}
 		int bx = (int) Math.floor(zone.coreX());
@@ -236,17 +249,19 @@ public final class AnomalyEffects {
 			return;
 		}
 		double base = level.getHeight(Heightmap.Types.MOTION_BLOCKING, bx, bz);
-		// столб до 96 блоков над землёй — это ориентир из середины трёхкилометровой зоны,
-		// где своего края не видно; ниже 56 он не поднимается над лесным пологом
-		int top = (int) Math.min(96.0, Math.max(56.0, player.getY() + 20.0 - base));
+		// столб до 96 блоков над землёй (и выше, если игрок далеко: издалека нужен ориентир),
+		// ниже 56 он не поднимается над лесным пологом
+		int top = (int) Math.min(140.0, Math.max(56.0, player.getY() + 20.0 - base + dist * 0.15));
 		// три пакета вместо одного: основание шириной полтора блока, тело столба и верхушка.
 		// Один пакет на 28 частиц давал белую нитку в один пиксель — это читалось как баг
 		int color = zone.edgeColor();
 		var glow = new DustColorTransitionOptions(color, darken(color), 0.5f);
 		level.sendParticles(player, glow, true, true, zone.coreX(), base + 1.2, zone.coreZ(),
 				10, 1.5, 0.8, 1.5, 0.01);
+		// тело столба — одним пакетом с числом частиц по высоте: 24 на высоту 43 блока были
+		// облаком искр, а не столбом
 		level.sendParticles(player, ParticleTypes.END_ROD, true, true,
-				zone.coreX(), base + top * 0.45, zone.coreZ(), 24, 0.35, top * 0.45, 0.35, 0.0);
+				zone.coreX(), base + top * 0.45, zone.coreZ(), top, 0.35, top * 0.45, 0.35, 0.0);
 		level.sendParticles(player, ParticleTypes.END_ROD, true, true,
 				zone.coreX(), base + top * 0.9, zone.coreZ(), 12, 0.2, top * 0.12, 0.2, 0.0);
 	}
@@ -272,11 +287,17 @@ public final class AnomalyEffects {
 					continue;
 				}
 				double cellX = Math.floor(player.getX() / 64.0) * 64.0 + 32.0 + (i - 1) * 64.0;
-				double cellZ = Math.floor(player.getZ() / 64.0) * 64.0 + 32.0 + (i - 1) * 64.0;
+				// по Z — другой шаг, иначе все три якоря встают на одну диагональ и
+				// разом прыгают на 64 блока при переходе границы клетки
+				double cellZ = Math.floor(player.getZ() / 64.0) * 64.0 + 32.0 + (i - 2) * 64.0;
 				double jitterX = (noise01(zone.id() * 53L + i * 977L) - 0.5) * 48.0;
 				double jitterZ = (noise01(zone.id() * 71L + i * 131L) - 0.5) * 48.0;
 				ax = cellX + jitterX;
 				az = cellZ + jitterZ;
+			}
+			// точка в сетке может выпасть за край формы: пыль вне аномалии — это баг на вид
+			if (!zone.contains(ax, az)) {
+				continue;
 			}
 			int bx = (int) Math.floor(ax);
 			int bz = (int) Math.floor(az);
@@ -415,7 +436,7 @@ public final class AnomalyEffects {
 			// у стены есть толщина: нулевой разброс давал плоскость в один пиксель, которую
 			// видно только строго сбоку
 			level.sendParticles(player, dust, true, true, point[0], y, point[1], count, 0.6, spread, 0.6, 0.0);
-			if (i % 5 == 0) {
+			if (i % (full ? 10 : 5) == 0) {
 				// приземная полоса: в лесу и на склоне стена не должна висеть только на уровне глаз
 				level.sendParticles(player, dust, true, true, point[0], y - 0.4, point[1],
 						Math.max(2, count / 2), 0.5, 1.0, 0.5, 0.0);
@@ -425,8 +446,9 @@ public final class AnomalyEffects {
 				level.sendParticles(player, dust, true, true, point[0], y + spread + 2.5, point[1],
 						2, 0.3, 1.5, 0.3, 0.0);
 			}
-			if (i % 6 == 0 && !far && !full) {
-				// вертикальный «язык»: один пакет на шесть точек, а край читается и с 40–60 блоков
+			if (i % 12 == 0 && !far && (!full || radius > 120.0)) {
+				// вертикальный «язык»: один пакет на дюжину точек. На полном кольце он нужен
+				// только у крупных зон, где точек много и язык не превращает стену в лес столбов
 				level.sendParticles(player, dust, true, true, point[0], y + 2.5, point[1],
 						6, 0.25, 5.0, 0.25, 0.0);
 			}

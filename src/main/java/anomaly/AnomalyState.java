@@ -75,6 +75,9 @@ public final class AnomalyState {
 		}
 	}
 
+	/** Счётчик урона Нижнего мира: отдельный от hazardTicks, который гасит leave(). */
+	public int netherTicks;
+
 	/** Счётчик эффектных тиков: по нему идут периодические эффекты, а не по мировому времени. */
 	public void pulse(int ticks) {
 		pulseTicks += ticks;

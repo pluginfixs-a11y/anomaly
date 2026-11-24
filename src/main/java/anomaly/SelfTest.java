@@ -661,7 +661,7 @@ public final class SelfTest {
 			snapshots.add(before);
 			level.setBlock(new BlockPos(bx, surface - 1, bz), Blocks.GRASS_BLOCK.defaultBlockState(), Block.UPDATE_ALL);
 			level.setBlock(new BlockPos(bx, surface, bz), Blocks.SHORT_GRASS.defaultBlockState(), Block.UPDATE_ALL);
-			AnomalyScars.applyColumn(level, ScarOp.disk("dead_soil", bx, surface, bz, 7L), bx, bz);
+			AnomalyScars.applyColumn(level, ScarOp.disk("dead_soil", bx, bz, 7.0, 7L), bx, bz);
 			report(result, "мёртвая земля: трава → грубая земля",
 					level.getBlockState(new BlockPos(bx, surface - 1, bz)).is(Blocks.COARSE_DIRT));
 			report(result, "мёртвая земля: растение снесено",
@@ -732,18 +732,23 @@ public final class SelfTest {
 					!level.getBlockState(new BlockPos(lx, bottomY, bz)).is(Blocks.LAVA));
 			restore(level, lavaBefore);
 
-			// снег слоем над льдом: guard видит SNOW, а не ICE — трещина не должна прорезать лёд в воду
+			// снег слоем над льдом: guard видит SNOW, а не ICE. Трещина в леднике — законный
+			// след (иначе ледяные пики и ледниковые шапки остаются нетронутыми), а шип на льду —
+			// нет: он рос бы из льдины посреди холодного океана
 			int sx2 = bx + 96;
 			level.getChunk(sx2 >> 4, bz >> 4);
 			int snowSurface = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, sx2, bz);
 			Map<BlockPos, BlockState> snowBefore = snapshot(level, sx2, bz, 2, snowSurface - 2, snowSurface + 2);
 			snapshots.add(snowBefore);
-			level.setBlock(new BlockPos(sx2, snowSurface - 1, bz), Blocks.ICE.defaultBlockState(), Block.UPDATE_ALL);
 			level.setBlock(new BlockPos(sx2, snowSurface, bz), Blocks.SNOW.defaultBlockState(), Block.UPDATE_ALL);
-			AnomalyScars.applyColumn(level, ScarOp.line("crack", sx2, bz, 0.0, 12, 1, 4, 29L), sx2, bz);
-			report(result, "снег на льду не прорезается",
-					level.getBlockState(new BlockPos(sx2, snowSurface - 1, bz)).is(Blocks.ICE)
-							&& level.getBlockState(new BlockPos(sx2, snowSurface, bz)).is(Blocks.SNOW));
+			level.setBlock(new BlockPos(sx2, snowSurface - 1, bz), Blocks.ICE.defaultBlockState(), Block.UPDATE_ALL);
+			level.setBlock(new BlockPos(sx2, snowSurface - 2, bz), Blocks.ICE.defaultBlockState(), Block.UPDATE_ALL);
+			AnomalyScars.applyColumn(level, ScarOp.line("crack", sx2, bz, 0.0, 12, 1, 2, 29L), sx2, bz);
+			boolean crackInIce = level.getBlockState(new BlockPos(sx2, snowSurface - 1, bz)).isAir()
+					|| level.getBlockState(new BlockPos(sx2, snowSurface - 1, bz)).is(Blocks.ICE);
+			AnomalyScars.applyColumn(level, ScarOp.spike(sx2 + 4, bz, 3.0, 6, 31L), sx2 + 4, bz);
+			boolean spikeBlocked = !level.getBlockState(new BlockPos(sx2 + 4, snowSurface, bz)).is(Blocks.STONE);
+			report(result, "ледник: трещина можно, шип нельзя", crackInIce && spikeBlocked);
 			restore(level, snowBefore);
 
 			// дерево: ствол и крона — иначе на мёртвой земле висит зелёный навес
@@ -753,7 +758,7 @@ public final class SelfTest {
 			Map<BlockPos, BlockState> treeBefore = snapshot(level, tx, bz, 4, treeSurface - 1, treeSurface + 12);
 			snapshots.add(treeBefore);
 			plantTree(level, tx, treeSurface, bz);
-			AnomalyScars.applyColumn(level, ScarOp.disk("dead_soil", tx, treeSurface + 5, bz, 23L), tx, bz);
+			AnomalyScars.applyColumn(level, ScarOp.disk("dead_soil", tx, bz, 7.0, 23L), tx, bz);
 			report(result, "мёртвая земля валит дерево вместе с кроной",
 					treeGone(level, tx, treeSurface, bz));
 			restore(level, treeBefore);
@@ -1126,10 +1131,10 @@ public final class SelfTest {
 		broken.node_r = 1.0e9;
 		report(result, "битый узел из файла отменяется", broken.valid() && !broken.nodes_placed);
 
-		// радиус рейда не тянется за радиусом зоны
-		report(result, "радиус узлов клампится в 20..160",
-				AnomalyNodes.nodeRadius(20.0) == 20.0 && AnomalyNodes.nodeRadius(700.0) == 160.0
-						&& AnomalyNodes.nodeRadius(3000.0) == 160.0);
+		// радиус рейда не тянется за радиусом зоны, но у большой зоны узлы не в самом ядре
+		report(result, "радиус узлов: 30 % зоны в пределах 20..360",
+				AnomalyNodes.nodeRadius(20.0) == 20.0 && AnomalyNodes.nodeRadius(700.0) == 210.0
+						&& AnomalyNodes.nodeRadius(3000.0) == 360.0);
 
 		// все пять точек узлов: кладовая, алтарь и три якоря — внутри зоны
 		java.util.List<double[]> spots = AnomalyNodes.nodeSpots(anomaly, 1000.0, -500.0, 160.0);
@@ -1740,5 +1745,6 @@ public final class SelfTest {
 		}
 	}
 }
+
 
 

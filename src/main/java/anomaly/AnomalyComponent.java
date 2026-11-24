@@ -451,8 +451,9 @@ public enum AnomalyComponent {
 					level.sendParticles(player, ParticleTypes.EXPLOSION, true, true, x, y, z, 1, 0.0, 0.0, 0.0, 0.0);
 					// радиус слышимости ванильного звука = max(16, 16·vol): 0.35 до игрока не доходил
 					level.playSound(null, x, y, z, SoundEvents.GENERIC_EXPLODE.value(), SoundSource.AMBIENT, 1.6f, 1.6f);
-					// хлопок — не только картинка: маленькая воронка на 1–2 блока
-					if (canMark(level, x, z)) {
+					// хлопок — не только картинка: маленькая воронка на 1–2 блока. Только у
+					// классов, которые вообще рушат мир: у безопасной зоны бюджет нулевой
+					if (zone.cls().damages() && canMark(level, x, z)) {
 						AnomalyScars.microCrater(level, x, z, 0.8 + rnd.nextDouble() * 0.8, 1 + rnd.nextInt(2), player.getY());
 					}
 				}
@@ -802,7 +803,7 @@ public enum AnomalyComponent {
 	private static void whisperRing(ServerLevel level, ServerPlayer player, net.minecraft.util.RandomSource rnd) {
 		double radius = 5.0 + rnd.nextDouble() * 3.0;
 		double start = rnd.nextDouble() * Math.PI * 2.0;
-		var ink = new net.minecraft.core.particles.DustParticleOptions(0x1A1622, 1.1f);
+		var ink = new net.minecraft.core.particles.DustParticleOptions(0x1A1622, 0.5f);
 		for (int i = 0; i < 8; i++) {
 			double angle = start + i * Math.PI / 4.0;
 			// разброс по радиусу и высоте: ровная окружность читается как геометрический артефакт
@@ -811,9 +812,10 @@ public enum AnomalyComponent {
 			double z = player.getZ() + Math.sin(angle) * r;
 			level.sendParticles(player, ink, true, true, x, player.getY() + 0.6 + rnd.nextDouble() * 1.6, z,
 					2, 0.25, 0.35, 0.25, 0.0);
-			// голос в самой точке: шёпот «с той стороны», а не в ушах игрока
+			// голос в самой точке: шёпот «с той стороны», а не в ушах игрока.
+			// SOUL_ESCAPE, а не SCULK_CLICKING: тот же звук — подпись компонента SHADES
 			if (i % 3 == 0) {
-				level.playSound(null, x, player.getY(), z, SoundEvents.SCULK_CLICKING,
+				level.playSound(null, x, player.getY(), z, SoundEvents.SOUL_ESCAPE.value(),
 						SoundSource.AMBIENT, 0.35f, 1.2f + (float) rnd.nextDouble() * 0.6f);
 			}
 		}
@@ -861,7 +863,7 @@ public enum AnomalyComponent {
 	 * в один и тот же «звук зоны». 0.60–1.37 по номеру компонента.
 	 */
 	public float signaturePitch() {
-		return 0.60f + (ordinal() % 12) * 0.07f;
+		return 0.60f + ordinal() * 0.77f / 25f;
 	}
 
 	/** Высота рельефа для точки или запасное значение, если чанк не загружен. */
@@ -885,4 +887,5 @@ public enum AnomalyComponent {
 				+ cost + ")";
 	}
 }
+
 

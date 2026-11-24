@@ -244,9 +244,11 @@ public class AnomalyMod implements ModInitializer {
 		state.dose = Math.min(1.0, state.dose + config.dose_gain_per_second * seconds * depth);
 		state.lastHazard = true;
 		AnomalyResidue.add(player.getUUID(), 3.0 * depth * seconds / 3600.0);
-		state.hazardTicks += AnomalyState.stepTicks(seconds);
-		if (state.hazardTicks >= 120) {
-			state.hazardTicks = 0;
+		// свой счётчик: ветка overworld_only зовёт leave(), а он гасит hazardTicks —
+		// с ним урон в аду не срабатывал ни разу
+		state.netherTicks += AnomalyState.stepTicks(seconds);
+		if (state.netherTicks >= 120) {
+			state.netherTicks = 0;
 			player.hurt(player.level().damageSources().magic(), (float) (0.6 + 0.9 * depth));
 		}
 	}

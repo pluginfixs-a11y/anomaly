@@ -236,6 +236,12 @@ public final class AnomalyScars {
 				continue;
 			}
 			AnomalyClass cls = AnomalyClass.byId(anomaly.cls);
+			// план строится по зрелому радиусу: на новорождённой зоне (радиус ~0) следы легли бы
+			// в 1–2 км от неё, где аномалии ещё нет. Ждём, пока зона дорастёт до ~85 % r0 —
+			// это первые часы жизни, а не вся она
+			if (anomaly.radius(anomaly.ageHours(now)) < anomaly.r0 * 0.85) {
+				continue;
+			}
 			anomaly.scar_cx = pos[0];
 			anomaly.scar_cz = pos[1];
 			// точка привязки уехала — это изменение данных, его надо записать, иначе после
@@ -321,11 +327,15 @@ public final class AnomalyScars {
 			if (anomaly.scars == null || anomaly.scars.isEmpty() || anomaly.scar_next >= anomaly.scars.size()) {
 				continue;
 			}
-			// зона ещё могла не дорасти: план строится по зрелому радиусу, и на новорождённой
-			// зоне следы падали бы в 1–2 км от неё, где аномалии ещё нет
-			double grownR = anomaly.zone(AnomalyClock.now()).radius() * 1.05;
 			while (anomaly.scar_next < anomaly.scars.size()) {
 				ScarOp op = anomaly.scars.get(anomaly.scar_next);
+				if (anomaly.scar_cursor == 0 && wetOp(level, op)) {
+					// след не режет берег пополам: у озера, реки и океана воронка обрывалась
+					// по урезу вертикальной стеной. Такой op пропускаем целиком
+					anomaly.scar_next++;
+					anomaly.scar_cursor = 0;
+					continue;
+				}
 				int count = op.columnCount();
 				boolean finished = true;
 				boolean limitHit = false;
@@ -340,13 +350,6 @@ public final class AnomalyScars {
 					if (Math.hypot(column[0], column[1]) < config.suppress_until) {
 						anomaly.scar_cursor++;
 						continue;
-					}
-					// зона ещё не покрывает эту колонку: ждём, пока дорастёт. К следующей зоне,
-					// а не «стоп на этой»: иначе первая недоросшая зона держала бы всё поле
-					if (Math.hypot(column[0] - anomaly.scar_cx, column[1] - anomaly.scar_cz) > grownR) {
-						finished = false;
-						limitHit = true;
-						break;
 					}
 					// бюджет проверяем ДО загрузки чанка: getChunk — синхронная генерация
 					if (blocksThisTick >= config.blocks_per_tick || columnsThisTick >= COLUMNS_PER_PASS
@@ -380,8 +383,9 @@ public final class AnomalyScars {
 					// курсор двигаем только после проверок: иначе колонка на стыке бюджета чанков теряется
 					anomaly.scar_cursor++;
 					columnsThisTick++;
+					int applied = 0;
 					try {
-						blocksThisTick += applyColumn(level, op, column[0], column[1]);
+						applied = applyColumn(level, op, column[0], column[1]);
 					} catch (RuntimeException e) {
 						// одна строка на проход, а не на колонку: устойчивое исключение иначе
 						// давало до 6000 строк со стеком в секунду
@@ -391,6 +395,14 @@ public final class AnomalyScars {
 									anomaly.id, column[0], column[1], e.toString());
 						}
 					}
+					if (applied < 0) {
+						// дерево не доделано: возвращаем курсор, иначе остаток кроны останется
+						// висеть навсегда — колонка не считается обработанной
+						anomaly.scar_cursor--;
+						finished = false;
+						break;
+					}
+					blocksThisTick += applied;
 					progressed = true;
 					if (blocksThisTick >= config.blocks_per_tick || columnsThisTick >= COLUMNS_PER_PASS
 							|| System.nanoTime() > deadline) {
@@ -426,27 +438,40 @@ public final class AnomalyScars {
 		boolean tree = isTreePart(level.getBlockState(new BlockPos(x, height - 1, z)));
 		int surface = groundY(level, x, height, z);
 		// heightmap считает воду и лёд грунтом. В холодном океане на льдине вырос бы каменный шип,
-		// а обломки заменили бы лёд булыжником: такие поверхности не трогаем вовсе.
+		// а обломки заменили бы лёд булыжником: на льду и снежном блоке разрешаем только то,
+		// что вынимает блок (трещина, провал) — иначе ледник и ледяные пики остаются без следов
 		BlockState ground = level.getBlockState(new BlockPos(x, surface - 1, z));
-		if (!ground.getFluidState().isEmpty() || isFragileSurface(ground) || builtBlock(ground)) {
+		if (!ground.getFluidState().isEmpty() || builtBlock(ground)) {
+			return 0;
+		}
+		if (isFragileSurface(ground) && !op.type.equals("crack") && !op.type.equals("lava_fault")
+				&& !op.type.equals("sinkhole")) {
 			return 0;
 		}
 		int changed = switch (op.type) {
-			case "dead_soil" -> deadSoil(level, x, surface, z);
+			case "dead_soil" -> deadSoil(level, x, surface, z, op.seed);
 			case "rubble" -> rubble(level, x, surface, z, op.seed);
 			case "crack" -> trench(level, x, surface, z, op.depth, false);
 			case "lava_fault" -> trench(level, x, surface, z, op.depth, true);
-			case "spike" -> spike(level, op, x, surface, z);
+			case "spike" -> spike(level, op, x, surface, z, ground);
 			case "sinkhole" -> sinkhole(level, op, x, surface, z);
 			case "fallen_forest" -> fallenForest(level, op, x, surface, z, height);
 			case "ruin" -> ruin(level, op, x, surface, z);
-			case "uplift" -> uplift(level, op, x, surface, z);
+			case "uplift" -> uplift(level, op, x, surface, z, ground);
 			default -> 0;
 		};
+		if (changed < 0) {
+			// дерево не доделано (дедлайн/незагруженный чанк): колонка не считается обработанной
+			return -1;
+		}
 		// дерево сносим после следа и по исходной высоте: до правки ствол ещё на месте,
 		// а обломки или траншея уже снесли бы дешёвую проверку
 		if (tree) {
-			changed += deforest(level, x, height, z);
+			int fallen = deforest(level, x, height, z);
+			if (fallen < 0) {
+				return -1;
+			}
+			changed += fallen;
 		}
 		return changed;
 	}
@@ -469,12 +494,16 @@ public final class AnomalyScars {
 		return y + 1;
 	}
 
-	private static int deadSoil(ServerLevel level, int x, int surface, int z) {
+	private static int deadSoil(ServerLevel level, int x, int surface, int z, long seed) {
 		int changed = 0;
 		BlockPos ground = new BlockPos(x, surface - 1, z);
 		BlockState state = level.getBlockState(ground);
-		if (!protectedBlock(state) && soil(state)) {
-			level.setBlock(ground, Blocks.COARSE_DIRT.defaultBlockState(), Block.UPDATE_ALL);
+		if (!protectedBlock(state) && !state.isAir() && state.getFluidState().isEmpty()) {
+			int hash = (int) ((x * 73856093L) ^ (z * 19349663L) ^ seed);
+			// в пустыне, бэдлендах и на камне «мёртвая земля» из грубой земли — клякса:
+			// выгоревший грунт берёт материал биома, как и обломки
+			Block replacement = soil(state) ? Blocks.COARSE_DIRT : rubbleBlock(state, hash);
+			level.setBlock(ground, replacement.defaultBlockState(), Block.UPDATE_ALL);
 			changed++;
 		}
 		return changed + clearPlant(level, x, surface, z);
@@ -507,7 +536,14 @@ public final class AnomalyScars {
 					|| plant.is(BlockTags.RAILS) || plant.is(BlockTags.BUTTONS)
 					|| plant.is(BlockTags.PRESSURE_PLATES) || plant.is(BlockTags.ALL_SIGNS)
 					|| plant.is(Blocks.TORCH) || plant.is(Blocks.WALL_TORCH)
-					|| plant.is(Blocks.SOUL_TORCH) || plant.is(Blocks.SOUL_WALL_TORCH)) {
+					|| plant.is(Blocks.SOUL_TORCH) || plant.is(Blocks.SOUL_WALL_TORCH)
+					// рукотворная мелочь — не растение: фонарь, цепь, рычаг, редстоун, рамка
+					|| plant.is(Blocks.LANTERN) || plant.is(Blocks.SOUL_LANTERN)
+					|| plant.is(Blocks.IRON_CHAIN) || plant.is(Blocks.LEVER)
+					|| plant.is(Blocks.REDSTONE_TORCH) || plant.is(Blocks.REDSTONE_WALL_TORCH)
+					|| plant.is(Blocks.REDSTONE_WIRE) || plant.is(Blocks.TRIPWIRE)
+					|| plant.is(Blocks.TRIPWIRE_HOOK) || plant.is(Blocks.FLOWER_POT)
+					|| plant.is(Blocks.END_ROD) || plant.is(Blocks.FIRE) || plant.is(Blocks.SOUL_FIRE)) {
 				break;
 			}
 			level.setBlock(pos, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
@@ -534,14 +570,19 @@ public final class AnomalyScars {
 		for (int dx = -4; dx <= 4; dx++) {
 			for (int dz = -4; dz <= 4; dz++) {
 				// дедлайн проверяем внутри: одна колонка с деревом — это 81 колонка и до 48 блоков
-				// на каждую, и проход перебирал 5 мс в разы
+				// на каждую, и проход перебирал 5 мс в разы. -1: колонка не доделана, её нельзя
+				// считать обработанной, иначе в лесу остаются недоснесённые кроны
 				if (passDeadline != 0L && System.nanoTime() > passDeadline) {
-					return changed;
+					return -1;
 				}
 				if (!level.getChunkSource().hasChunk((x + dx) >> 4, (z + dz) >> 4)) {
 					continue;
 				}
-				changed += clearTreeColumn(level, x + dx, height, z + dz);
+				int part = clearTreeColumn(level, x + dx, height, z + dz);
+				if (part < 0) {
+					return -1;
+				}
+				changed += part;
 			}
 		}
 		return changed;
@@ -582,9 +623,9 @@ public final class AnomalyScars {
 		int changed = 0;
 		for (int y = top; y >= bottom; y--) {
 			// дерево — это до 48 setBlock в одной колонке: проверяем бюджет внутри, иначе
-			// проход перелетает 5 мс и лимит блоков
+			// проход перелетает 5 мс и лимит блоков. -1: не доделали, колонка не считается
 			if (passDeadline != 0L && System.nanoTime() > passDeadline) {
-				return changed;
+				return -1;
 			}
 			BlockState state = level.getBlockState(pos.set(x, y, z));
 			// азалия — не листва: после сноса ствола куст остаётся висеть в воздухе
@@ -698,7 +739,7 @@ public final class AnomalyScars {
 	}
 
 	/** Поднятая плита: пласт земли, вывернутый вверх. Плоский верх — то, что видно за километры. */
-	private static int uplift(ServerLevel level, ScarOp op, int x, int surface, int z) {
+	private static int uplift(ServerLevel level, ScarOp op, int x, int surface, int z, BlockState ground) {
 		double distance = Math.hypot(x - op.x, z - op.z);
 		double falloff = 1.0 - Math.min(1.0, distance / Math.max(0.5, op.radius));
 		if (falloff <= 0.0) {
@@ -708,7 +749,6 @@ public final class AnomalyScars {
 		int height = (int) Math.round(op.height * (0.25 + 0.75 * falloff)
 				* (0.8 + Math.floorMod(hash, 100) / 250.0));
 		height = Math.max(1, Math.min(40, height));
-		BlockState ground = level.getBlockState(new BlockPos(x, surface - 1, z));
 		if (protectedBlock(ground) || builtBlock(ground) || !ground.getFluidState().isEmpty()
 				|| !ground.blocksMotion()) {
 			return 0;
@@ -721,10 +761,22 @@ public final class AnomalyScars {
 			if (protectedBlock(at) || (!at.isAir() && at.blocksMotion() && !at.canBeReplaced())) {
 				break;
 			}
-			// верх плиты — грунт, внутри камень: сверху это холм, а не каменный столб
-			Block filler = i == height - 1
-					? pick(hash, Blocks.COARSE_DIRT, Blocks.GRASS_BLOCK, Blocks.TUFF)
-					: pick(hash, Blocks.STONE, Blocks.TUFF, Blocks.DEEPSLATE);
+			// верх плиты — грунт, внутри камень: сверху это холм, а не каменный столб.
+			// На песке и камне трава сверху выглядела бы приклеенной — берём материал биома
+			Block filler;
+			if (i == height - 1) {
+				if (soil(ground)) {
+					filler = pick(hash, Blocks.COARSE_DIRT, Blocks.GRASS_BLOCK, Blocks.TUFF);
+				} else if (ground.is(BlockTags.SAND)) {
+					filler = pick(hash, Blocks.SAND, Blocks.SANDSTONE);
+				} else if (ground.is(BlockTags.TERRACOTTA)) {
+					filler = pick(hash, Blocks.TERRACOTTA, Blocks.STONE);
+				} else {
+					filler = pick(hash, Blocks.STONE, Blocks.TUFF, Blocks.GRAVEL);
+				}
+			} else {
+				filler = pick(hash, Blocks.STONE, Blocks.TUFF, Blocks.DEEPSLATE);
+			}
 			level.setBlock(pos, filler.defaultBlockState(), Block.UPDATE_ALL);
 			changed++;
 		}
@@ -782,8 +834,10 @@ public final class AnomalyScars {
 				break;
 			}
 			BlockState state = level.getBlockState(pos.set(x, y, z));
-			// трещина не режет полы и стены: тёсаный камень и доски останавливают её так же, как контейнеры
-			if (protectedBlock(state) || builtBlock(state)) {
+			// трещина не режет полы и стены: тёсаный камень и доски останавливают её так же, как контейнеры.
+			// Жидкость в вынимаемой колонке — стоп: иначе трещина вскрывает водоносный слой и вода
+			// встаёт стенкой в щели
+			if (protectedBlock(state) || builtBlock(state) || !state.getFluidState().isEmpty()) {
 				return changed;
 			}
 			boolean bottom = i == depth - 1;
@@ -795,16 +849,41 @@ public final class AnomalyScars {
 		return changed;
 	}
 
-	/** Вода или лава рядом с колонкой на уровне грунта. Незагруженный сосед считается водой. */
+	/** Вода или лава рядом с колонкой на уровне грунта. Незагруженный сосед водой не считается. */
 	private static boolean fluidNear(ServerLevel level, int x, int surface, int z) {
 		for (int dx = -1; dx <= 1; dx++) {
 			for (int dz = -1; dz <= 1; dz++) {
 				if (!level.getChunkSource().hasChunk((x + dx) >> 4, (z + dz) >> 4)) {
-					return true;
+					continue;
 				}
 				if (!level.getBlockState(new BlockPos(x + dx, surface - 1, z + dz)).getFluidState().isEmpty()) {
 					return true;
 				}
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * След целиком в воде (озеро, река, океан): колонки такого op обрывались по урезу и давали
+	 * половину воронки. Планирование идёт без уровня, поэтому проверяем при первом заходе в op.
+	 */
+	private static boolean wetOp(ServerLevel level, ScarOp op) {
+		double radius = Math.max(1.0, op.radius);
+		for (int i = 0; i < 5; i++) {
+			double angle = i * Math.PI * 2.0 / 5.0;
+			double r = i == 0 ? 0.0 : radius * 0.75;
+			int x = (int) Math.floor(op.x + Math.cos(angle) * r);
+			int z = (int) Math.floor(op.z + Math.sin(angle) * r);
+			if (!level.getChunkSource().hasChunk(x >> 4, z >> 4)) {
+				continue;
+			}
+			int h = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, x, z);
+			if (h <= level.getMinY() + 2) {
+				continue;
+			}
+			if (!level.getBlockState(new BlockPos(x, h - 1, z)).getFluidState().isEmpty()) {
+				return true;
 			}
 		}
 		return false;
@@ -832,7 +911,30 @@ public final class AnomalyScars {
 		return changed;
 	}
 
-	private static int spike(ServerLevel level, ScarOp op, int x, int surface, int z) {
+	/** Материал шипа по биому: след из «местного» камня, а не серый булыжник везде. */
+	private static Block spikeBlock(BlockState ground, int hash) {
+		if (ground.is(BlockTags.SAND)) {
+			return pick(hash, Blocks.SANDSTONE, Blocks.SANDSTONE, Blocks.STONE);
+		}
+		if (ground.is(BlockTags.TERRACOTTA)) {
+			return pick(hash, Blocks.TERRACOTTA, Blocks.STONE);
+		}
+		if (ground.is(Blocks.GRAVEL)) {
+			return pick(hash, Blocks.STONE, Blocks.GRAVEL);
+		}
+		if (ground.is(Blocks.MUD) || ground.is(Blocks.CLAY)) {
+			return pick(hash, Blocks.PACKED_MUD, Blocks.STONE);
+		}
+		if (ground.is(Blocks.MOSS_BLOCK) || ground.is(Blocks.MYCELIUM)) {
+			return pick(hash, Blocks.STONE, Blocks.TUFF);
+		}
+		if (ground.is(Blocks.DEEPSLATE)) {
+			return pick(hash, Blocks.DEEPSLATE, Blocks.TUFF);
+		}
+		return SPIKE_BLOCKS[Math.floorMod(hash, SPIKE_BLOCKS.length)];
+	}
+
+	private static int spike(ServerLevel level, ScarOp op, int x, int surface, int z, BlockState ground) {
 		double dx = x - op.x;
 		double dz = z - op.z;
 		double falloff = 1.0 - Math.min(1.0, Math.sqrt(dx * dx + dz * dz) / Math.max(0.5, op.radius));
@@ -840,7 +942,9 @@ public final class AnomalyScars {
 		double jitter = 0.9 + Math.floorMod(hash, 100) / 500.0;
 		int height = (int) Math.round(op.height * (0.3 + 0.7 * falloff) * jitter);
 		height = Math.max(2, Math.min(MAX_HEIGHT, height));
-		Block block = SPIKE_BLOCKS[Math.floorMod(hash, SPIKE_BLOCKS.length)];
+		// камень из того же биома: песчаник в пустыне, терракота в бэдлендах, туф на камне.
+		// Серый булыжник посреди песка читается как чужая постройка, а не как след аномалии
+		Block block = spikeBlock(ground, hash);
 		BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
 		int changed = 0;
 		int top = Math.min(level.getMaxY() - 2, surface + height);
@@ -994,7 +1098,7 @@ public final class AnomalyScars {
 						|| !ground.getFluidState().isEmpty()) {
 					continue;
 				}
-				changed += deadSoil(level, x0, surface, z0);
+				changed += deadSoil(level, x0, surface, z0, 0L);
 			}
 		}
 		return changed;
@@ -1062,5 +1166,6 @@ public final class AnomalyScars {
 		return sum;
 	}
 }
+
 
 

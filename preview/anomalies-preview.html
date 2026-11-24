@@ -312,6 +312,7 @@ const stage = document.getElementById("stage");
 const tip = document.getElementById("tip");
 
 let W = 0, H = 0, DPR = 1;
+var pendingLabels = []; // заполняется при отрисовке колец, выводится после зон
 
 function resize() {
   DPR = Math.min(2, window.devicePixelRatio || 1);
@@ -380,9 +381,7 @@ function drawSoftBand(center, half, color, label) {
   ctx.restore();
   if (label) {
     const p = toScreen(center * 0.7071, -center * 0.7071);
-    ctx.fillStyle = "#8d948f";
-    ctx.font = "11px Consolas, monospace";
-    ctx.fillText(label, p[0] + 6, p[1] - 4);
+    pendingLabels.push([p[0] + 6, p[1] - 4, "#8d948f", label]);
   }
 }
 
@@ -398,9 +397,7 @@ function drawRing(r, color, label, dashed) {  const s = baseScale();
   ctx.restore();
   if (label) {
     const p = toScreen(r * 0.7071, -r * 0.7071);
-    ctx.fillStyle = color;
-    ctx.font = "11px Consolas, monospace";
-    ctx.fillText(label, p[0] + 6, p[1] - 4);
+    pendingLabels.push([p[0] + 6, p[1] - 4, color, label]);
   }
 }
 
@@ -422,6 +419,7 @@ function draw() {
   ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
   ctx.fillStyle = "#14171a";
   ctx.fillRect(0, 0, W, H);
+  pendingLabels.length = 0;
 
   drawGrid();
   if (state.show.rings) {
@@ -442,7 +440,24 @@ function draw() {
   if (state.show.scars) drawScars();
   for (const [a, st] of alive) drawAnomaly(a, st);
   drawPlayerMark();
+  flushLabels();
   updateStats(alive);
+}
+
+// подписи колец рисуются после зон: иначе заливки аномалий перечёркивают текст
+
+function flushLabels() {
+  ctx.save();
+  ctx.font = "11px Consolas, monospace";
+  ctx.lineWidth = 3;
+  ctx.lineJoin = "round";
+  for (const [px, py, color, text] of pendingLabels) {
+    ctx.strokeStyle = "#14171a";
+    ctx.strokeText(text, px, py);
+    ctx.fillStyle = color;
+    ctx.fillText(text, px, py);
+  }
+  ctx.restore();
 }
 
 function drawGrid() {
@@ -532,6 +547,13 @@ function drawAnomaly(a, st) {
     polygonPath(shapePoints(a, { x: cx, z: cz, radius: st.radius * 0.45 }, 1));
     ctx.fillStyle = withAlpha(a.cls.color, 0.22);
     ctx.fill();
+    // контур ядра — пунктиром: ключ в легенде обещает именно его, а не заливку
+    ctx.save();
+    ctx.setLineDash([4, 4]);
+    ctx.strokeStyle = withAlpha(a.cls.color, 0.55);
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    ctx.restore();
   }
   if (state.show.drift) {
     const len = Math.max(5, Math.min(34, 8 + a.speed * 0.10));
@@ -574,23 +596,22 @@ function drawDamage(a, st) {
   const patchR = Math.min(st.radius * 0.5, Math.sqrt(blocks / Math.PI) * 1.6);
   const patchAngle = rnd() * Math.PI * 2;
   const patchDist = st.radius * (0.18 + 0.5 * rnd());
-  polygonPath(shapePoints(a, {
-    x: st.x + Math.cos(patchAngle) * patchDist,
-    z: st.z + Math.sin(patchAngle) * patchDist,
-    radius: patchR
-  }, 1));
-  ctx.fillStyle = `rgba(10, 8, 6, ${0.32 + 0.45 * strength})`;
+  const px = st.x + Math.cos(patchAngle) * patchDist;
+  const pz = st.z + Math.sin(patchAngle) * patchDist;
+  polygonPath(shapePoints(a, { x: px, z: pz, radius: patchR }, 1));
+  // тон золы, а не чёрная дыра: #0a0806 на тёмном фоне читался как вырезанный кусок карты
+  ctx.fillStyle = `rgba(38, 30, 22, ${0.45 + 0.4 * strength})`;
   ctx.fill();
   ctx.strokeStyle = `rgba(120, 96, 62, ${0.30 + 0.45 * strength})`;
   ctx.lineWidth = 1;
   ctx.stroke();
 
-  // обломки: видны даже когда зона мелкая и пятно крошечное
+  // обломки и геология — от пятна, а не от центра зоны: иначе пики стоят отдельно от следа
   const specks = Math.min(48, Math.round(8 + blocks / 600));
   for (let i = 0; i < specks; i++) {
     const ang = rnd() * Math.PI * 2;
-    const dist = Math.sqrt(rnd()) * st.radius * 0.45;
-    const [sx, sy] = toScreen(st.x + Math.cos(ang) * dist, st.z + Math.sin(ang) * dist);
+    const dist = Math.sqrt(rnd()) * Math.max(4, patchR * 1.15);
+    const [sx, sy] = toScreen(px + Math.cos(ang) * dist, pz + Math.sin(ang) * dist);
     const size = 1.2 + rnd() * (blocks > 20000 ? 2.2 : 1.0);
     ctx.fillStyle = `rgba(168, 143, 104, ${0.45 + 0.45 * strength})`;
     ctx.fillRect(sx - size / 2, sy - size / 2, size, size);
@@ -602,9 +623,9 @@ function drawDamage(a, st) {
   const s = baseScale();
   for (let i = 0; i < spikes; i++) {
     const ang = rnd() * Math.PI * 2;
-    const dist = rnd() * st.radius * 0.35;
+    const dist = rnd() * Math.max(4, patchR * 1.25);
     const h = tallest * (0.5 + rnd() * 0.5);
-    const [sx, sy] = toScreen(st.x + Math.cos(ang) * dist, st.z + Math.sin(ang) * dist);
+    const [sx, sy] = toScreen(px + Math.cos(ang) * dist, pz + Math.sin(ang) * dist);
     const hpx = Math.max(3, h * s);
     const wpx = Math.max(1.5, h * 0.35 * s);
     ctx.beginPath();
@@ -849,6 +870,7 @@ window.anomalyPreview = {
 </script>
 </body>
 </html>
+
 
 
 

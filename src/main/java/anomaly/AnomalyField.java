@@ -802,14 +802,20 @@ public final class AnomalyField {
 		if (path == null) {
 			return false;
 		}
+		String json;
+		long seq;
+		Path file = path;
 		synchronized (SAVE_LOCK) {
 			data.clock_ms = AnomalyClock.now();
 			lastSaveMs = System.currentTimeMillis();
-			boolean ok = writeLocked(path, GSON.toJson(data), ++writeSeq);
-			// не сбросили dirty при сбое: следующий тик попробует снова, а не через пять минут
-			dirty = !ok;
-			return ok;
+			// номер снимка выдаём под замком, а сериализацию и диск держим вне его
+			seq = ++writeSeq;
 		}
+		json = GSON.toJson(data);
+		boolean ok = writeLocked(file, json, seq);
+		// не сбросили dirty при сбое: следующая попытка будет, а не через пять минут
+		dirty = !ok;
+		return ok;
 	}
 
 	/**
@@ -842,10 +848,9 @@ public final class AnomalyField {
 		}
 		WRITER.execute(() -> {
 			try {
-				boolean ok;
-				synchronized (SAVE_LOCK) {
-					ok = writeLocked(file, json, seq);
-				}
+				// без внешнего замка: writeLocked сам берёт его коротко на сверку и move,
+				// а запись 1.3 МБ идёт вне лока — иначе /stop ждал бы диск
+				boolean ok = writeLocked(file, json, seq);
 				if (!ok) {
 					dirty = true;
 				}
@@ -908,6 +913,7 @@ public final class AnomalyField {
 			if (parent != null) {
 				Files.createDirectories(parent);
 			}
+			cleanTmp(parent, file);
 			// уникальный tmp: фоновый воркер и синхронная запись на stop не должны
 			// писать один и тот же временный файл
 			Path tmp = file.resolveSibling(file.getFileName() + "." + System.nanoTime() + ".tmp");
@@ -916,6 +922,31 @@ public final class AnomalyField {
 		} catch (IOException e) {
 			AnomalyMod.LOGGER.error("Anomaly: не смог записать поле в {}", file, e);
 			return null;
+		}
+	}
+
+	/**
+	 * Убрать брошенные временные файлы: kill -9 в момент записи оставлял 1.3 МБ в world/data,
+	 * и они копились. Чужие (свежие) не трогаем — их может писать остановленный поток.
+	 */
+	private static void cleanTmp(Path parent, Path file) {
+		if (parent == null) {
+			return;
+		}
+		String prefix = file.getFileName().toString() + ".";
+		long cutoff = System.currentTimeMillis() - 30 * 60_000L;
+		try (var list = Files.newDirectoryStream(parent, prefix + "*.tmp")) {
+			for (Path stale : list) {
+				try {
+					if (Files.getLastModifiedTime(stale).toMillis() < cutoff) {
+						Files.deleteIfExists(stale);
+					}
+				} catch (IOException ignored) {
+					// следующий сейв попробует снова
+				}
+			}
+		} catch (IOException ignored) {
+			// каталога нет или нет прав — не повод падать
 		}
 	}
 
