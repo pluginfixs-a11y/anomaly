@@ -179,7 +179,13 @@ public final class AnomalyField {
 
 		ServerLevel overworld = server.overworld();
 		Avoid avoid = settled(server, overworld, config);
-		boolean changed = tickData(data, config, random, now, hours, avoid);
+		boolean changed;
+		try {
+			changed = tickData(data, config, random, now, hours, avoid);
+		} catch (RuntimeException e) {
+			warnOnce("поле", e);
+			changed = false;
+		}
 		// один бросок внутри прохода не должен убивать тик сервера: ловим и пишем одну строку
 		try {
 			changed |= AnomalyScars.tick(server, overworld, data, config);
@@ -191,7 +197,11 @@ public final class AnomalyField {
 		} catch (RuntimeException e) {
 			warnOnce("узлы", e);
 		}
-		changed |= bornSignals(server, overworld, now);
+		try {
+			changed |= bornSignals(server, overworld, now);
+		} catch (RuntimeException e) {
+			warnOnce("предвестники", e);
+		}
 		if (changed) {
 			dirty = true;
 		}
@@ -1039,7 +1049,22 @@ public final class AnomalyField {
 			return null;
 		}
 		try {
-			return GSON.fromJson(Files.readString(file, StandardCharsets.UTF_8), AnomalyFieldData.class);
+			AnomalyFieldData data = GSON.fromJson(Files.readString(file, StandardCharsets.UTF_8),
+					AnomalyFieldData.class);
+			if (data != null && data.version > AnomalyFieldData.CURRENT_VERSION) {
+				// файл от более новой версии мода: не переписываем его молча — копия остаётся,
+				// поле начинается заново. Раньше откат версии затирал мир без предупреждения
+				AnomalyMod.LOGGER.warn("Anomaly: поле версии {} новее мода ({}), отложил копию .bak-v{}",
+						data.version, AnomalyFieldData.CURRENT_VERSION, data.version);
+				try {
+					Files.copy(file, file.resolveSibling(file.getFileName() + ".bak-v" + data.version),
+							StandardCopyOption.REPLACE_EXISTING);
+				} catch (IOException ignored) {
+					// копия не обязательна: главное — не падать
+				}
+				return null;
+			}
+			return data;
 		} catch (Exception e) {
 			AnomalyMod.LOGGER.error("Anomaly: поле {} не читается ({}), начинаю новое (старый файл в .bak)",
 					file, e.getMessage());
@@ -1247,8 +1272,15 @@ public final class AnomalyField {
 		anomaly.core_angle = rnd.nextDouble() * Math.PI * 2.0;
 		anomaly.core_spin = (rnd.nextDouble() * 2.0 - 1.0) * 0.03;
 		anomaly.components = AnomalyComponent.ids(AnomalyComponent.roll(cls, rnd, config, anomaly.r0));
-		// следы планируются сразу: они применяются лениво, по 1–2 чанка в секунду
-		anomaly.scars = AnomalyScars.plan(anomaly, cls, new Random(anomaly.id * 0x9E3779B97F4A7C15L));
+		// следы планируются сразу: они применяются лениво, по 1–2 чанка в секунду.
+		// Кольцо раны — здесь же: в trail() его ветка требовала пустой список следов,
+		// а рождение всегда его заполняет, и кольцо не появлялось ни у одной живой зоны
+		Random scarRandom = new Random(anomaly.id * 0x9E3779B97F4A7C15L);
+		anomaly.scars = AnomalyScars.plan(anomaly, cls, scarRandom);
+		if (cls.damages()) {
+			anomaly.scars.addAll(AnomalyScars.woundRing(anomaly, anomaly.ageHours(now),
+					new Random(anomaly.id * 0x5DEECE66DL)));
+		}
 		anomaly.scar_cx = x;
 		anomaly.scar_cz = z;
 		return anomaly;

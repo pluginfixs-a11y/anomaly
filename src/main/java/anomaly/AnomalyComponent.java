@@ -347,7 +347,7 @@ public enum AnomalyComponent {
 				// минус в опыт на нуле уводит счётчик в отрицательные значения — не трогаем пустой карман;
 				// раз в 20–40 с. Период кратен шагу тика, иначе он почти никогда не совпадёт с сеткой
 				long period = 400L + 10L * Math.floorMod(zone.id(), 40L);
-				if (state.pulseTicks % period == 0L && player.totalExperience > 0) {
+				if (state.pulseTicks % period < state.lastStep && player.totalExperience > 0) {
 					player.giveExperiencePoints(-1);
 				}
 			}
@@ -387,13 +387,13 @@ public enum AnomalyComponent {
 			// поход это ровно та цена, которую видно только дома
 			case WEAR -> {
 				long period = 400L + 10L * Math.floorMod(zone.id(), 20L);
-				if (state.pulseTicks % period == 0L) {
+				if (state.pulseTicks % period < state.lastStep) {
 					wearArmour(player);
 				}
 			}
 			// порча: раз в ~30 с часть еды в сумке скисает в гниль
 			case LOOT_SOUR -> {
-				if (state.pulseTicks % 600L == 0L) {
+				if (state.pulseTicks % 600L < state.lastStep) {
 					sourFood(player);
 				}
 			}
@@ -476,10 +476,12 @@ public enum AnomalyComponent {
 						}
 					}
 					// молния оставляет гарь, а иногда и воронку: следы, которые видно потом
+					// nearY — поверхность этой колонки: у дальнего удара рельеф другой,
+					// и «выше игрока на 4 блока» глушило след насовсем
 					if (canMark(level, x, z)) {
-						AnomalyScars.scorch(level, x, z, 1.5 + rnd.nextDouble(), player.getY());
+						AnomalyScars.scorch(level, x, z, 1.5 + rnd.nextDouble(), boltY);
 						if (rnd.nextInt(3) == 0) {
-							AnomalyScars.microCrater(level, x, z, 2.2, 1, player.getY());
+							AnomalyScars.microCrater(level, x, z, 2.2, 1, boltY);
 						}
 					}
 				}
@@ -494,11 +496,23 @@ public enum AnomalyComponent {
 			case FLOAT_ALL -> {
 				if (state.pulseTicks % 40 < state.lastStep) {
 					for (LivingEntity entity : nearby(level, player, 24.0)) {
+						// за краем зоны только косметика: иначе животные у базы взлетают
+						// и падают с уроном
+						if (zone.signedDistance(entity.getX(), entity.getZ()) > 0.0) {
+							continue;
+						}
 						entity.addEffect(new MobEffectInstance(MobEffects.LEVITATION, 40, 0, false, true, true));
 					}
-					// игрок висит только внутри зоны: иначе левитация «догоняет» снаружи и убивает падением
+					// игрок висит только внутри зоны: иначе левитация «догоняет» снаружи и убивает падением.
+					// И не выше восьми блоков над землёй: без потолка набегало 1 бл/с, а выход из зоны
+					// давал падение с десятков блоков — то есть смерть после боя
 					if (zone.signedDistance(player.getX(), player.getZ()) <= 0.0) {
-						player.addEffect(new MobEffectInstance(MobEffects.LEVITATION, 40, 0, false, true, true));
+						double ground = surfaceOr(level, player.getX(), player.getZ(), player.getY());
+						if (player.getY() < ground + 8.0) {
+							player.addEffect(new MobEffectInstance(MobEffects.LEVITATION, 40, 0, false, true, true));
+						} else {
+							player.addEffect(new MobEffectInstance(MobEffects.SLOW_FALLING, 100, 0, false, true, true));
+						}
 					}
 					// и дроп тоже: «всё, что не приколочено»
 					for (ItemEntity item : level.getEntitiesOfClass(ItemEntity.class,
@@ -570,11 +584,15 @@ public enum AnomalyComponent {
 							player.getY() + 1.0 + rnd.nextDouble() * 2.0,
 							player.getZ() + (rnd.nextDouble() - 0.5) * 6.0, 6, 0.0, 0.0, 0.0, 0.15);
 				}
-				// давление проламывает пол на один блок: раз в ~20 с
+				// давление проламывает пол на один блок: раз в ~20 с. В 4–6 блоках от игрока:
+				// ближе microCrater колонку не берёт (защита «не ставить блок в игрока»),
+				// и пол под ногами не рвался никогда
 				if (canMark(level, player.getX(), player.getZ()) && rnd.nextInt(40) == 0) {
+					double spotAngle = rnd.nextDouble() * Math.PI * 2.0;
+					double spotDist = 4.0 + rnd.nextDouble() * 2.0;
 					AnomalyScars.microCrater(level,
-							player.getX() + (rnd.nextDouble() - 0.5) * 6.0,
-							player.getZ() + (rnd.nextDouble() - 0.5) * 6.0, 0.6, 1, player.getY());
+							player.getX() + Math.cos(spotAngle) * spotDist,
+							player.getZ() + Math.sin(spotAngle) * spotDist, 0.6, 1, player.getY());
 				}
 			}
 			case DARK_SUCKING -> {

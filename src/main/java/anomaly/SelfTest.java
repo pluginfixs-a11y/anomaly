@@ -1874,7 +1874,10 @@ public final class SelfTest {
 	private static void checkChunkBudget(Result result, AnomalyConfig config) {
 		AnomalyConfig cfg = new AnomalyConfig();
 		AnomalyFieldData data = new AnomalyFieldData();
-		data.gen_day = 0;
+		// сутки считаются по настоящим часам (иначе /anomaly timescale 3600 выдавал новый
+		// лимит каждые 24 секунды), поэтому «сегодня» = сегодняшний day, а прошлый день — минус один
+		int today = (int) (System.currentTimeMillis() / AnomalyField.DAY_MS);
+		data.gen_day = today;
 		data.gen_count = 5;
 		cfg.chunk_gen_per_day = 5;
 		report(result, "на лимите генерация останавливается",
@@ -1885,8 +1888,9 @@ public final class SelfTest {
 		report(result, "нулевой лимит — без ограничений", AnomalyScars.chunkBudgetAllows(data, cfg, 1000L));
 		cfg.chunk_gen_per_day = 5;
 		data.gen_count = 5;
+		data.gen_day = today - 1;
 		report(result, "новые сутки сбрасывают счётчик",
-				AnomalyScars.chunkBudgetAllows(data, cfg, AnomalyField.DAY_MS + 1L) && data.gen_count == 0);
+				AnomalyScars.chunkBudgetAllows(data, cfg, 1000L) && data.gen_count == 0);
 	}
 
 	// --- рейды остатка ---

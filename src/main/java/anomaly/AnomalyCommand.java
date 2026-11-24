@@ -357,10 +357,14 @@ public final class AnomalyCommand {
 		// один угол на все типы: демо снимают с одной точки, и следы должны читаться
 		// с одного направления, а не веером на 360°
 		op.angle = 0.9;
+		// У трещины length = 6·radius: прежний охват при r=30 грузил ~625 чанков синхронно
+		// и вешал сервер на минуты. Шестьдесят четыре чанка покрывают любой след демо
 		int reach = (int) Math.ceil(op.radius) + Math.abs(op.length) + 2;
-		for (int cx = (bx - reach) >> 4; cx <= (bx + reach) >> 4; cx++) {
-			for (int cz = (bz - reach) >> 4; cz <= (bz + reach) >> 4; cz++) {
+		int loaded = 0;
+		for (int cx = (bx - reach) >> 4; cx <= (bx + reach) >> 4 && loaded < 64; cx++) {
+			for (int cz = (bz - reach) >> 4; cz <= (bz + reach) >> 4 && loaded < 64; cz++) {
 				level.getChunk(cx, cz);
+				loaded++;
 			}
 		}
 		int changed = 0;

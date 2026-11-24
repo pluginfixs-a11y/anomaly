@@ -9,7 +9,9 @@ import java.util.List;
  */
 public final class AnomalyFieldData {
 	/** Версия формата файла: по ней делается миграция при будущих переименованиях. */
-	public int version = 2;
+	/** Версия формата файла. Файл новее этой цифры мод не читает — см. AnomalyField.read. */
+	public static final int CURRENT_VERSION = 2;
+	public int version = CURRENT_VERSION;
 
 	/** Счётчик полевого времени на момент сохранения, мс. */
 	public long clock_ms;

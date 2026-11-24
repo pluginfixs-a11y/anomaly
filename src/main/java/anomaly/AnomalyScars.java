@@ -327,8 +327,11 @@ public final class AnomalyScars {
 					new Random(anomaly.id * 31L + (long) (moved * 7.0)), false, anomaly.components);
 			// остаток бюджета зоны, а не фиксированная доля: план при рождении берёт 0.3–0.7,
 			// остальное делят дрейфовые добавки и тихие следы
-			double budget = AnomalyClass.damageBudget(anomaly.r0, cls)
-					- anomaly.scar_spent - plannedBlocks(anomaly.scars);
+			// только ждущее: применённое уже сидит в scar_spent, и без вычета очереди
+			// бюджет считался дважды, а зона молча переставала получать следы
+			double budget = AnomalyClass.damageBudget(anomaly.r0, cls) - anomaly.scar_spent
+					- plannedBlocks(anomaly.scars.subList(
+							Math.max(0, anomaly.scar_next), anomaly.scars.size()));
 			if (budget <= 0.0) {
 				continue;
 			}
@@ -429,9 +432,9 @@ public final class AnomalyScars {
 	/**
 	 * Тикет прогрузки для тихого следа: чанк генерируется штатной очередью чанков (по чуть-чуть
 	 * за тик, без 50-мс стопа), гаснет сам по таймауту и, в отличие от forceload, не попадает
-	 * в сейв мира. 300 с — с запасом на проход поля.
+	 * в сейв мира. Время — в ТИКАХ: 1200 = минута (у ванильного PORTAL 300 = 15 с).
 	 */
-	private static final TicketType DRIP_TICKET = new TicketType(300L, TicketType.FLAG_LOADING);
+	private static final TicketType DRIP_TICKET = new TicketType(1200L, TicketType.FLAG_LOADING);
 	private static final Random DRIP_RANDOM = new Random(0x5EED5CA7L);
 	private static int dripTicks;
 	/** Прошлый проход поля не двигался из-за mspt: дрип не должен копить следы. */
@@ -439,6 +442,7 @@ public final class AnomalyScars {
 	/** Сколько попыток дрипа подряд ушло впустую: по нему пишется строка в лог. */
 	private static int dripFails;
 	private static int msptLogged;
+	private static long reticketAt;
 	private static boolean dripLogged;
 	private static int dripDebug;
 
@@ -560,23 +564,45 @@ public final class AnomalyScars {
 	 */
 	private static int loadAround(ServerLevel level, AnomalyFieldData data, AnomalyConfig config,
 			long now, ScarOp op) {
-		double half = Math.max(4.0, op.radius) + Math.abs(op.length) * 0.5;
+		// у диска length остаётся дефолтным (40), и прежний расчёт заказывал чанки в 20 блоках
+		// от опа, а его собственный чанк не попадал вовсе
+		double half = Math.max(4.0, op.radius) + (op.isLine() ? Math.abs(op.length) * 0.5 : 0.0);
+		int cx0 = (int) Math.floor(op.x) >> 4;
+		int cz0 = (int) Math.floor(op.z) >> 4;
 		int x0 = (int) Math.floor(op.x - half) >> 4;
 		int x1 = (int) Math.floor(op.x + half) >> 4;
 		int z0 = (int) Math.floor(op.z - half) >> 4;
 		int z1 = (int) Math.floor(op.z + half) >> 4;
-		int asked = 0;
-		for (int cx = x0; cx <= x1 && asked < 4; cx++) {
-			for (int cz = z0; cz <= z1 && asked < 4; cz++) {
-				if (!chunkBudgetAllows(data, config, now)) {
-					return asked;
-				}
-				level.getChunkSource().addTicketWithRadius(DRIP_TICKET, new ChunkPos(cx, cz), 0);
-				data.gen_count++;
-				asked++;
+		List<int[]> cells = new ArrayList<>();
+		for (int cx = x0; cx <= x1; cx++) {
+			for (int cz = z0; cz <= z1; cz++) {
+				cells.add(new int[]{cx, cz});
 			}
 		}
+		// свой чанк первым: лимит четыре, и при длинной трещине до него может не дойти
+		cells.sort((a, b) -> Integer.compare(
+				Math.abs(a[0] - cx0) + Math.abs(a[1] - cz0),
+				Math.abs(b[0] - cx0) + Math.abs(b[1] - cz0)));
+		int asked = 0;
+		for (int[] cell : cells) {
+			if (asked >= 4 || !chunkBudgetAllows(data, config, now)) {
+				break;
+			}
+			level.getChunkSource().addTicketWithRadius(DRIP_TICKET, new ChunkPos(cell[0], cell[1]), 0);
+			data.gen_count++;
+			asked++;
+		}
 		return asked;
+	}
+
+	/** Не чаще одного запроса чанков в секунду на весь проход: заявка на чанк — не бесплатная. */
+	private static boolean reticketBudget() {
+		long now = System.currentTimeMillis();
+		if (now - reticketAt < 1_000L) {
+			return false;
+		}
+		reticketAt = now;
+		return true;
 	}
 
 	/** Стоит ли игрок в этой зоне: там дрип не нужен, следы появляются и без него. */
@@ -614,7 +640,9 @@ public final class AnomalyScars {
 	 * растягивает worldgen на 10–30 тыс. генераций и часы работы сервера.
 	 */
 	static boolean chunkBudgetAllows(AnomalyFieldData data, AnomalyConfig config, long now) {
-		int day = (int) (now / AnomalyField.DAY_MS);
+		// по настоящим суткам: /anomaly timescale 3600 иначе выдавал новый лимит
+		// в 6000 чанков каждые 24 секунды
+		int day = (int) (System.currentTimeMillis() / AnomalyField.DAY_MS);
 		if (data.gen_day != day) {
 			data.gen_day = day;
 			data.gen_count = 0;
@@ -738,6 +766,12 @@ public final class AnomalyScars {
 						// подойдёт. И это НЕ повод обрывать весь проход: с «break» поле обслуживало
 						// ровно одну зону в секунду, и 610 зон ждали своей очереди десять минут
 						if (serverHasPlayers(level)) {
+							// при живом игроке синхронно не генерируем, но и не бросаем op
+							// навсегда: он держит всю очередь зоны. Просим чанк тикетом,
+							// не чаще раза в секунду — иначе поле завалит систему чанков
+							if (reticketBudget()) {
+								loadAround(level, data, config, AnomalyClock.now(), op);
+							}
 							skipped = true;
 							break;
 						}
@@ -777,10 +811,12 @@ public final class AnomalyScars {
 							break;
 						}
 						// восемь раз не смогли: считаем МОКРЫМ. «Сухо» здесь означало бы воронку
-						// в берег — ровно то, от чего защищались; пропуск безопаснее
+						// в берег — ровно то, от чего защищались; пропуск безопаснее.
+						// Бюджет при этом не жжём: ни один блок не поставлен
 						anomaly.scar_wet_tries = 0;
-						anomaly.scar_wet_for = anomaly.scar_next;
-						wetSkip = true;
+						anomaly.scar_wet_for = -1;
+						anomaly.scars.remove(anomaly.scar_next);
+						AnomalyField.markDirty();
 						break;
 					}
 					anomaly.scar_wet_tries = 0;
@@ -830,6 +866,10 @@ public final class AnomalyScars {
 							AnomalyMod.LOGGER.warn("Anomaly: след #{} в {}, {} не применён ({})",
 									anomaly.id, column[0], column[1], e.toString());
 						}
+						// курсор уже сдвинут: без отката колонка потеряна, а след остаётся
+						// с дырой, которую не видно ни в счётчиках, ни в логе
+						anomaly.scar_cursor--;
+						continue;
 					}
 					if (applied == -2) {
 						// игрок стоит в объёме следа: откладываем op, а не колонку
@@ -1769,7 +1809,9 @@ public final class AnomalyScars {
 		for (int y = surface; y <= top; y++) {
 			// масса камня не может съесть весь тик: у пика до 150 блоков в одной колонке
 			if (passDeadline != 0L && (changed & 7) == 7 && System.nanoTime() > passDeadline) {
-				return changed > 0 ? changed : -1;
+				// колонка не доделана: -1 заставит проход повторить её, иначе пик остаётся
+				// с обрубком, а op считается применённым
+				return -1;
 			}
 			BlockState state = level.getBlockState(pos.set(x, y, z));
 			if (protectedBlock(state)) {
