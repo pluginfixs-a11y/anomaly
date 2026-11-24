@@ -52,8 +52,9 @@ public final class ScarOp {
 		ScarOp op = disk("spike", x, z, radius, seed);
 		op.height = height;
 		// оценка — по той высоте, которая реально ставится: пока она брала op.height,
-		// смертельная зона списывала втрое больше блоков и теряла два-три следа
-		op.blocks = (int) Math.round(Math.PI * radius * radius * op.spikeHeight() * 0.3);
+		// смертельная зона списывала втрое больше блоков и теряла два-три следа.
+		// 0.18 — средняя колонка пика по замерам в игре (r 10: 0.31, r 12: 0.16)
+		op.blocks = (int) Math.round(Math.PI * radius * radius * op.spikeHeight() * 0.18);
 		return op;
 	}
 
@@ -96,7 +97,10 @@ public final class ScarOp {
 	/** Обрушенная постройка: пол из обломков и стены без крыш. */
 	public static ScarOp ruin(double x, double z, double radius, long seed) {
 		ScarOp op = disk("ruin", x, z, radius, seed);
-		op.blocks = (int) Math.round(Math.PI * radius * radius * 1.9);
+		// пол даёт ~πr², стены — периметр: у мелких руин стена занимает всю площадь (1.87
+		// блока на колонку при r 5), у крупных почти не видна (0.96 при r 13). Постоянный
+		// коэффициент врал в обе стороны
+		op.blocks = (int) Math.round(Math.PI * radius * radius * (0.39 + 7.4 / Math.max(1.0, radius)));
 		return op;
 	}
 
@@ -158,7 +162,7 @@ public final class ScarOp {
 
 	public String describe() {
 		return switch (type) {
-			case "spike" -> "пик " + Math.round(height) + " (r " + Math.round(radius) + ")";
+			case "spike" -> "пик " + spikeHeight() + " (r " + Math.round(radius) + ")";
 			case "sinkhole" -> "провал r " + Math.round(radius) + " × " + sinkholeDepth();
 			case "fallen_forest" -> "поваленный лес r " + Math.round(radius);
 			case "ruin" -> "руины r " + Math.round(radius);

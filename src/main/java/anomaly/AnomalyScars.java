@@ -950,7 +950,8 @@ public final class AnomalyScars {
 			return 0;
 		}
 		// бревно — только настоящее бревно: шляпка грибного дерева, уложенная плашмя,
-		// давала красную плиту на земле, а не поваленный ствол
+		// давала красную плиту на земле, а не поваленный ствол. Размен: бамбук, корни
+		// мангров и грибные стволы поваленный лес тоже не трогает — у них нет бревна
 		if (!top.is(BlockTags.LOGS)) {
 			return 0;
 		}
@@ -1015,7 +1016,6 @@ public final class AnomalyScars {
 
 	/** Обрушенная постройка: стены по периметру с проломами и пол из обломков внутри. */
 	private static int ruin(ServerLevel level, ScarOp op, int x, int surface, int z) {
-		int hash = (int) ((x * 73856093L) ^ (z * 19349663L) ^ op.seed);
 		int changed = 0;
 		double dx = x - op.x;
 		double dz = z - op.z;
@@ -1152,7 +1152,6 @@ public final class AnomalyScars {
 	}
 
 	private static int rubble(ServerLevel level, int x, int surface, int z, long seed) {
-		int hash = (int) ((x * 73856093L) ^ (z * 19349663L) ^ seed);
 		BlockPos ground = new BlockPos(x, surface - 1, z);
 		BlockState state = level.getBlockState(ground);
 		// грядки и тропинки — работа игрока: rubble не должен штукатурить ферму
@@ -1368,7 +1367,6 @@ public final class AnomalyScars {
 	/** Провал: вынимаем колонку на depth блоков, стенки остаются как есть. */
 	private static int sinkhole(ServerLevel level, ScarOp op, int x, int surface, int z) {
 		double distance = Math.hypot(x - op.x, z - op.z);
-		int hash = (int) ((x * 73856093L) ^ (z * 19349663L) ^ op.seed);
 		int cell = ((x >> 1) * 31) ^ ((z >> 1) * 17) ^ (int) op.seed;
 		// кромка провала: грунт вывернут и обломан. Ровная круглая яма с вертикальными
 		// стенками с 20–200 блоков не читается вовсе. Губа ровно в один блок и только

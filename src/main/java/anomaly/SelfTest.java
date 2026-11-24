@@ -789,7 +789,7 @@ public final class SelfTest {
 			AnomalyScars.applyColumn(level, ScarOp.spike(miniX, bz, 3.0, 14, 23L), miniX, bz);
 			int miniAfter = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, miniX, bz);
 			report(result, "малый пик (r 3) поднимает колонку на " + (miniAfter - miniSurface) + " блоков",
-					miniAfter >= miniSurface + 4 && miniAfter <= miniSurface + 10);
+					miniAfter >= miniSurface + 4 && miniAfter <= miniSurface + 9);
 			restore(level, miniBefore);
 
 			// провал копает от радиуса: яма глубиной в аргумент при 12 поперёк — не провал
@@ -803,7 +803,8 @@ public final class SelfTest {
 			}
 			// глубина — это возврат applyColumn по центральной колонке: сколько блоков вынуто.
 			// Точное число зависит от грунта под тестовой точкой, поэтому сверяем с расчётной
-			// глубиной, а не с константой: при старом «depth из аргумента» тут было бы 2
+			// глубиной, а не с константой. Допуск -2: джиттер и обрывы на грунте.
+			// Ловит возврат к «глубина = аргумент» (2) — тогда ниже расчётной вышло бы 3
 			ScarOp pitOp = ScarOp.sinkhole(pitX, bz, 6.0, 2, 29L);
 			int pitDug = AnomalyScars.applyColumn(level, pitOp, pitX, bz);
 			report(result, "провал r 6: аргумент 2, расчётная глубина " + pitOp.sinkholeDepth()
