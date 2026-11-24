@@ -62,7 +62,7 @@
     <canvas id="cv"></canvas>
     <div id="hud">
       <h1>Anomaly Fields — превью поля</h1>
-      <div class="sub">мир ±20 000 (сторона 40 000, по диагонали 28 284) · колесо — зум, перетаскивание — сдвиг</div>
+      <div class="sub">мир ±20 000 (сторона 40 000, по диагонали 28 284) · колесо — зум, перетаскивание — сдвиг, линейка масштаба внизу справа</div>
     </div>
     <div id="tip"></div>
   </div>
@@ -91,7 +91,8 @@
       <div><span class="sw" style="background:var(--deadly)"></span>15к+: смертельные</div>
       <div><span class="sw sw-line"></span>сплошной контур — край зоны</div>
       <div><span class="sw sw-dash"></span>пунктир — ядро 45 % и контур мёртвой зоны</div>
-      <div><span class="sw sw-dark"></span>тёмное пятно — следы разрушения</div>
+      <div><span class="sw sw-dark"></span>тёмные пятна — следы: земля, лунки, пики, провалы, плиты, разломы</div>
+      <div><span class="sw sw-dark"></span>кольцо по контуру — опоясывающая рана зоны</div>
     </div>
 
     <h2>Поле</h2>
@@ -99,8 +100,9 @@
 
     <h2>Управление</h2>
     <div class="row"><button id="seed">новый мир</button><button id="png">PNG</button></div>
-    <div class="hint">Это превью концепции, а не код мода: плотность, форма, дрейф и фазы посчитаны по описанию
-      из README. Цвета классов — те же, что в игре (Zone.edgeColor).</div>
+    <div class="hint">Это превью концепции, а не код мода: форма, дрейф и фазы посчитаны по описанию
+      из README, а следы разрушения — по правилам AnomalyScars (бюджет класса, spot 0.08–0.86 радиуса,
+      кольцо раны по контуру). Цвета классов — те же, что в игре (Zone.edgeColor).</div>
   </aside>
 </div>
 <script>
@@ -441,6 +443,7 @@ function draw() {
   for (const [a, st] of alive) drawAnomaly(a, st);
   drawPlayerMark();
   flushLabels();
+  drawScaleBar();
   updateStats(alive);
 }
 
@@ -534,7 +537,10 @@ function drawAnomaly(a, st) {
   const fresh = st.age < 3; // только родилась — подсвечиваем
   if (state.show.forms) {
     polygonPath(shapePoints(a, st));
-    ctx.fillStyle = withAlpha(a.cls.color, 0.16);
+    // на глубоком зуме заливка слабеет: иначе весь экран — ровное поле цвета класса,
+    // и следы на нём не читаются
+    const s = baseScale();
+    ctx.fillStyle = withAlpha(a.cls.color, 0.16 / (1 + s * 1.2));
     ctx.fill();
     ctx.strokeStyle = withAlpha(a.cls.color, fresh ? 0.95 : 0.6);
     ctx.lineWidth = fresh ? 2 : 1;
@@ -584,111 +590,277 @@ function drawAnomaly(a, st) {
   }
 }
 
-// последствия: большие опасные/смертельные уродуют землю, мелкие — почти нет
+// последствия: не одно пятно в ядре, а план зоны — до 40 опов в полосе 0.08–0.86 радиуса
+// плюс кольцо раны по настоящему контуру (AnomalyScars.planAt / woundRing)
 function drawDamage(a, st) {
   const blocks = damageBlocks(a);
   if (blocks <= 0) return;
   const strength = Math.min(1, Math.log10(blocks + 1) / 5.4); // 300 → ~0.46, 250k → 1.0
+  const plan = damagePlan(a, st);
   const rnd = mulberry32(a.id * 7919 + 13);
+  for (const op of plan.ops) {
+    drawDamageOp(a, st, op.kind, op.x, op.z, op.radius, strength, rnd);
+  }
+  drawWoundRing(a, st, rnd, strength);
+}
 
-  // выжженное пятно — по бюджету и смещённое от центра: в игре следы живут в полосе
-  // 0.18–0.85 радиуса, а не ровно в ядре (у r=200 бюджет 120 блоков, полрадиуса было бы 31 тыс.)
-  const patchR = Math.min(st.radius * 0.5, Math.sqrt(blocks / Math.PI) * 1.6);
-  const patchAngle = rnd() * Math.PI * 2;
-  const patchDist = st.radius * (0.18 + 0.67 * Math.sqrt(rnd()));
-  const px = st.x + Math.cos(patchAngle) * patchDist;
-  const pz = st.z + Math.sin(patchAngle) * patchDist;
-  polygonPath(shapePoints(a, { x: px, z: pz, radius: patchR }, 1));
-  // тон золы, а не чёрная дыра: #0a0806 на тёмном фоне читался как вырезанный кусок карты
-  ctx.fillStyle = `rgba(38, 30, 22, ${0.45 + 0.4 * strength})`;
-  ctx.fill();
-  ctx.strokeStyle = `rgba(120, 96, 62, ${0.30 + 0.45 * strength})`;
-  ctx.lineWidth = 1;
-  ctx.stroke();
-
-  // обломки и геология — от пятна, а не от центра зоны: иначе пики стоят отдельно от следа
-  const specks = Math.min(48, Math.round(8 + blocks / 600));
-  for (let i = 0; i < specks; i++) {
+// план следов зоны детерминированно: одна и та же зона в любой момент и на любом зуме
+// рисует одни и те же пятна (seed зоны), поэтому по нему можно наводить камеру
+function damagePlan(a, st) {
+  const blocks = damageBlocks(a);
+  const rnd = mulberry32(a.id * 7919 + 13);
+  // план набирает 40–90 % бюджета и до 40 опов — как planAt
+  const plan = blocks * (0.4 + rnd() * 0.5);
+  const count = Math.max(2, Math.min(40, Math.round(Math.sqrt(plan) / 22)));
+  const ops = [];
+  for (let i = 0; i < count; i++) {
+    // блоков на один op → радиус пятна той же площади
+    const share = plan / count;
+    const radius = Math.max(1.2, Math.min(st.radius * 0.3, Math.sqrt(share / Math.PI)));
     const ang = rnd() * Math.PI * 2;
-    const dist = Math.sqrt(rnd()) * Math.max(4, patchR * 1.15);
-    const [sx, sy] = toScreen(px + Math.cos(ang) * dist, pz + Math.sin(ang) * dist);
-    const size = 1.2 + rnd() * (blocks > 20000 ? 2.2 : 1.0);
+    // spot(): 0.08 + 0.78·√u — следы ложатся от ядра до края, а не только в центре
+    const dist = st.radius * (0.08 + 0.78 * Math.sqrt(rnd()));
+    ops.push({
+      kind: pickDamageKind(a, blocks, rnd),
+      x: st.x + Math.cos(ang) * dist,
+      z: st.z + Math.sin(ang) * dist,
+      radius
+    });
+  }
+  return { ops, plan };
+}
+
+// что именно оставляет зона: у крупных — пики, провалы, плиты и разломы, у мелких — земля и лунки
+function pickDamageKind(a, blocks, rnd) {
+  const forest = !!(a.geo && a.geo.forest);
+  const ruins = !!(a.geo && a.geo.ruins);
+  const r = rnd();
+  if (ruins && r < 0.10) return "ruins";
+  if (forest && r < 0.28) return "fallen";
+  if (blocks > 8000) {
+    if (r < 0.42) return "spike";
+    if (r < 0.56) return "sinkhole";
+    if (r < 0.66) return "uplift";
+    if (r < 0.76) return "fault";
+  }
+  if (r < 0.70) return "soil";
+  if (r < 0.88) return "crater";
+  return "crack";
+}
+
+function drawDamageOp(a, st, kind, ox, oz, radius, strength, rnd) {
+  const s = baseScale();
+  const [sx, sy] = toScreen(ox, oz);
+  if (sx < -120 || sy < -120 || sx > W + 120 || sy > H + 120) return;
+
+  // выжженная земля, поваленный лес и руины стоят на одном основании: тон золы,
+  // а не чёрная дыра (#0a0806 на тёмном фоне читался как вырезанный кусок карты)
+  if (kind === "soil" || kind === "fallen" || kind === "ruins") {
+    polygonPath(shapePoints(a, { x: ox, z: oz, radius }, 1));
+    ctx.fillStyle = `rgba(38, 30, 22, ${0.45 + 0.4 * strength})`;
+    ctx.fill();
+    ctx.strokeStyle = `rgba(120, 96, 62, ${0.30 + 0.45 * strength})`;
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    // обломки: их ставит rubbleBlock, поэтому они есть на любом следе
+    const specks = Math.min(24, Math.round(3 + radius));
     ctx.fillStyle = `rgba(168, 143, 104, ${0.45 + 0.45 * strength})`;
-    ctx.fillRect(sx - size / 2, sy - size / 2, size, size);
+    for (let i = 0; i < specks; i++) {
+      const ang = rnd() * Math.PI * 2;
+      const dist = Math.sqrt(rnd()) * radius * 1.1;
+      const [qx, qy] = toScreen(ox + Math.cos(ang) * dist, oz + Math.sin(ang) * dist);
+      const size = Math.max(1, (0.6 + rnd() * 1.4) * s);
+      ctx.fillRect(qx - size / 2, qy - size / 2, size, size);
+    }
+    if (kind === "fallen") {
+      // стволы лежат плашмя, все вдоль одного направления падения
+      const fall = rnd() * Math.PI * 2;
+      const logs = Math.max(3, Math.round(4 + radius * 0.25));
+      ctx.strokeStyle = `rgba(96, 74, 48, ${0.5 + 0.4 * strength})`;
+      ctx.lineWidth = Math.max(1, 3 * s);
+      for (let i = 0; i < logs; i++) {
+        const ang = rnd() * Math.PI * 2;
+        const dist = Math.sqrt(rnd()) * radius;
+        const [qx, qy] = toScreen(ox + Math.cos(ang) * dist, oz + Math.sin(ang) * dist);
+        const len = Math.max(3, (4 + rnd() * 3) * s);
+        ctx.beginPath();
+        ctx.moveTo(qx, qy);
+        ctx.lineTo(qx + Math.cos(fall) * len, qy + Math.sin(fall) * len);
+        ctx.stroke();
+      }
+    }
+    if (kind === "ruins") {
+      // стены без крыш: контур и пол из обломков, а не сплошной квадрат
+      const w = Math.max(4, (8 + rnd() * 8) * s);
+      const h = Math.max(4, (6 + rnd() * 8) * s);
+      ctx.strokeStyle = `rgba(150, 146, 138, ${0.55 + 0.3 * strength})`;
+      ctx.lineWidth = Math.max(1, 2 * s);
+      ctx.beginPath();
+      ctx.moveTo(sx - w / 2, sy - h / 2);
+      ctx.lineTo(sx + w / 2, sy - h / 2);
+      ctx.lineTo(sx + w / 2, sy + h / 2);
+      ctx.stroke();
+      ctx.fillStyle = `rgba(150, 146, 138, ${0.18 + 0.2 * strength})`;
+      ctx.fillRect(sx - w / 2, sy - h / 2, w, h);
+    }
+    return;
   }
 
-  if (blocks < 2000) return; // пики — это настоящие блоки камня, у мелких зон их нет
-  const spikes = Math.min(8, 2 + Math.floor(blocks / 2000));
-  const tallest = Math.min(150, 20 + Math.sqrt(blocks) * 0.22);
-  const s = baseScale();
-  for (let i = 0; i < spikes; i++) {
-    const ang = rnd() * Math.PI * 2;
-    const dist = rnd() * Math.max(4, patchR * 1.25);
-    const h = tallest * (0.5 + rnd() * 0.5);
-    const [sx, sy] = toScreen(px + Math.cos(ang) * dist, pz + Math.sin(ang) * dist);
-    const hpx = Math.max(3, h * s);
-    const wpx = Math.max(1.5, h * 0.35 * s);
+  if (kind === "crater") {
+    // микроворонка: тёмная лунка с кромкой из обломков, повторно в ту же клетку не бьёт
+    const r = Math.max(2, Math.min(6, radius)) * s;
+    ctx.beginPath();
+    ctx.arc(sx, sy, r, 0, Math.PI * 2);
+    ctx.fillStyle = `rgba(22, 18, 13, ${0.55 + 0.3 * strength})`;
+    ctx.fill();
+    ctx.strokeStyle = `rgba(150, 132, 96, ${0.5 + 0.3 * strength})`;
+    ctx.lineWidth = Math.max(1, 1.4 * s);
+    ctx.stroke();
+    return;
+  }
+
+  if (kind === "spike") {
+    // кромка вывернутого грунта: обломки, а не ровный круг — конус растёт из разбитой земли
+    polygonPath(shapePoints(a, { x: ox, z: oz, radius: radius * 1.15 }, 1));
+    ctx.fillStyle = `rgba(84, 70, 48, ${0.30 + 0.25 * strength})`;
+    ctx.fill();
+    ctx.fillStyle = `rgba(150, 132, 96, ${0.5 + 0.35 * strength})`;
+    const skirt = Math.max(6, Math.round(radius * 0.5));
+    for (let i = 0; i < skirt; i++) {
+      const ang = rnd() * Math.PI * 2;
+      const dist = radius * (0.55 + rnd() * 0.6);
+      const [qx, qy] = toScreen(ox + Math.cos(ang) * dist, oz + Math.sin(ang) * dist);
+      const size = Math.max(1, (0.7 + rnd() * 1.3) * s);
+      ctx.fillRect(qx - size / 2, qy - size / 2, size, size);
+    }
+    const blocks = Math.min(120, 18 + Math.sqrt(radius) * 9);
+    const hpx = Math.max(3, blocks * s);
+    const wpx = Math.max(1.5, radius * s * (0.55 + rnd() * 0.25));
     ctx.beginPath();
     ctx.moveTo(sx, sy - hpx);
     ctx.lineTo(sx - wpx, sy);
     ctx.lineTo(sx + wpx, sy);
     ctx.closePath();
-    // пик в игре — камень (SPIKE_BLOCKS), а не цвет класса
-    ctx.fillStyle = `rgba(150, 148, 142, ${0.55 + 0.35 * strength})`;
+    // пик в игре — камень биома (SPIKE_BLOCKS), а не цвет класса
+    ctx.fillStyle = `rgba(150, 148, 142, ${0.72 + 0.2 * strength})`;
     ctx.fill();
     ctx.strokeStyle = "rgba(18, 14, 10, 0.9)";
     ctx.lineWidth = 1;
     ctx.stroke();
+    return;
   }
 
-  // поваленный лес плашмя: короткие штрихи, все вдоль одного направления падения
-  if (a.geo && a.geo.forest) {
-    const fall = rnd() * Math.PI * 2;
-    const logs = Math.max(4, Math.round(10 * strength));
-    ctx.strokeStyle = `rgba(96, 74, 48, ${0.45 + 0.4 * strength})`;
-    ctx.lineWidth = Math.max(1, s * 1.2);
-    for (let i = 0; i < logs; i++) {
-      const ang = rnd() * Math.PI * 2;
-      const dist = Math.sqrt(rnd()) * Math.max(4, patchR * 1.2);
-      const [sx, sy] = toScreen(px + Math.cos(ang) * dist, pz + Math.sin(ang) * dist);
-      const len = Math.max(3, (4 + rnd() * 3) * s);
-      ctx.beginPath();
-      ctx.moveTo(sx, sy);
-      ctx.lineTo(sx + Math.cos(fall) * len, sy + Math.sin(fall) * len);
-      ctx.stroke();
-    }
+  if (kind === "sinkhole") {
+    // провал: рваный контур, дно темнее к центру, кромка обломана
+    polygonPath(shapePoints(a, { x: ox, z: oz, radius }, 1));
+    ctx.fillStyle = `rgba(14, 12, 10, ${0.65 + 0.25 * strength})`;
+    ctx.fill();
+    ctx.strokeStyle = `rgba(140, 120, 88, ${0.4 + 0.3 * strength})`;
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    const rim = Math.max(3, radius * s);
+    ctx.beginPath();
+    ctx.arc(sx, sy, rim * 0.55, 0, Math.PI * 2);
+    ctx.strokeStyle = "rgba(6, 5, 4, 0.75)";
+    ctx.stroke();
+    return;
   }
 
-  // обрушенные постройки: пол из обломков и стены без крыш
-  if (a.geo && a.geo.ruins) {
-    const houses = 1 + Math.round(2 * strength);
-    for (let i = 0; i < houses; i++) {
-      const ang = rnd() * Math.PI * 2;
-      const dist = Math.sqrt(rnd()) * Math.max(4, patchR * 1.1);
-      const [sx, sy] = toScreen(px + Math.cos(ang) * dist, pz + Math.sin(ang) * dist);
-      const w = Math.max(3, (8 + rnd() * 8) * s);
-      ctx.fillStyle = `rgba(150, 146, 138, ${0.35 + 0.3 * strength})`;
-      ctx.fillRect(sx - w / 2, sy - w / 2, w, w);
-      ctx.strokeStyle = `rgba(74, 70, 64, ${0.6 + 0.3 * strength})`;
-      ctx.lineWidth = 1;
-      ctx.strokeRect(sx - w / 2, sy - w / 2, w, w);
-    }
-  }
-
-  // поднятая плита: светлый пласт с тенью по нижнему краю
-  if (a.geo && a.geo.uplift) {
-    const ang = rnd() * Math.PI * 2;
-    const dist = rnd() * Math.max(4, patchR * 0.9);
-    const cx = px + Math.cos(ang) * dist;
-    const cz = pz + Math.sin(ang) * dist;
-    const rr = Math.max(3, patchR * (0.25 + rnd() * 0.2));
-    polygonPath(shapePoints(a, { x: cx, z: cz, radius: rr }));
+  if (kind === "uplift") {
+    // поднятая плита: светлый пласт с тенью по нижнему краю
+    const rr = Math.max(3, radius * s);
+    ctx.beginPath();
+    ctx.arc(sx, sy, rr, 0, Math.PI * 2);
     ctx.fillStyle = `rgba(188, 178, 152, ${0.30 + 0.35 * strength})`;
     ctx.fill();
     ctx.strokeStyle = `rgba(58, 52, 40, ${0.55 + 0.3 * strength})`;
-    ctx.lineWidth = 1.5;
+    ctx.lineWidth = Math.max(1, 1.5 * s);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(sx + rr * 0.18, sy + rr * 0.22, rr * 0.9, 0.2, Math.PI - 0.2);
+    ctx.strokeStyle = "rgba(20, 17, 12, 0.45)";
+    ctx.stroke();
+    return;
+  }
+
+  // трещина и лавовый разлом: линия в мировых координатах, а не штрих на экране
+  const len = kind === "fault" ? 40 + rnd() * 100 : 12 + rnd() * 148;
+  const dir = rnd() * Math.PI * 2;
+  const ex = ox + Math.cos(dir) * len;
+  const ez = oz + Math.sin(dir) * len;
+  const [ex2, ey2] = toScreen(ex, ez);
+  ctx.beginPath();
+  ctx.moveTo(sx, sy);
+  // ломаная: трещины идут не по линейке
+  const segs = 3 + Math.round(len / 40);
+  for (let i = 1; i <= segs; i++) {
+    const t = i / segs;
+    const wob = (rnd() - 0.5) * Math.min(6, len * 0.08);
+    const nx = sx + (ex2 - sx) * t - Math.sin(dir) * wob;
+    const ny = sy + (ey2 - sy) * t + Math.cos(dir) * wob;
+    ctx.lineTo(nx, ny);
+  }
+  ctx.strokeStyle = kind === "fault" ? "rgba(92, 78, 58, 0.9)" : `rgba(26, 20, 14, ${0.75 + 0.2 * strength})`;
+  ctx.lineWidth = Math.max(1, (kind === "fault" ? 3 : 1.6) * s);
+  ctx.stroke();
+  if (kind === "fault") {
+    // остывший шов: базальт по кромке и редкая магма в глубине
+    ctx.strokeStyle = "rgba(70, 66, 62, 0.9)";
+    ctx.lineWidth = Math.max(1, 1.2 * s);
+    ctx.beginPath();
+    ctx.moveTo(sx + Math.cos(dir) * 2, sy + Math.sin(dir) * 2);
+    ctx.lineTo(ex2, ey2);
+    ctx.stroke();
+    const [gx, gy] = toScreen(ox + Math.cos(dir) * len * 0.6, oz + Math.sin(dir) * len * 0.6);
+    const glow = Math.max(1.5, 2.5 * s);
+    ctx.fillStyle = "rgba(214, 96, 30, 0.85)";
+    ctx.fillRect(gx - glow / 2, gy - glow / 2, glow, glow);
+  }
+}
+
+// опоясывающая рана: пятна мёртвой земли по настоящему контуру зоны (woundRing).
+// Считается один раз при рождении, поэтому и в превью она неподвижна относительно формы
+function drawWoundRing(a, st, rnd, strength) {
+  if (st.radius < 300) return;
+  const pts = shapePoints(a, st);
+  const count = Math.max(10, Math.min(24, Math.round(2 * Math.PI * st.radius / 260)));
+  for (let i = 0; i < count; i++) {
+    const p = pts[Math.floor(i * pts.length / count) % pts.length];
+    const rr = 2.5 + rnd() * 1.5;
+    polygonPath(shapePoints(a, { x: p[0], z: p[1], radius: rr }, 1));
+    ctx.fillStyle = `rgba(52, 44, 32, ${0.35 + 0.3 * strength})`;
+    ctx.fill();
+    ctx.strokeStyle = `rgba(112, 92, 62, ${0.25 + 0.3 * strength})`;
+    ctx.lineWidth = 1;
     ctx.stroke();
   }
+}
+
+// линейка масштаба: по подписям сетки масштаб на зуме не читается
+function drawScaleBar() {
+  const s = baseScale();
+  const targets = [10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000];
+  let blocks = targets[targets.length - 1];
+  for (const t of targets) {
+    if (t * s >= 64) { blocks = t; break; }
+  }
+  const px = blocks * s;
+  if (px > W * 0.6) return;
+  const x = W - px - 26;
+  const y = H - 32;
+  ctx.save();
+  ctx.strokeStyle = "#cfd6cf";
+  ctx.lineWidth = 1.4;
+  ctx.beginPath();
+  ctx.moveTo(x, y - 4); ctx.lineTo(x, y + 4);
+  ctx.moveTo(x, y); ctx.lineTo(x + px, y);
+  ctx.moveTo(x + px, y - 4); ctx.lineTo(x + px, y + 4);
+  ctx.stroke();
+  ctx.font = "11px Consolas, monospace";
+  ctx.fillStyle = "#cfd6cf";
+  ctx.textAlign = "center";
+  ctx.fillText(blocks >= 1000 ? (blocks / 1000) + " км" : blocks + " бл", x + px / 2, y - 8);
+  ctx.restore();
 }
 
 function drawPlayerMark() {
@@ -864,7 +1036,7 @@ resize();
 
 // для автоматизации скриншотов и отладки
 window.anomalyPreview = {
-  state, draw, makeField, stateAt, damageBlocks,
+  state, draw, makeField, stateAt, damageBlocks, damagePlan,
   setZoom(z, x, zz) { state.zoom = z; state.panX = x; state.panY = zz; draw(); }
 };
 </script>
