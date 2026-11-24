@@ -134,7 +134,7 @@ public final class AnomalyNodes {
 				continue;
 			}
 			for (Zone zone : AnomalyField.near(level, player.getX(), player.getZ(), REACH + NODE_SPREAD)) {
-				if (zone.remnant()) {
+				if (zone.remnant() || zone.precursor()) {
 					continue;
 				}
 				if (Math.hypot(zone.coreX() - player.getX(), zone.coreZ() - player.getZ()) > REACH + NODE_SPREAD) {
@@ -142,7 +142,7 @@ public final class AnomalyNodes {
 				}
 				Anomaly anomaly = zone.anomaly();
 				placeNodes(level, anomaly, zone);
-				restoreCache(level, anomaly);
+				restoreCache(level, anomaly, occupied(server, level, zone));
 			}
 		}
 	}
@@ -221,13 +221,22 @@ public final class AnomalyNodes {
 		return true;
 	}
 
-	/** Кладовая: если её разобрали, а зона жива, раз в 10 минут сундук появляется снова. */
-	private static void restoreCache(ServerLevel level, Anomaly anomaly) {
+	/**
+	 * Кладовая: если её разобрали, а зона жива, раз в 10 минут сундук появляется снова.
+	 * Пока в зоне стоит игрок, кладовая не восстанавливается: иначе кемпинг у сундука —
+	 * бесконечный лут, а «кемпинг невыгоден» — правило мода, а не пожелание.
+	 */
+	private static void restoreCache(ServerLevel level, Anomaly anomaly, boolean occupied) {
 		if (!anomaly.node_cache_ok || anomaly.remnant) {
 			return;
 		}
 		long now = System.currentTimeMillis();
-		if (anomaly.node_cache_ms > 0L && now - anomaly.node_cache_ms < CACHE_RESTORE_MS) {
+		if (occupied) {
+			// отсчёт начинается с момента, когда игрок ушёл, а не с последней выдачи
+			anomaly.node_cache_ms = now;
+			return;
+		}
+		if (!cacheDue(anomaly.node_cache_ms, now, false)) {
 			return;
 		}
 		BlockPos pos = blockPos(anomaly.node_cx, anomaly.node_cy, anomaly.node_cz);
@@ -246,6 +255,24 @@ public final class AnomalyNodes {
 		placeChest(level, anomaly, pos);
 		anomaly.node_cache_ms = now;
 		AnomalyField.save();
+	}
+
+	/** Пора ли восстанавливать кладовую: чистая функция, по ней же гоняется самопроверка. */
+	static boolean cacheDue(long lastMs, long now, boolean occupied) {
+		if (occupied) {
+			return false;
+		}
+		return lastMs <= 0L || now - lastMs >= CACHE_RESTORE_MS;
+	}
+
+	/** Стоит ли в зоне игрок: пока стоит, зона «кормится», а кладовая молчит. */
+	private static boolean occupied(MinecraftServer server, ServerLevel level, Zone zone) {
+		for (ServerPlayer other : server.getPlayerList().getPlayers()) {
+			if (other.level() == level && zone.contains(other.getX(), other.getZ())) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	/**

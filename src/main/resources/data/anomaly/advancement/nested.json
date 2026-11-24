@@ -1,0 +1,24 @@
+{
+	"parent": "anomaly:root",
+	"display": {
+		"icon": {
+			"id": "minecraft:lodestone"
+		},
+		"title": {
+			"translate": "anomaly.adv.nested",
+			"fallback": "Зона в зоне"
+		},
+		"description": {
+			"translate": "anomaly.adv.nested.desc",
+			"fallback": "Зайти в малую аномалию внутри большой"
+		},
+		"frame": "challenge",
+		"show_toast": true,
+		"announce_to_chat": false
+	},
+	"criteria": {
+		"criterion": {
+			"trigger": "minecraft:impossible"
+		}
+	}
+}

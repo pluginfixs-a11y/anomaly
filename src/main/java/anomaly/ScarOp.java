@@ -64,6 +64,31 @@ public final class ScarOp {
 		return op;
 	}
 
+	/**
+	 * Поваленный лес: круг, в котором каждое дерево сносится и ложится стволом на землю.
+	 * Стоимость — только деревья (ствол + укладка), грунт не портится.
+	 */
+	public static ScarOp forest(double x, double z, double radius, long seed) {
+		ScarOp op = disk("fallen_forest", x, z, radius, seed);
+		op.blocks = (int) Math.round(Math.PI * radius * radius * 0.6);
+		return op;
+	}
+
+	/** Обрушенная постройка: пол из обломков и стены без крыш. */
+	public static ScarOp ruin(double x, double z, double radius, long seed) {
+		ScarOp op = disk("ruin", x, z, radius, seed);
+		op.blocks = (int) Math.round(Math.PI * radius * radius * 1.2);
+		return op;
+	}
+
+	/** Поднятая плита: пласт земли, вывернутый вверх на height блоков с плавным краем. */
+	public static ScarOp uplift(double x, double z, double radius, int height, long seed) {
+		ScarOp op = disk("uplift", x, z, radius, seed);
+		op.height = Math.max(1, Math.min(40, height));
+		op.blocks = (int) Math.round(Math.PI * radius * radius * op.height * 0.5);
+		return op;
+	}
+
 	public boolean isLine() {
 		return "crack".equals(type) || "lava_fault".equals(type);
 	}
@@ -111,6 +136,9 @@ public final class ScarOp {
 		return switch (type) {
 			case "spike" -> "пик " + Math.round(height) + " (r " + Math.round(radius) + ")";
 			case "sinkhole" -> "провал r " + Math.round(radius) + " × " + depth;
+			case "fallen_forest" -> "поваленный лес r " + Math.round(radius);
+			case "ruin" -> "руины r " + Math.round(radius);
+			case "uplift" -> "подъём r " + Math.round(radius) + " на " + height;
 			case "crack", "lava_fault" -> (type.equals("lava_fault") ? "лавовый разлом " : "трещина ")
 					+ length + "×" + width;
 			default -> type + " r " + Math.round(radius);

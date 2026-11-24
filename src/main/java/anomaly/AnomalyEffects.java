@@ -47,6 +47,9 @@ public final class AnomalyEffects {
 		if (components.contains(AnomalyComponent.NIGHT_TOLL) && isNight(level)) {
 			intensity *= 2.0;
 		}
+		// «рейды остатка»: с остатком в крови зона бьёт сильнее — идти в неё с непромытой
+		// головой дороже, чем с чистой
+		intensity *= AnomalyResidue.hazardScale(player);
 		for (AnomalyComponent component : components) {
 			if (!component.isVisible()) {
 				component.apply(level, player, zone, state, state.dose, intensity, seconds, config);
@@ -79,16 +82,23 @@ public final class AnomalyEffects {
 		// пыль 26.2 живёт всего 3–18 тиков при scale 0.35: у самого края рисуем вдвое чаще,
 		// иначе стена мигает и половину времени её просто нет
 		boolean close = sd < 48.0;
-		int period = close ? 10 : 20;
+		// у дальней стены (96+ блоков) плотность и кадр режем: там частица размером в пиксель,
+		// и вдвое меньше точек не видно, зато вчетверо меньше пакетов
+		boolean distant = sd > 96.0;
+		int period = close ? 10 : (distant ? 40 : 20);
 		boolean frame = Math.floorMod(state.pulseTicks + phase, period) < Math.max(1, state.lastStep);
 		if (frame) {
 			boolean wall = zone.components().contains(AnomalyComponent.LIGHT_WALL);
 			// край — стена с переливом цвета, а не линия: пыль меняет оттенок к тёмному по жизни
-			edgeBand(level, player, zone, config.view_range, wall ? 0.45f : scaleFor(zone), wall ? 22 : 16,
+			int density = wall ? 22 : 16;
+			if (distant) {
+				density = Math.max(6, density * 3 / 5);
+			}
+			edgeBand(level, player, zone, config.view_range, wall ? 0.45f : scaleFor(zone), density,
 					wall ? 4.5 : spreadFor(zone), 1.0);
 			// второй контур только если он реально попадает в кадр: при r>800 он уходит за reach
 			if (wall && zone.radius() * (1.0 - 0.84) <= config.view_range) {
-				edgeBand(level, player, zone, config.view_range, 0.3f, 12, 3.5, 0.84);
+				edgeBand(level, player, zone, config.view_range, 0.3f, distant ? 7 : 12, 3.5, 0.84);
 			}
 			anchors(level, player, zone);
 		}
@@ -351,6 +361,72 @@ public final class AnomalyEffects {
 		if (zone.cls() == AnomalyClass.DEADLY) {
 			level.playSound(null, player.getX(), player.getY(), player.getZ(),
 					SoundEvents.ENDERMAN_STARE, SoundSource.AMBIENT, 0.5f, 0.8f);
+		}
+		// обучение без букв: у каждого компонента свой звук, и по входу слышно, что это за зона
+		signatureSounds(level, player, zone);
+		AnomalyProgress.onEnter(player, zone);
+	}
+
+	/** Звуки-подписи набора: два разных компонента, чтобы слух различал зоны без текста. */
+	private static void signatureSounds(ServerLevel level, ServerPlayer player, Zone zone) {
+		int played = 0;
+		for (AnomalyComponent component : zone.components()) {
+			if (played >= 2) {
+				break;
+			}
+			level.playSound(null, player.getX(), player.getY(), player.getZ(), component.signature(),
+					SoundSource.AMBIENT, 0.55f, played == 0 ? 0.75f : 1.15f);
+			played++;
+		}
+	}
+
+	/**
+	 * Рождение зоны: низкий гул и вспышка пыли в точке. Слышно и видно только тем, кто рядом —
+	 * зона встаёт на место, и это не должно быть сюрпризом без знака.
+	 */
+	public static void birth(ServerLevel level, ServerPlayer player, double x, double z, int color) {
+		double y = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, (int) Math.floor(x), (int) Math.floor(z));
+		if (y <= level.getMinY() + 1 || y >= level.getMaxY() - 2) {
+			y = player.getY();
+		}
+		var dust = new DustColorTransitionOptions(color, darken(color), 0.5f);
+		level.sendParticles(player, dust, true, true, x, y + 1.5, z, 40, 4.0, 2.0, 4.0, 0.02);
+		level.playSound(null, x, y, z, SoundEvents.END_PORTAL_SPAWN, SoundSource.AMBIENT, 0.9f, 0.65f);
+		level.playSound(null, player.getX(), player.getY(), player.getZ(), SoundEvents.SCULK_BLOCK_SPREAD,
+				SoundSource.AMBIENT, 0.7f, 0.5f);
+	}
+
+	/**
+	 * Предвестник: за 10–30 минут до рождения зона уже шумит в точке — низкий гул, сбой пыли и
+	 * «шаги» без источника. Ничего не наносит: это только знак, что здесь скоро будет плохо.
+	 */
+	public static void herald(ServerLevel level, ServerPlayer player, Anomaly anomaly, long now) {
+		var rnd = player.getRandom();
+		if (rnd.nextInt(40) != 0) {
+			return;
+		}
+		double x = anomaly.x0;
+		double z = anomaly.z0;
+		double y = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, (int) Math.floor(x), (int) Math.floor(z));
+		if (y <= level.getMinY() + 1) {
+			y = player.getY();
+		}
+		int color = AnomalyClass.byId(anomaly.cls).color;
+		var dust = new DustColorTransitionOptions(color, darken(color), 0.3f);
+		// пыль стоит кольцом радиусом 6–10: место «дышит», но границы ещё нет
+		for (int i = 0; i < 6; i++) {
+			double angle = rnd.nextDouble() * Math.PI * 2.0;
+			double radius = 6.0 + rnd.nextDouble() * 6.0;
+			level.sendParticles(player, dust, true, true, x + Math.cos(angle) * radius,
+					y + 1.0 + rnd.nextDouble() * 2.0, z + Math.sin(angle) * radius,
+					2, 0.3, 1.2, 0.3, 0.0);
+		}
+		level.playSound(null, x, y, z, SoundEvents.SCULK_CATALYST_BLOOM, SoundSource.AMBIENT, 0.5f, 0.55f);
+		if (rnd.nextInt(3) == 0) {
+			// «шаги за спиной» — самый дешёвый и самый неуютный знак
+			double behind = Math.atan2(player.getZ() - z, player.getX() - x) + Math.PI;
+			level.playSound(null, x + Math.cos(behind) * 9.0, y, z + Math.sin(behind) * 9.0,
+					SoundEvents.GRASS_STEP, SoundSource.AMBIENT, 0.35f, 0.7f);
 		}
 	}
 

@@ -34,6 +34,12 @@ public class AnomalyMod implements ModInitializer {
 	public static AnomalyConfig config;
 
 	private static final Map<UUID, AnomalyState> STATES = new HashMap<>();
+	/** Сервер, пока он работает: нужен шизе, чтобы убрать фигуру без игрока под рукой. */
+	private static MinecraftServer server;
+
+	public static MinecraftServer server() {
+		return server;
+	}
 
 	@Override
 	public void onInitialize() {
@@ -42,18 +48,21 @@ public class AnomalyMod implements ModInitializer {
 				config.population, config.spawn_min_radius, config.world_radius,
 				config.radius_min, config.radius_max, config.lifetime_max_hours);
 
-		ServerLifecycleEvents.SERVER_STARTED.register(server -> {
-			AnomalyField.load(server);
-			AnomalyResidue.load(server);
+		ServerLifecycleEvents.SERVER_STARTED.register(srv -> {
+			server = srv;
+			AnomalyField.load(srv);
+			AnomalyResidue.load(srv);
 		});
-		ServerLifecycleEvents.SERVER_STOPPING.register(server -> {
+		ServerLifecycleEvents.SERVER_STOPPING.register(srv -> {
 			AnomalyField.save();
 			AnomalyResidue.save();
+			server = null;
 		});
 		ServerTickEvents.END_SERVER_TICK.register(AnomalyMod::tick);
-		ServerPlayConnectionEvents.DISCONNECT.register((handler, server) -> {
+		ServerPlayConnectionEvents.DISCONNECT.register((handler, srv) -> {
 			STATES.remove(handler.player.getUUID());
 			AnomalyDebug.hide(handler.player.getUUID());
+			AnomalyMadness.cleanup(handler.player.getUUID());
 		});
 		AnomalyResidue.register();
 		AnomalyNodes.register();
@@ -107,8 +116,15 @@ public class AnomalyMod implements ModInitializer {
 		// остаток при этом продолжает таять — иначе Нижний стал бы бесплатной паузой
 		if ((config.overworld_only && level.dimension() != Level.OVERWORLD) || player.isSpectator()) {
 			state.leave(seconds, config);
+			state.coreTicks = 0;
 			AnomalyResidue.update(player, seconds, null, state.dose);
+			AnomalyMadness.tick(player, state, config);
 			return;
+		}
+
+		// предвестник: за 10–30 минут до рождения зона уже шумит. Это не зона, дозы нет
+		for (Anomaly herald : AnomalyField.heralds(level, player.getX(), player.getZ(), 192.0)) {
+			AnomalyEffects.herald(level, player, herald, AnomalyClock.now());
 		}
 
 		List<Zone> near = AnomalyField.near(level, player.getX(), player.getZ(), config.view_range);
@@ -148,8 +164,26 @@ public class AnomalyMod implements ModInitializer {
 			AnomalyEffects.apply(level, player, inside, state, config, seconds);
 			if (fresh) {
 				AnomalyEffects.entry(level, player, inside);
+				// с остатком в крови за игроком идут: отсидеться у края не выйдет
+				AnomalyResidue.raidOnEnter(level, player, inside);
+			}
+			// «в самом сердце»: глубина больше 85 % радиуса и не меньше пяти секунд
+			double depth = -inside.signedDistance(player.getX(), player.getZ())
+					/ Math.max(1.0, inside.radius());
+			if (depth > 0.85) {
+				state.coreTicks += AnomalyState.stepTicks(seconds);
+				if (state.coreTicks >= AnomalyProgress.CORE_TICKS) {
+					AnomalyProgress.onCore(player);
+				}
+			} else {
+				state.coreTicks = 0;
 			}
 		} else {
+			// «вышел оттуда»: решаем по состоянию до сброса счётчиков в leave()
+			if (AnomalyProgress.survives(state.ticksInside, state.dose, state.lastHazard, player.isAlive())) {
+				AnomalyProgress.onSurvived(player);
+			}
+			state.coreTicks = 0;
 			state.leave(seconds, config);
 			// послевкусие только от опасной/смертельной зоны и только один раз за выход
 			if (state.zoneId != 0L && state.lastHazard && !state.lingered
@@ -158,6 +192,8 @@ public class AnomalyMod implements ModInitializer {
 				state.lingered = true;
 			}
 		}
+		// шиза: слои 1–2, работает от остатка и дозы, только в дальних землях
+		AnomalyMadness.tick(player, state, config);
 	}
 
 	/** Для самопроверки и для будущих модов: доза игрока, если он уже попадал в аномалию. */

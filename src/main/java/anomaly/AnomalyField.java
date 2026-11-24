@@ -4,6 +4,7 @@ import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.storage.LevelResource;
 
@@ -14,9 +15,11 @@ import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Random;
+import java.util.Set;
 
 /**
  * Поле аномалий: загрузка, тик, рождения и смерти, поиск вокруг игрока.
@@ -34,6 +37,8 @@ public final class AnomalyField {
 	private static final Gson GSON = new GsonBuilder().create();
 	private static final String FILE_NAME = "anomaly_field.json";
 	private static final long HOUR_MS = 3_600_000L;
+	/** Одна сутка поля: по ней считается суточный лимит генерации чанков под следы. */
+	static final long DAY_MS = 24L * HOUR_MS;
 
 	private static AnomalyFieldData data = new AnomalyFieldData();
 	private static Path path;
@@ -79,7 +84,7 @@ public final class AnomalyField {
 		if (config != null) {
 			for (Anomaly anomaly : data.anomalies) {
 				// осколок — уже готовый шрам: ни компонентов, ни следов ему заново не роллим
-				if (anomaly.remnant) {
+				if (anomaly.remnant || anomaly.precursor) {
 					continue;
 				}
 				if (anomaly.components == null || anomaly.components.isEmpty()) {
@@ -107,6 +112,10 @@ public final class AnomalyField {
 						anomaly.scars = planned;
 						migrated = true;
 					}
+					// точка привязки следов: файлы до 0.3.0 её не знали, иначе первая проверка
+					// дрейфа решила бы, что зона уехала на пол-жизни
+					anomaly.scar_cx = center[0];
+					anomaly.scar_cz = center[1];
 				}
 			}
 			if (AnomalyComponent.allowed(AnomalyClass.DANGER, config).isEmpty()
@@ -138,7 +147,7 @@ public final class AnomalyField {
 		return newest;
 	}
 
-	/** Раз в секунду: снять умершие, сжать забредшие к центру, добавить новые. */
+	/** Раз в секунду: снять умерших, сжать забредшие к центру, добавить новые. */
 	public static void tick(MinecraftServer server) {
 		AnomalyConfig config = AnomalyMod.config;
 		if (config == null || !config.enabled) {
@@ -149,9 +158,13 @@ public final class AnomalyField {
 		double hours = Math.max(0.0, (now - lastTickFieldMs) / (double) HOUR_MS);
 		lastTickFieldMs = now;
 
-		boolean changed = tickData(data, config, random, now, hours);
-		changed |= AnomalyScars.tick(server, server.overworld(), data, config);
-		AnomalyNodes.tick(server, server.overworld(), config);
+		ServerLevel overworld = server.overworld();
+		Avoid avoid = settled(server, overworld, config);
+		boolean changed = tickData(data, config, random, now, hours, avoid);
+		changed |= feed(config, overworld, now);
+		changed |= AnomalyScars.tick(server, overworld, data, config);
+		AnomalyNodes.tick(server, overworld, config);
+		changed |= bornSignals(server, overworld, now);
 		if (changed) {
 			dirty = true;
 		}
@@ -164,17 +177,160 @@ public final class AnomalyField {
 		}
 	}
 
+	// --- кемпинг ---
+
+	/**
+	 * «Зона кормится»: пока игрок внутри, зона старится быстрее — {@code camp_feed} часов поля
+	 * за час реального стояния. Возвращает true, если что-то накопилось.
+	 */
+	public static boolean feed(AnomalyConfig config, ServerLevel level, long now) {
+		if (config == null || config.camp_feed <= 0.0 || level == null) {
+			return false;
+		}
+		Set<Long> fed = new HashSet<>();
+		boolean changed = false;
+		for (ServerPlayer player : level.getServer().getPlayerList().getPlayers()) {
+			if (player.level() != level) {
+				continue;
+			}
+			for (Zone zone : near(level, player.getX(), player.getZ(), 0.0)) {
+				if (zone.remnant() || zone.precursor() || !fed.add(zone.id())) {
+					continue;
+				}
+				feedZone(zone.anomaly(), 1.0, config.camp_feed);
+				changed = true;
+			}
+		}
+		return changed;
+	}
+
+	/** Чистая часть кормления: по ней же гоняется самопроверка. */
+	public static double feedHours(double realSeconds, double ratePerHour) {
+		if (!Double.isFinite(realSeconds) || !Double.isFinite(ratePerHour) || ratePerHour <= 0.0
+				|| realSeconds <= 0.0) {
+			return 0.0;
+		}
+		return realSeconds / 3600.0 * ratePerHour;
+	}
+
+	static void feedZone(Anomaly anomaly, double realSeconds, double ratePerHour) {
+		if (anomaly == null || anomaly.pinned) {
+			return;
+		}
+		anomaly.fed_hours = Math.min(Math.max(1.0, anomaly.life_hours) * 4.0,
+				Math.max(0.0, anomaly.fed_hours + feedHours(realSeconds, ratePerHour)));
+	}
+
+	// --- места, где зона не родится ---
+
+	/**
+	 * Где рождаться нельзя: игрок, его точка возрождения (кровать или якорь — это и есть дом),
+	 * и постройки в уже загруженном чанке. Незагруженные чанки не читаем: генерация мира ради
+	 * поиска чужого дома дороже, чем польза от неё.
+	 */
+	public record Avoid(List<double[]> points, ServerLevel level, int buildRadius) {
+		public static Avoid none() {
+			return new Avoid(List.of(), null, 0);
+		}
+
+		boolean blocks(double x, double z) {
+			for (double[] point : points) {
+				double radius = Math.hypot(x - point[0], z - point[1]);
+				if (radius < point[2]) {
+					return true;
+				}
+			}
+			return level != null && builtNear(level, x, z, Math.max(8, buildRadius));
+		}
+	}
+
+	/** Точки, вокруг которых не рождаются зоны, с их радиусами. */
+	static Avoid settled(MinecraftServer server, ServerLevel level, AnomalyConfig config) {
+		List<double[]> points = new ArrayList<>();
+		for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+			if (player.level() != level) {
+				continue;
+			}
+			points.add(new double[]{player.getX(), player.getZ(), config.spawn_clear_players});
+			var respawn = player.getRespawnConfig();
+			if (respawn != null && respawn.respawnData() != null
+					&& respawn.respawnData().dimension() == Level.OVERWORLD) {
+				var pos = respawn.respawnData().pos();
+				points.add(new double[]{pos.getX(), pos.getZ(), config.spawn_clear_beds});
+			}
+		}
+		return new Avoid(points, level, config.spawn_clear_build);
+	}
+
+	/** Есть ли постройка в загруженных чанках вокруг точки: 9 проб по спирали, не больше. */
+	static boolean builtNear(ServerLevel level, double x, double z, int radius) {
+		if (level == null) {
+			return false;
+		}
+		int bx = (int) Math.floor(x);
+		int bz = (int) Math.floor(z);
+		for (int i = -1; i <= 1; i++) {
+			for (int j = -1; j <= 1; j++) {
+				int sx = bx + i * radius;
+				int sz = bz + j * radius;
+				if (!level.getChunkSource().hasChunk(sx >> 4, sz >> 4)) {
+					continue;
+				}
+				int y = level.getHeight(net.minecraft.world.level.levelgen.Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, sx, sz);
+				if (manMade(level, sx, y, sz)) {
+					return true;
+				}
+			}
+		}
+		return false;
+	}
+
+	private static boolean manMade(ServerLevel level, int x, int y, int z) {
+		net.minecraft.core.BlockPos.MutableBlockPos pos = new net.minecraft.core.BlockPos.MutableBlockPos();
+		for (int dy = 0; dy >= -2; dy--) {
+			var state = level.getBlockState(pos.set(x, Math.max(level.getMinY(), y - 1 + dy), z));
+			if (state.isAir()) {
+				continue;
+			}
+			if (AnomalyScars.builtBlock(state) || state.hasBlockEntity()
+					|| state.is(net.minecraft.world.level.block.Blocks.CRAFTING_TABLE)
+					|| state.is(net.minecraft.world.level.block.Blocks.FURNACE)
+					|| state.is(net.minecraft.world.level.block.Blocks.TORCH)
+					|| state.is(net.minecraft.world.level.block.Blocks.WALL_TORCH)
+					|| state.is(net.minecraft.tags.BlockTags.BEDS)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	// --- один шаг поля ---
+
 	/**
 	 * Один шаг поля без сервера — так его гоняет самопроверка. Возвращает true, если состав
 	 * поля изменился (кого-то сняли или кто-то родился).
 	 */
 	static boolean tickData(AnomalyFieldData field, AnomalyConfig config, Random rnd, long now, double hours) {
+		return tickData(field, config, rnd, now, hours, Avoid.none());
+	}
+
+	static boolean tickData(AnomalyFieldData field, AnomalyConfig config, Random rnd, long now, double hours,
+			Avoid avoid) {
 		boolean changed = false;
 		Iterator<Anomaly> iterator = field.anomalies.iterator();
 		while (iterator.hasNext()) {
 			Anomaly anomaly = iterator.next();
 			// тестовая зона приколота: не стареет, не тает и не снимается сама
 			if (anomaly.pinned) {
+				continue;
+			}
+			// предвестник: шумит, но ещё не зона. Дорос до своей даты — рождается по-настоящему
+			if (anomaly.precursor) {
+				long at = anomaly.birth_at > 0L ? anomaly.birth_at : now;
+				if (now >= at) {
+					born(anomaly, now, config, rnd);
+					changed = true;
+				}
 				continue;
 			}
 			if (!anomaly.alive(now)) {
@@ -221,11 +377,11 @@ public final class AnomalyField {
 		// попытка оценить смертность по сумме 1/жизнь врёт на сдвинутой возрастной структуре
 		// (поле то выгорает, то раздувается). Разрыв восполняется за ~два часа, а на ускоренном
 		// времени — за один тик, и выше цели поле не растёт.
-		int deficit = config.population - liveCount(field);
+		int deficit = config.population - reservedCount(field);
 		if (deficit > 0 && hours > 0.0) {
 			int births = Math.min(deficit, Math.max(1, (int) Math.ceil(deficit * 0.5 * hours)));
 			for (int i = 0; i < births; i++) {
-				if (spawnAuto(field, config, rnd, now) != null) {
+				if (spawnAuto(field, config, rnd, now, avoid, config.herald_enabled) != null) {
 					changed = true;
 				}
 			}
@@ -233,8 +389,44 @@ public final class AnomalyField {
 		return changed;
 	}
 
-	/** Сколько живых зон, не считая осколков умерших: иначе они на часы занимают слоты. */
+	/** Предвестник дорос: он становится настоящей зоной, с компонентами и планом следов. */
+	static void born(Anomaly anomaly, long now, AnomalyConfig config, Random rnd) {
+		anomaly.precursor = false;
+		anomaly.born = anomaly.birth_at > 0L && anomaly.birth_at <= now ? anomaly.birth_at : now;
+		anomaly.birth_at = 0L;
+		anomaly.justBorn = true;
+		if (anomaly.components == null || anomaly.components.isEmpty()) {
+			AnomalyClass cls = AnomalyClass.byId(anomaly.cls);
+			anomaly.components = AnomalyComponent.ids(AnomalyComponent.roll(cls,
+					new Random(anomaly.id * 0x9E3779B97F4A7C15L), config, anomaly.r0));
+			anomaly.invalidateComponents();
+		}
+		if (anomaly.scars == null || anomaly.scars.isEmpty()) {
+			anomaly.scars = AnomalyScars.planAt(anomaly.x0, anomaly.z0, anomaly.r0, AnomalyClass.byId(anomaly.cls),
+					new Random(anomaly.id * 0x2545F4914F6CDD1DL), false, anomaly.components);
+			anomaly.scar_cx = anomaly.x0;
+			anomaly.scar_cz = anomaly.z0;
+		}
+		anomaly.scar_next = 0;
+		anomaly.scar_cursor = 0;
+	}
+
+	/** Сколько живых зон, не считая осколков и не родившихся: иначе они занимают слоты. */
 	private static int liveCount(AnomalyFieldData field) {
+		int count = 0;
+		for (Anomaly anomaly : field.anomalies) {
+			if (!anomaly.remnant && !anomaly.precursor) {
+				count++;
+			}
+		}
+		return count;
+	}
+
+	/**
+	 * Занятые слоты населения: живые зоны плюс предвестники. Предвестник — это уже обещанная
+	 * зона, и без его учёта поле во время окна в 10–30 минут рожало бы новую каждый такт.
+	 */
+	private static int reservedCount(AnomalyFieldData field) {
 		int count = 0;
 		for (Anomaly anomaly : field.anomalies) {
 			if (!anomaly.remnant) {
@@ -257,6 +449,7 @@ public final class AnomalyField {
 			anomaly.z0 = death[1];
 		}
 		anomaly.remnant = true;
+		anomaly.fed_hours = 0.0;
 		anomaly.r0 = Math.max(60.0, anomaly.r0 * (0.25 + rnd.nextDouble() * 0.15));
 		anomaly.born = now;
 		anomaly.life_hours = 1.0 + rnd.nextDouble() * 5.0;
@@ -279,6 +472,31 @@ public final class AnomalyField {
 		// население считает только живые зоны, поэтому id не трогаем и класс оставляем ради цвета
 	}
 
+	/** Знак рождения: кто рядом, тот слышит и видит, что зона встала на место. */
+	private static boolean bornSignals(MinecraftServer server, ServerLevel level, long now) {
+		Set<Long> played = new HashSet<>();
+		boolean any = false;
+		for (Anomaly anomaly : data.anomalies) {
+			if (!anomaly.justBorn) {
+				continue;
+			}
+			any = true;
+			double[] pos = anomaly.position(anomaly.ageHours(now));
+			for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+				if (player.level() != level || played.contains(anomaly.id)) {
+					continue;
+				}
+				if (Math.hypot(player.getX() - pos[0], player.getZ() - pos[1]) > 192.0) {
+					continue;
+				}
+				AnomalyEffects.birth(level, player, pos[0], pos[1], AnomalyClass.byId(anomaly.cls).color);
+				played.add(anomaly.id);
+			}
+			anomaly.justBorn = false;
+		}
+		return any;
+	}
+
 	// --- запросы ---
 
 	/** Все аномалии, чья граница ближе {@code range} к точке. Учитывается форма, а не только центр. */
@@ -293,6 +511,9 @@ public final class AnomalyField {
 		long now = AnomalyClock.now();
 		List<Zone> out = new ArrayList<>();
 		for (Anomaly anomaly : data.anomalies) {
+			if (anomaly.precursor) {
+				continue;
+			}
 			// грубый отсев по нынешнему центру: иначе 800 зон на каждого игрока дважды в секунду
 			// считают полный signedDistance с суммой синусов
 			double[] center = anomaly.position(anomaly.ageHours(now));
@@ -311,12 +532,36 @@ public final class AnomalyField {
 		return out;
 	}
 
-	/** Все зоны сейчас — для отладки и статистики. */
-	public static List<Zone> zones() {
+	/** Не родившиеся зоны рядом: по ним играет предвестник. Они не зоны и дозы не дают. */
+	public static List<Anomaly> heralds(ServerLevel level, double px, double pz, double range) {
 		AnomalyConfig config = AnomalyMod.config;
+		if (config == null || !config.enabled || !config.herald_enabled) {
+			return List.of();
+		}
+		if (config.overworld_only && level.dimension() != Level.OVERWORLD) {
+			return List.of();
+		}
+		List<Anomaly> out = new ArrayList<>();
+		for (Anomaly anomaly : data.anomalies) {
+			if (!anomaly.precursor) {
+				continue;
+			}
+			// предвестник стоит на точке рождения: дрейфа у него ещё нет
+			if (Math.hypot(px - anomaly.x0, pz - anomaly.z0) <= range + anomaly.r0 * 0.5) {
+				out.add(anomaly);
+			}
+		}
+		return out;
+	}
+
+	/** Все зоны сейчас — для отладки и статистики. Предвестники сюда не входят. */
+	public static List<Zone> zones() {
 		long now = AnomalyClock.now();
 		List<Zone> out = new ArrayList<>(data.anomalies.size());
 		for (Anomaly anomaly : data.anomalies) {
+			if (anomaly.precursor) {
+				continue;
+			}
 			out.add(anomaly.zone(now));
 		}
 		return out;
@@ -325,6 +570,17 @@ public final class AnomalyField {
 	/** Копия списка параметров: наружу не отдаём живую коллекцию. */
 	public static List<Anomaly> all() {
 		return List.copyOf(data.anomalies);
+	}
+
+	/** Живые предвестники: для команды и для отладки. */
+	public static List<Anomaly> precursors() {
+		List<Anomaly> out = new ArrayList<>();
+		for (Anomaly anomaly : data.anomalies) {
+			if (anomaly.precursor) {
+				out.add(anomaly);
+			}
+		}
+		return out;
 	}
 
 	public static Anomaly byId(long id) {
@@ -338,13 +594,14 @@ public final class AnomalyField {
 
 	/** Ближайшая по границе (а не по центру): у гиганта центр может быть за горизонтом. */
 	public static Anomaly nearest(double px, double pz) {
-		AnomalyConfig config = AnomalyMod.config;
 		long now = AnomalyClock.now();
 		Anomaly best = null;
 		double bestDistance = Double.MAX_VALUE;
 		for (Anomaly anomaly : data.anomalies) {
+			if (anomaly.precursor) {
+				continue;
+			}
 			double ageHours = anomaly.ageHours(now);
-			double[] pos = anomaly.position(ageHours);
 			// сжатие считается в точке самой аномалии, а не в точке вопроса
 			double radius = anomaly.radius(ageHours);
 			double distance = Math.abs(anomaly.signedDistance(px, pz, ageHours, radius));
@@ -362,6 +619,9 @@ public final class AnomalyField {
 		Anomaly best = null;
 		double bestStrength = -1.0;
 		for (Anomaly anomaly : data.anomalies) {
+			if (anomaly.precursor) {
+				continue;
+			}
 			Zone zone = anomaly.zone(now);
 			if (zone.radius() > 0.0 && zone.contains(px, pz) && zone.strength() > bestStrength) {
 				bestStrength = zone.strength();
@@ -374,6 +634,9 @@ public final class AnomalyField {
 	public static Anomaly biggest() {
 		Anomaly best = null;
 		for (Anomaly anomaly : data.anomalies) {
+			if (anomaly.precursor || anomaly.remnant) {
+				continue;
+			}
 			if (best == null || anomaly.r0 > best.r0) {
 				best = anomaly;
 			}
@@ -384,6 +647,9 @@ public final class AnomalyField {
 	public static Anomaly oldest(long now) {
 		Anomaly best = null;
 		for (Anomaly anomaly : data.anomalies) {
+			if (anomaly.precursor) {
+				continue;
+			}
 			if (best == null || anomaly.born < best.born) {
 				best = anomaly;
 			}
@@ -464,8 +730,13 @@ public final class AnomalyField {
 		return data.anomalies.size();
 	}
 
+	/** Сколько FULL-генераций чанков под следы потрачено за текущие сутки поля. */
+	public static int genCount() {
+		return data.gen_count;
+	}
+
 	public record Stats(int total, int safe, int danger, int deadly, int pinned, int remnants,
-			double coveragePercent, double budget) {
+			double coveragePercent, double budget, int precursors, int nested) {
 	}
 
 	public static Stats stats() {
@@ -476,9 +747,15 @@ public final class AnomalyField {
 		int deadly = 0;
 		int pinned = 0;
 		int remnants = 0;
+		int precursors = 0;
+		int nested = 0;
 		double area = 0.0;
 		double budget = 0.0;
 		for (Anomaly anomaly : data.anomalies) {
+			if (anomaly.precursor) {
+				precursors++;
+				continue;
+			}
 			Zone zone = anomaly.zone(now);
 			if (anomaly.remnant) {
 				// осколок не зона: он идёт отдельным счётчиком и не раздувает покрытие с бюджетом
@@ -494,13 +771,16 @@ public final class AnomalyField {
 			if (anomaly.pinned) {
 				pinned++;
 			}
+			if (anomaly.parent_id != 0L) {
+				nested++;
+			}
 			// площадь эллипса, а не круга: вытянутость 0.45..2.6 заметно меняет покрытие
 			area += Math.PI * zone.radius() * zone.radius() * Math.max(0.2, anomaly.stretch);
 			budget += zone.budget();
 		}
 		double worldArea = Math.PI * (config == null ? 20000.0 : config.world_radius) * (config == null ? 20000.0 : config.world_radius);
-		return new Stats(data.anomalies.size(), safe, danger, deadly, pinned, remnants,
-				worldArea <= 0 ? 0.0 : area / worldArea * 100.0, budget);
+		return new Stats(data.anomalies.size() - precursors, safe, danger, deadly, pinned, remnants,
+				worldArea <= 0 ? 0.0 : area / worldArea * 100.0, budget, precursors, nested);
 	}
 
 	// --- сохранение ---
@@ -561,7 +841,8 @@ public final class AnomalyField {
 	static void seedPopulation(AnomalyFieldData field, AnomalyConfig config, Random rnd, long now) {
 		int target = config.population;
 		for (int i = 0; i < target; i++) {
-			Anomaly anomaly = spawnAuto(field, config, rnd, now);
+			// заселение старого мира — без предвестников: поле не может быть пустым на входе
+			Anomaly anomaly = spawnAuto(field, config, rnd, now, Avoid.none(), false);
 			if (anomaly == null) {
 				continue;
 			}
@@ -576,6 +857,26 @@ public final class AnomalyField {
 
 	/** Случайная аномалия в кольце рождения; null, если за 24 попытки не нашлось свободного места. */
 	static Anomaly spawnAuto(AnomalyFieldData field, AnomalyConfig config, Random rnd, long now) {
+		return spawnAuto(field, config, rnd, now, Avoid.none(), false);
+	}
+
+	static Anomaly spawnAuto(AnomalyFieldData field, AnomalyConfig config, Random rnd, long now, Avoid avoid) {
+		return spawnAuto(field, config, rnd, now, avoid, config != null && config.herald_enabled);
+	}
+
+	static Anomaly spawnAuto(AnomalyFieldData field, AnomalyConfig config, Random rnd, long now, Avoid avoid,
+			boolean herald) {
+		// вложенность: иногда зона рождается внутри большой, и там уже своё разрушение
+		if (config.nested_chance > 0.0 && rnd.nextDouble() < config.nested_chance) {
+			Anomaly nested = spawnNested(field, config, rnd, now);
+			if (nested != null) {
+				if (herald) {
+					herald(nested, now, config, rnd);
+				}
+				field.anomalies.add(nested);
+				return nested;
+			}
+		}
 		double inner = Math.max(0, config.spawn_min_radius);
 		double outer = Math.max(inner + 1.0, config.world_radius * 0.98);
 		for (int attempt = 0; attempt < 24; attempt++) {
@@ -584,8 +885,14 @@ public final class AnomalyField {
 			double distance = Math.sqrt(inner * inner + rnd.nextDouble() * (outer * outer - inner * inner));
 			double x = Math.cos(angle) * distance;
 			double z = Math.sin(angle) * distance;
+			if (avoid.blocks(x, z)) {
+				continue;
+			}
 			Anomaly candidate = create(field, config, rnd, now, x, z, null, null, false);
 			if (!clashes(field, candidate)) {
+				if (herald) {
+					herald(candidate, now, config, rnd);
+				}
 				field.anomalies.add(candidate);
 				return candidate;
 			}
@@ -593,9 +900,56 @@ public final class AnomalyField {
 		return null;
 	}
 
+	/** Вложенная зона: маленькая внутри большой, со своим набором компонентов и своим классом. */
+	static Anomaly spawnNested(AnomalyFieldData field, AnomalyConfig config, Random rnd, long now) {
+		List<Anomaly> hosts = new ArrayList<>();
+		for (Anomaly anomaly : field.anomalies) {
+			if (!anomaly.pinned && !anomaly.remnant && !anomaly.precursor && anomaly.r0 >= 600.0) {
+				hosts.add(anomaly);
+			}
+		}
+		if (hosts.isEmpty()) {
+			return null;
+		}
+		Anomaly host = hosts.get(rnd.nextInt(hosts.size()));
+		double age = host.ageHours(now);
+		double[] center = host.position(age);
+		double hostRadius = host.radius(age);
+		if (hostRadius < 300.0) {
+			return null;
+		}
+		double angle = rnd.nextDouble() * Math.PI * 2.0;
+		double distance = hostRadius * 0.45 * Math.sqrt(rnd.nextDouble());
+		double x = center[0] + Math.cos(angle) * distance;
+		double z = center[1] + Math.sin(angle) * distance;
+		double radius = Math.max(config.radius_min, hostRadius * (0.16 + rnd.nextDouble() * 0.14));
+		Anomaly child = create(field, config, rnd, now, x, z, radius, AnomalyClass.byId(host.cls), false);
+		child.parent_id = host.id;
+		return child;
+	}
+
+	/** +10–30 минут шума на точке будущего рождения: зона не появляется молча. */
+	private static void herald(Anomaly candidate, long now, AnomalyConfig config, Random rnd) {
+		int min = Math.max(1, config.herald_min_minutes);
+		int max = Math.max(min, config.herald_max_minutes);
+		long minutes = min + rnd.nextInt(Math.max(1, max - min + 1));
+		candidate.precursor = true;
+		candidate.birth_at = now + minutes * 60_000L;
+		candidate.born = now;
+		candidate.scars = new ArrayList<>();
+		candidate.scar_next = 0;
+		candidate.scar_cursor = 0;
+		candidate.scar_cx = candidate.x0;
+		candidate.scar_cz = candidate.z0;
+	}
+
 	private static boolean clashes(AnomalyFieldData field, Anomaly candidate) {
 		for (Anomaly other : field.anomalies) {
 			if (other.pinned || !other.cls.equals(candidate.cls)) {
+				continue;
+			}
+			// вложенная зона перекрывается с родителем по определению — это не столкновение
+			if (candidate.parent_id != 0L && candidate.parent_id == other.id) {
 				continue;
 			}
 			double need = (other.r0 + candidate.r0) * 0.45;
@@ -671,6 +1025,8 @@ public final class AnomalyField {
 		anomaly.components = AnomalyComponent.ids(AnomalyComponent.roll(cls, rnd, config, anomaly.r0));
 		// следы планируются сразу: они применяются лениво, по 1–2 чанка в секунду
 		anomaly.scars = AnomalyScars.plan(anomaly, cls, new Random(anomaly.id * 0x9E3779B97F4A7C15L));
+		anomaly.scar_cx = x;
+		anomaly.scar_cz = z;
 		return anomaly;
 	}
 
@@ -705,7 +1061,7 @@ public final class AnomalyField {
 		int count = 0;
 		for (Anomaly anomaly : field.anomalies) {
 			// осколки умерших не считаются: иначе они держали бы потолок крупных зон
-			if (!anomaly.pinned && !anomaly.remnant && anomaly.r0 >= radius) {
+			if (!anomaly.pinned && !anomaly.remnant && !anomaly.precursor && anomaly.r0 >= radius) {
 				count++;
 			}
 		}
@@ -727,5 +1083,3 @@ public final class AnomalyField {
 		return Math.max(0.2, Math.min(config.lifetime_max_hours, hours));
 	}
 }
-
-

@@ -24,7 +24,7 @@ public class AnomalyConfig {
 	private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
 	private static final Path PATH = FabricLoader.getInstance().getConfigDir().resolve("anomaly.json");
 	/** Текущая версия формата конфига. */
-	public static final int VERSION = 6;
+	public static final int VERSION = 7;
 
 	public int config_version = 0;
 
@@ -71,6 +71,35 @@ public class AnomalyConfig {
 	public int blocks_per_tick = 2000;
 	/** Порог mspt: выше него разрушения ждут следующего тика. */
 	public double mspt_limit = 45.0;
+	/**
+	 * Сколько FULL-генераций чанков под следы разрешено за сутки поля. На новом поле 600 зон
+	 * набирают 10–30 тыс. генераций; без лимита первый запуск растягивает worldgen на часы.
+	 */
+	public int chunk_gen_per_day = 6000;
+
+	// --- предвестник и место рождения ---
+	/** Шум и знаки за 10–30 минут до рождения зоны: зона не должна появляться молча. */
+	public boolean herald_enabled = true;
+	public int herald_min_minutes = 10;
+	public int herald_max_minutes = 30;
+	/** Не ближе этого к игроку рождается зона: дом не должен сносить без предупреждения. */
+	public int spawn_clear_players = 256;
+	/** То же для точек возрождения (кровать/якорь): это и есть «обжитое место». */
+	public int spawn_clear_beds = 256;
+	/** Столько блоков от найденной постройки (по загруженному чанку) зона не рождается. */
+	public int spawn_clear_build = 96;
+
+	/** Сколько часов поля даёт час стояния внутри зоны: кемпинг старит зону и убивает лут. */
+	public double camp_feed = 0.5;
+
+	/** Шанс, что новая зона родится внутри большой (вложенность): 0 — никогда. */
+	public double nested_chance = 0.12;
+
+	// --- шиза ---
+	/** Слой звуков и фигур: включается остатком или дозой, только в дальних землях. */
+	public boolean madness_enabled = true;
+	/** Ближе этого от центра мира шиза не включается: у дома должны быть тишина и покой. */
+	public int madness_min_distance = 6000;
 
 	// --- доза и обратная связь ---
 	public double dose_gain_per_second = 0.05;
@@ -178,6 +207,16 @@ public class AnomalyConfig {
 		if (deadly_from < danger_from) {
 			deadly_from = danger_from;
 		}
+		// v6 → v7: предвестник, кемпинг, вложенность, лимит генерации, шиза
+		herald_min_minutes = (int) Math.max(1, Math.min(240, herald_min_minutes));
+		herald_max_minutes = (int) Math.max(herald_min_minutes, Math.min(600, herald_max_minutes));
+		spawn_clear_players = Math.max(0, Math.min(5000, spawn_clear_players));
+		spawn_clear_beds = Math.max(0, Math.min(5000, spawn_clear_beds));
+		spawn_clear_build = Math.max(0, Math.min(512, spawn_clear_build));
+		camp_feed = Math.max(0.0, Math.min(5.0, finite(camp_feed, 0.5)));
+		nested_chance = Math.max(0.0, Math.min(0.5, finite(nested_chance, 0.12)));
+		chunk_gen_per_day = Math.max(0, Math.min(200_000, chunk_gen_per_day));
+		madness_min_distance = Math.max(0, Math.min(world_radius, madness_min_distance));
 		config_version = Math.max(config_version, 0);
 	}
 

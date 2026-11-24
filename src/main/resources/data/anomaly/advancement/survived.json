@@ -1,0 +1,24 @@
+{
+	"parent": "anomaly:root",
+	"display": {
+		"icon": {
+			"id": "minecraft:totem_of_undying"
+		},
+		"title": {
+			"translate": "anomaly.adv.survived",
+			"fallback": "Вышел оттуда"
+		},
+		"description": {
+			"translate": "anomaly.adv.survived.desc",
+			"fallback": "Полчаса в опасной зоне с полной дозой — и живым"
+		},
+		"frame": "task",
+		"show_toast": true,
+		"announce_to_chat": false
+	},
+	"criteria": {
+		"criterion": {
+			"trigger": "minecraft:impossible"
+		}
+	}
+}

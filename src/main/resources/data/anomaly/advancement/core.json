@@ -1,0 +1,24 @@
+{
+	"parent": "anomaly:root",
+	"display": {
+		"icon": {
+			"id": "minecraft:end_rod"
+		},
+		"title": {
+			"translate": "anomaly.adv.core",
+			"fallback": "В самом сердце"
+		},
+		"description": {
+			"translate": "anomaly.adv.core.desc",
+			"fallback": "Постоять в ядре зоны, где доза полная, и не сбежать"
+		},
+		"frame": "goal",
+		"show_toast": true,
+		"announce_to_chat": false
+	},
+	"criteria": {
+		"criterion": {
+			"trigger": "minecraft:impossible"
+		}
+	}
+}

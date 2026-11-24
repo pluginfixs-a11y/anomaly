@@ -1,0 +1,24 @@
+{
+	"display": {
+		"icon": {
+			"id": "minecraft:sculk_sensor"
+		},
+		"title": {
+			"translate": "anomaly.adv.root",
+			"fallback": "Аномальные поля"
+		},
+		"description": {
+			"translate": "anomaly.adv.root.desc",
+			"fallback": "Дальние земли не пусты: там есть области, которые дышат и помнят"
+		},
+		"background": "minecraft:gui/advancements/backgrounds/stone",
+		"frame": "task",
+		"show_toast": false,
+		"announce_to_chat": false
+	},
+	"criteria": {
+		"criterion": {
+			"trigger": "minecraft:impossible"
+		}
+	}
+}

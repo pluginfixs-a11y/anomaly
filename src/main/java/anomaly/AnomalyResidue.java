@@ -5,6 +5,7 @@ import com.google.gson.GsonBuilder;
 import net.fabricmc.fabric.api.entity.event.v1.EntitySleepEvents;
 import net.fabricmc.fabric.api.event.player.UseItemCallback;
 import net.minecraft.server.MinecraftServer;
+import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.sounds.SoundEvents;
 import net.minecraft.sounds.SoundSource;
@@ -12,6 +13,9 @@ import net.minecraft.world.InteractionResult;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.effect.MobEffectInstance;
 import net.minecraft.world.effect.MobEffects;
+import net.minecraft.world.entity.EntitySpawnReason;
+import net.minecraft.world.entity.EntityTypes;
+import net.minecraft.world.entity.Mob;
 import net.minecraft.world.food.FoodData;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
@@ -25,6 +29,7 @@ import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Random;
 import java.util.UUID;
 
 /**
@@ -313,7 +318,7 @@ public final class AnomalyResidue {
 		}
 	}
 
-	/** Рядом есть второй игрок: их присутствие вытягивает «остаток» быстрее. */
+	/** «Рядом с другим игроком −10 % в час»: это доля текущего остатка, а не константа. */
 	private static boolean hasCompany(ServerPlayer player) {
 		for (ServerPlayer other : player.level().getServer().getPlayerList().getPlayers()) {
 			if (other != player && other.level() == player.level()
@@ -404,8 +409,81 @@ public final class AnomalyResidue {
 		return hours(player) >= SEAL;
 	}
 
-	/** Отказ портала слышно и видно телом: портал гудит низко, а игрока отбрасывает кулдауном. */
-	public static void onPortalRefused(ServerPlayer player) {
+	/**
+	 * Насколько злее бьёт зона у игрока с остатком: 1.0 до «оскомины», до 1.5 к «голоду глубины».
+	 * Так остаток мешает идти в аномалию, а не только висит тьмой по ночам.
+	 */
+	static double hazardScale(double hours) {
+		if (!Double.isFinite(hours) || hours <= AFTERTASTE) {
+			return 1.0;
+		}
+		double span = Math.max(1.0, DEEP_HUNGER - AFTERTASTE);
+		return 1.0 + 0.5 * Math.min(1.0, (hours - AFTERTASTE) / span);
+	}
+
+	public static double hazardScale(ServerPlayer player) {
+		AnomalyConfig config = AnomalyMod.config;
+		if (config == null || !config.enabled || !config.residue_enabled) {
+			return 1.0;
+		}
+		return hazardScale(hours(player));
+	}
+
+	/** Сколько преследователей приводит остаток при входе в зону: 0 — никто не идёт. */
+	static int raidCount(double hours) {
+		if (!Double.isFinite(hours) || hours < VEIL) {
+			return 0;
+		}
+		return (int) Math.min(3, 1 + Math.floor((hours - VEIL) / 4.0));
+	}
+
+	/**
+	 * «Рейды остатка»: с «пеленой» и выше игрок не может просто зайти в зону — за ним идут.
+	 * Мобы появляются в 8–16 блоках, сразу с целью на игроке: отсидеться у края не выйдет.
+	 */
+	public static void raidOnEnter(ServerLevel level, ServerPlayer player, Zone zone) {
+		AnomalyConfig config = AnomalyMod.config;
+		if (config == null || !config.enabled || !config.residue_enabled || zone.remnant()) {
+			return;
+		}
+		if (player.isCreative() || player.isSpectator()) {
+			return;
+		}
+		int count = raidCount(hours(player));
+		if (count <= 0) {
+			return;
+		}
+		Random rnd = new Random(player.getUUID().getLeastSignificantBits() ^ System.nanoTime());
+		for (int i = 0; i < count; i++) {
+			double angle = rnd.nextDouble() * Math.PI * 2.0;
+			double distance = 8.0 + rnd.nextDouble() * 8.0;
+			double x = player.getX() + Math.cos(angle) * distance;
+			double z = player.getZ() + Math.sin(angle) * distance;
+			int bx = (int) Math.floor(x);
+			int bz = (int) Math.floor(z);
+			if (!level.getChunkSource().hasChunk(bx >> 4, bz >> 4)) {
+				continue;
+			}
+			int y = level.getHeight(net.minecraft.world.level.levelgen.Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, bx, bz);
+			if (y <= level.getMinY() + 2 || y >= level.getMaxY() - 4) {
+				continue;
+			}
+			Mob stalker = rnd.nextBoolean()
+					? EntityTypes.ZOMBIE.create(level, EntitySpawnReason.EVENT)
+					: EntityTypes.SKELETON.create(level, EntitySpawnReason.EVENT);
+			if (stalker == null) {
+				continue;
+			}
+			stalker.snapTo(x, y + 0.1, z, rnd.nextFloat() * 360f, 0f);
+			stalker.addTag("anomaly:stalker");
+			level.addFreshEntity(stalker);
+			stalker.setTarget(player);
+		}
+		level.playSound(null, player.getX(), player.getY(), player.getZ(),
+				SoundEvents.WARDEN_ROAR, SoundSource.AMBIENT, 0.7f, 0.6f);
+	}
+
+	/** Отказ портала слышно и видно телом: портал гудит низко, а игрока отбрасывает кулдауном. */	public static void onPortalRefused(ServerPlayer player) {
 		Entry entry = entry(player.getUUID());
 		long now = System.currentTimeMillis();
 		if (now - entry.lastRefuseMs < 1500L) {

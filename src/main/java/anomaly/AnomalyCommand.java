@@ -81,6 +81,12 @@ public final class AnomalyCommand {
 												.executes(context -> residueClear(context.getSource(),
 														StringArgumentType.getString(context, "player"))))))
 						.then(Commands.literal("components").executes(context -> components(context.getSource())))
+						.then(Commands.literal("herald").executes(context -> herald(context.getSource())))
+						.then(Commands.literal("nests").executes(context -> nests(context.getSource())))
+						.then(Commands.literal("madness")
+								.executes(context -> madness(context.getSource(), false))
+								.then(Commands.literal("demo")
+										.executes(context -> madness(context.getSource(), true))))
 						.then(Commands.literal("scar")
 								.then(Commands.argument("target", StringArgumentType.greedyString())
 										.executes(context -> scar(context.getSource(),
@@ -190,8 +196,96 @@ public final class AnomalyCommand {
 		return 1;
 	}
 
-	private static int components(CommandSourceStack source) {
-		AnomalyComponent[] all = AnomalyComponent.values();
+	private static int herald(CommandSourceStack source) {
+		List<Anomaly> list = AnomalyField.precursors();
+		AnomalyConfig config = AnomalyMod.config;
+		if (list.isEmpty()) {
+			reply(source, "Предвестников нет: сейчас никто не рождается"
+					+ (config.herald_enabled ? "" : " (herald_enabled = false — поле будет молчать)"));
+			return 1;
+		}
+		long now = AnomalyClock.now();
+		list.sort(java.util.Comparator.comparingLong(a -> a.birth_at));
+		reply(source, "Предвестники: " + list.size() + " точек, где зона уже шумит");
+		int shown = 0;
+		for (Anomaly anomaly : list) {
+			if (shown++ >= 20) {
+				reply(source, "  …и ещё " + (list.size() - 20));
+				break;
+			}
+			double leftMinutes = Math.max(0.0, (anomaly.birth_at - now) / 60_000.0);
+			reply(source, "  #" + anomaly.id + " " + AnomalyClass.byId(anomaly.cls).title
+					+ " r " + Math.round(anomaly.r0)
+					+ " · через " + String.format(java.util.Locale.ROOT, "%.0f", leftMinutes) + " мин"
+					+ " · на " + coord(anomaly.x0, anomaly.z0)
+					+ " · до центра мира " + blocks(Math.hypot(anomaly.x0, anomaly.z0)));
+		}
+		return 1;
+	}
+
+	private static int nests(CommandSourceStack source) {
+		long now = AnomalyClock.now();
+		int nested = 0;
+		int shown = 0;
+		StringBuilder out = new StringBuilder();
+		for (Anomaly anomaly : AnomalyField.all()) {
+			if (anomaly.parent_id == 0L || anomaly.precursor) {
+				continue;
+			}
+			nested++;
+			if (shown++ >= 15) {
+				continue;
+			}
+			Anomaly parent = AnomalyField.byId(anomaly.parent_id);
+			Zone childZone = anomaly.zone(now);
+			out.append("\n  #").append(anomaly.id).append(" r ").append(Math.round(anomaly.r0))
+					.append(" внутри #").append(anomaly.parent_id);
+			if (parent == null) {
+				out.append(" (родителя уже нет)");
+			} else {
+				Zone parentZone = parent.zone(now);
+				out.append(" ").append(AnomalyClass.byId(parent.cls).title)
+						.append(" r ").append(Math.round(parent.r0))
+						.append(" (").append(Math.round(Math.hypot(childZone.x() - parentZone.x(),
+								childZone.z() - parentZone.z()))).append(" от ядра родителя)");
+			}
+		}
+		if (nested == 0) {
+			reply(source, "Вложенных зон нет: все равны. Шанс вложенности — nested_chance ("
+					+ AnomalyMod.config.nested_chance + ")");
+			return 1;
+		}
+		reply(source, "Вложенных зон: " + nested + out);
+		return 1;
+	}
+
+	private static int madness(CommandSourceStack source, boolean demo) {
+		ServerPlayer player = source.getPlayer();
+		AnomalyConfig config = AnomalyMod.config;
+		if (player == null) {
+			reply(source, "Команда работает только из игры", ChatFormatting.RED);
+			return 0;
+		}
+		double hours = AnomalyResidue.hours(player);
+		double dose = AnomalyMod.stateOf(player.getUUID()) == null ? 0.0
+				: AnomalyMod.stateOf(player.getUUID()).dose;
+		double distance = Math.hypot(player.getX(), player.getZ());
+		double intensity = AnomalyMadness.intensity(hours, dose, distance, config.madness_min_distance);
+		reply(source, "Шиза: остаток " + String.format(java.util.Locale.ROOT, "%.1f", hours) + " ч ("
+				+ AnomalyResidue.state(hours) + "), доза " + String.format(java.util.Locale.ROOT, "%.2f", dose)
+				+ ", до центра мира " + blocks(distance));
+		reply(source, "Сила " + Math.round(intensity * 100) + " %"
+				+ (intensity <= 0.0 ? " — тихо: нужен остаток от дрожи или доза в зоне и дальние земли"
+						: ", фигур сейчас " + AnomalyMadness.figures())
+				+ (config.madness_enabled ? "" : " · madness_enabled = false"));
+		if (demo) {
+			AnomalyMadness.demo(player);
+			reply(source, "Показал: звук, фигура в 18–28 блоках и ложный тотем (лечения нет — это обманка)");
+		}
+		return 1;
+	}
+
+	private static int components(CommandSourceStack source) {		AnomalyComponent[] all = AnomalyComponent.values();
 		reply(source, "Компонентов " + all.length + "; в скобках — вид, минимальный класс, стоимость бюджета");
 		for (AnomalyComponent component : all) {
 			reply(source, "  " + component.describe());
@@ -490,7 +584,9 @@ public final class AnomalyCommand {
 		reply(source, "Зон " + stats.total() + ": безопасных " + stats.safe()
 				+ ", опасных " + stats.danger() + ", смертельных " + stats.deadly()
 				+ (stats.pinned() > 0 ? ", тестовых " + stats.pinned() : "")
-				+ (stats.remnants() > 0 ? ", осколков " + stats.remnants() : ""));
+				+ (stats.nested() > 0 ? ", вложенных " + stats.nested() : "")
+				+ (stats.remnants() > 0 ? ", осколков " + stats.remnants() : "")
+				+ (stats.precursors() > 0 ? ", предвестников " + stats.precursors() : ""));
 		reply(source, String.format(java.util.Locale.ROOT, "Покрыто %.1f %% площади мира, суммарный бюджет разрушения %s блоков",
 				stats.coveragePercent(), thousands(stats.budget())));
 		int pending = 0;
@@ -498,7 +594,10 @@ public final class AnomalyCommand {
 			pending += AnomalyScars.pendingBlocks(anomaly);
 		}
 		reply(source, "Следов в очереди: " + thousands(pending) + " блоков"
-				+ (AnomalyMod.config.scar_enabled ? "" : " (разрушения выключены)"));
+				+ (AnomalyMod.config.scar_enabled ? "" : " (разрушения выключены)")
+				+ " · генераций чанков сегодня " + AnomalyField.genCount()
+				+ (AnomalyMod.config.chunk_gen_per_day > 0
+						? " из " + AnomalyMod.config.chunk_gen_per_day : " (лимит снят)"));
 		reply(source, "Время поля " + String.format(java.util.Locale.ROOT, "%.1f", AnomalyClock.fieldMs() / 3_600_000.0)
 				+ " ч, множитель ×" + trim(AnomalyClock.scale()));
 		return 1;
@@ -524,12 +623,18 @@ public final class AnomalyCommand {
 			double distance = Math.hypot(zone.x() - px, zone.z() - pz);
 			reply(source, "#" + anomaly.id
 					+ (anomaly.pinned ? " [тест]" : "")
+					+ (anomaly.parent_id != 0L ? " [вложенная]" : "")
+					+ (anomaly.fed_hours >= 0.1 ? " [кормлена " + String.format(java.util.Locale.ROOT, "%.1f", anomaly.fed_hours) + " ч]" : "")
 					+ " " + classTag(zone.cls()) + " r " + Math.round(anomaly.r0)
 					+ " · " + String.format(java.util.Locale.ROOT, "%.1f", zone.ageHours()) + "/" + String.format(java.util.Locale.ROOT, "%.1f", anomaly.life_hours) + " ч"
 					+ " · дрейф " + Math.round(anomaly.speed) + " бл/ч"
 					+ " · дуга " + String.format(java.util.Locale.ROOT, "%.1f", zone.turnDegrees()) + "°"
 					+ " · " + zone.components().size() + " комп."
 					+ " · " + blocks(distance) + " от точки");
+		}
+		if (AnomalyField.precursors().size() > 0) {
+			reply(source, "Плюс " + AnomalyField.precursors().size()
+					+ " предвестников: /anomaly herald — где и через сколько");
 		}
 		return 1;
 	}
@@ -564,6 +669,12 @@ public final class AnomalyCommand {
 		reply(source, "Компоненты: " + AnomalyComponent.titles(zone.components()));
 		reply(source, "Бюджет разрушения " + thousands(zone.budget()) + " блоков"
 				+ (zone.cls().damages() ? "" : " (безопасная не рушит)"));
+		if (anomaly.fed_hours >= 0.1 || anomaly.parent_id != 0L) {
+			reply(source, "Кормление " + String.format(java.util.Locale.ROOT, "%.1f", anomaly.fed_hours)
+					+ " ч поля (кемпинг старит зону; сила ×"
+					+ String.format(java.util.Locale.ROOT, "%.2f", zone.strength() / Math.max(0.01, zone.cls().strength))
+					+ ")" + (anomaly.parent_id != 0L ? " · вложена в #" + anomaly.parent_id : ""));
+		}
 		reply(source, "Следы: " + scarText(anomaly));
 		return 1;
 	}

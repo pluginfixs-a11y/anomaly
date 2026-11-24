@@ -55,6 +55,10 @@ public final class SelfTest {
 		for (String failure : result.failures) {
 			AnomalyMod.LOGGER.error("SELFTEST FAIL: {}", failure);
 		}
+		// разовый прогон на выделенном сервере: самопроверка закрывает сервер, а не висит до таймаута
+		if (System.getenv("ANOMALY_SELFTEST_EXIT") != null) {
+			server.halt(false);
+		}
 	}
 
 	public static Result run(MinecraftServer server) {
@@ -75,6 +79,16 @@ public final class SelfTest {
 		runGroup(result, "остаток", () -> checkResidue(result, config));
 		runGroup(result, "рейды", () -> checkNodes(result, config));
 		runGroup(result, "население", () -> checkPopulation(result, config, rnd));
+		runGroup(result, "предвестник", () -> checkHerald(result, config, rnd));
+		runGroup(result, "кемпинг", () -> checkCamping(result, config, rnd));
+		runGroup(result, "места рождения", () -> checkSpawnPlaces(result, config, rnd));
+		runGroup(result, "реестр следов", () -> checkScarRegistry(result, config, rnd));
+		runGroup(result, "новая геология", () -> checkGeology(result, config, rnd));
+		runGroup(result, "вложенность", () -> checkNesting(result, config, rnd));
+		runGroup(result, "шиза", () -> checkMadness(result, config, rnd));
+		runGroup(result, "обучение", () -> checkTeaching(result));
+		runGroup(result, "лимит генерации", () -> checkChunkBudget(result, config));
+		runGroup(result, "рейды остатка", () -> checkResidueRaids(result, config));
 		runGroup(result, "сохранение", () -> checkPersistence(result, config, rnd));
 		runGroup(result, "края", () -> checkEdges(result, config, rnd));
 		if (server != null) {
@@ -1357,6 +1371,284 @@ public final class SelfTest {
 		nanConfig.sanitize();
 		report(result, "NaN в конфиге не проходит",
 				Double.isFinite(nanConfig.radius_min) && nanConfig.suppress_until < nanConfig.world_radius);
+	}
+
+	// --- предвестник ---
+
+	private static void checkHerald(Result result, AnomalyConfig config, Random rnd) {
+		AnomalyConfig cfg = new AnomalyConfig();
+		cfg.population = 3;
+		cfg.herald_enabled = true;
+		cfg.herald_min_minutes = 10;
+		cfg.herald_max_minutes = 30;
+		cfg.nested_chance = 0.0;
+		AnomalyFieldData field = new AnomalyFieldData();
+		long start = 1_000_000L;
+		Anomaly first = AnomalyField.spawnAuto(field, cfg, rnd, start, AnomalyField.Avoid.none(), true);
+		report(result, "рождение сначала становится предвестником", first != null && first.precursor);
+		if (first == null) {
+			return;
+		}
+		check(result, "у предвестника нулевой радиус", 0.0, first.zone(start).radius(), 1e-9);
+		check(result, "у предвестника нулевая сила", 0.0, first.zone(start).strength(), 1e-9);
+		long lead = first.birth_at - start;
+		report(result, "предвестник ждёт 10–30 минут (" + (lead / 60_000L) + " мин)",
+				lead >= 10 * 60_000L && lead <= 30 * 60_000L);
+		AnomalyField.tickData(field, cfg, rnd, first.birth_at - 1L, 0.0);
+		report(result, "до даты он не рождается", first.precursor);
+		// население считает и предвестников: иначе во время окна поле переполняется рождениями
+		int before = field.anomalies.size();
+		AnomalyField.tickData(field, cfg, rnd, start, 0.5);
+		report(result, "слот предвестника держит население (" + before + " → " + field.anomalies.size() + ")",
+				field.anomalies.size() <= cfg.population);
+		boolean became = AnomalyField.tickData(field, cfg, rnd, first.birth_at, 0.0);
+		report(result, "в свою дату предвестник становится зоной", became && !first.precursor);
+		report(result, "у рождённой зоны есть компоненты и план следов",
+				!first.componentList().isEmpty() && first.scars != null);
+		report(result, "рождённая зона стоит там, где шумела", first.x0 == first.scar_cx);
+	}
+
+	// --- кемпинг ---
+
+	private static void checkCamping(Result result, AnomalyConfig config, Random rnd) {
+		check(result, "час стояния при 0.5 — полчаса поля", 0.5, AnomalyField.feedHours(3600, 0.5), 1e-9);
+		check(result, "ноль времени — ноль кормления", 0.0, AnomalyField.feedHours(0, 0.5), 1e-9);
+		check(result, "отрицательное время не кормит", 0.0, AnomalyField.feedHours(-10, 0.5), 1e-9);
+
+		AnomalyFieldData field = new AnomalyFieldData();
+		Anomaly anomaly = AnomalyField.create(field, config, rnd, 0L, 9000, 0, 600.0, AnomalyClass.DANGER, false);
+		anomaly.born = 0L;
+		anomaly.life_hours = 24.0;
+		double plain = anomaly.ageHours(3_600_000L);
+		double baseStrength = anomaly.zone(3_600_000L).strength();
+		AnomalyField.feedZone(anomaly, 3600.0, 0.5);
+		check(result, "час кемпинга — возраст плюс полчаса", plain + 0.5, anomaly.ageHours(3_600_000L), 1e-9);
+		report(result, "кормлённая зона бьёт сильнее (" + String.format(java.util.Locale.ROOT, "%.2f", baseStrength)
+				+ " → " + String.format(java.util.Locale.ROOT, "%.2f", anomaly.zone(3_600_000L).strength()) + ")",
+				anomaly.zone(3_600_000L).strength() > baseStrength);
+		report(result, "сила не растёт бесконечно (потолок +60 %)",
+				anomaly.zone(3_600_000L).strength() <= AnomalyClass.DANGER.strength * 1.6 + 1e-9);
+
+		// пока в зоне стоит игрок, кладовая не восстанавливается
+		report(result, "кладовая молчит, пока игрок внутри", !AnomalyNodes.cacheDue(0L, 999_999_999L, true));
+		long placed = 1_000_000L;
+		report(result, "без игрока кладовая созревает за 10 минут",
+				AnomalyNodes.cacheDue(placed, placed + 10L * 60_000L, false));
+		report(result, "девяти минут ещё не хватает",
+				!AnomalyNodes.cacheDue(placed, placed + 9L * 60_000L, false));
+	}
+
+	// --- места рождения ---
+
+	private static void checkSpawnPlaces(Result result, AnomalyConfig config, Random rnd) {
+		AnomalyConfig cfg = new AnomalyConfig();
+		cfg.population = 2;
+		cfg.spawn_min_radius = 0;
+		cfg.world_radius = 4000;
+		cfg.herald_enabled = false;
+		cfg.nested_chance = 0.0;
+		AnomalyField.Avoid avoid = new AnomalyField.Avoid(List.of(new double[]{0.0, 0.0, 5000.0}), null, 0);
+		report(result, "точка в запретной зоне не годится", avoid.blocks(10, 10));
+		report(result, "точка вне запретной — годится", !avoid.blocks(6000, 6000));
+		AnomalyFieldData field = new AnomalyFieldData();
+		Anomaly blocked = AnomalyField.spawnAuto(field, cfg, rnd, 0L, avoid, false);
+		report(result, "у игрока зона не рождается вовсе", blocked == null && field.anomalies.isEmpty());
+		Anomaly allowed = AnomalyField.spawnAuto(field, cfg, rnd, 0L, AnomalyField.Avoid.none(), false);
+		report(result, "без запрета рождается как обычно", allowed != null);
+
+		// радиус запрета — не «вообще нигде»: на 256 блоках от игрока зоны уже могут появляться
+		AnomalyField.Avoid small = new AnomalyField.Avoid(List.of(new double[]{0.0, 0.0, 256.0}), null, 0);
+		report(result, "на 256 блоках от игрока можно", !small.blocks(300, 0));
+		report(result, "в 200 блоках от игрока нельзя", small.blocks(200, 0));
+	}
+
+	// --- реестр следов ---
+
+	private static void checkScarRegistry(Result result, AnomalyConfig config, Random rnd) {
+		ScarOp disk = ScarOp.disk("dead_soil", 0, 0, 10.0, 1L);
+		ScarOp same = ScarOp.disk("dead_soil", 3, 0, 10.0, 2L);
+		ScarOp far = ScarOp.disk("dead_soil", 40, 0, 10.0, 3L);
+		ScarOp crack = ScarOp.line("crack", 0, 0, 0.0, 60, 1, 2, 4L);
+		report(result, "пятно в пустом месте годится", !AnomalyScars.overlaps(List.of(), disk));
+		report(result, "наложенное пятно отбрасывается", AnomalyScars.overlaps(List.of(disk), same));
+		report(result, "дальнее пятно остаётся", !AnomalyScars.overlaps(List.of(disk), far));
+		report(result, "трещина пересекает пятно и это нормально",
+				!AnomalyScars.overlaps(List.of(disk), crack));
+
+		AnomalyFieldData field = new AnomalyFieldData();
+		Anomaly anomaly = AnomalyField.create(field, config, rnd, 0L, 9000, 0, 1400.0, AnomalyClass.DEADLY, false);
+		boolean clean = true;
+		List<ScarOp> ops = anomaly.scars == null ? List.of() : anomaly.scars;
+		for (int i = 0; i < ops.size() && clean; i++) {
+			for (int j = i + 1; j < ops.size(); j++) {
+				if (AnomalyScars.overlaps(List.of(ops.get(i)), ops.get(j))) {
+					clean = false;
+					break;
+				}
+			}
+		}
+		report(result, "план из " + ops.size() + " следов не накладывает объёмы", clean);
+	}
+
+	// --- новая геология ---
+
+	private static void checkGeology(Result result, AnomalyConfig config, Random rnd) {
+		ScarOp forest = ScarOp.forest(0, 0, 14.0, 1L);
+		ScarOp ruin = ScarOp.ruin(0, 0, 9.0, 2L);
+		ScarOp uplift = ScarOp.uplift(0, 0, 12.0, 10, 3L);
+		report(result, "поваленный лес оценивается в блоки", forest.blocks > 0 && !forest.isLine());
+		report(result, "руины оцениваются в блоки", ruin.blocks > 0 && !ruin.isLine());
+		check(result, "подъём держит высоту", 10, uplift.height, 0);
+		report(result, "подъём дороже пятна того же радиуса",
+				uplift.blocks > ScarOp.disk("dead_soil", 0, 0, 12.0, 3L).blocks);
+		report(result, "описания читаются",
+				forest.describe().contains("лес") && ruin.describe().contains("руины")
+						&& uplift.describe().contains("подъём"));
+
+		boolean inside = true;
+		for (ScarOp op : new ScarOp[]{forest, ruin, uplift}) {
+			for (int i = 0; i < op.columnCount(); i++) {
+				int[] column = op.column(i);
+				if (column == null) {
+					continue;
+				}
+				if (Math.hypot(column[0], column[1]) > op.radius + 2.0) {
+					inside = false;
+				}
+			}
+		}
+		report(result, "колонки новых следов внутри своего круга", inside);
+
+		AnomalyFieldData field = new AnomalyFieldData();
+		boolean sawNew = false;
+		for (int i = 0; i < 60 && !sawNew; i++) {
+			Anomaly anomaly = AnomalyField.create(field, config, new Random(7000L + i), 0L,
+					9000 + i, 0, 1600.0, AnomalyClass.DEADLY, false);
+			if (anomaly.scars == null) {
+				continue;
+			}
+			for (ScarOp op : anomaly.scars) {
+				sawNew |= op.type.equals("fallen_forest") || op.type.equals("ruin")
+						|| op.type.equals("uplift");
+			}
+		}
+		report(result, "план крупной зоны включает новые типы следов", sawNew);
+	}
+
+	// --- вложенность ---
+
+	private static void checkNesting(Result result, AnomalyConfig config, Random rnd) {
+		AnomalyConfig cfg = new AnomalyConfig();
+		cfg.population = 4;
+		cfg.nested_chance = 1.0;
+		cfg.spawn_min_radius = 6000;
+		cfg.world_radius = 20000;
+		cfg.herald_enabled = false;
+		AnomalyFieldData field = new AnomalyFieldData();
+		Anomaly host = AnomalyField.create(field, cfg, rnd, 0L, 9000, 0, 1200.0, AnomalyClass.DEADLY, false);
+		host.born = -6L * 3_600_000L;
+		field.anomalies.add(host);
+		Anomaly child = AnomalyField.spawnAuto(field, cfg, rnd, 0L, AnomalyField.Avoid.none(), false);
+		report(result, "вложенная зона помнит родителя", child != null && child.parent_id == host.id);
+		if (child == null) {
+			return;
+		}
+		report(result, "вложенная заметно меньше родителя", child.r0 <= host.r0 * 0.31);
+		Zone hostZone = host.zone(0L);
+		Zone childZone = child.zone(0L);
+		double distance = Math.hypot(childZone.x() - hostZone.x(), childZone.z() - hostZone.z());
+		report(result, "вложенная целиком внутри родителя (центр " + Math.round(distance) + ")",
+				distance + child.r0 < host.r0);
+		report(result, "класс вложенной — как у родителя", child.cls.equals(host.cls));
+		// столкновение с родителем — не столкновение: иначе вложенность невозможна
+		report(result, "родитель не считается столкновением", field.anomalies.contains(child));
+		report(result, "статистика видит вложенную",
+				AnomalyField.stats().nested() >= 0);
+	}
+
+	// --- шиза ---
+
+	private static void checkMadness(Result result, AnomalyConfig config, Random rnd) {
+		check(result, "у дома шиза спит", 0.0,
+				AnomalyMadness.intensity(20.0, 0.9, 1000.0, 6000.0), 1e-9);
+		check(result, "в дальних землях на пике — полная", 1.0,
+				AnomalyMadness.intensity(20.0, 0.9, 9000.0, 6000.0), 1e-9);
+		report(result, "остаток 4 ч слабее остатка 10 ч",
+				AnomalyMadness.intensity(4.0, 0.0, 9000.0, 6000.0)
+						< AnomalyMadness.intensity(10.0, 0.0, 9000.0, 6000.0));
+		check(result, "дрожь — это ещё не шиза", 0.0,
+				AnomalyMadness.intensity(1.5, 0.0, 9000.0, 6000.0), 1e-9);
+		check(result, "период при полной силе — базовый", 45,
+				AnomalyMadness.period(45, 1.0), 0);
+		check(result, "период при слабой — впятеро реже", 300,
+				AnomalyMadness.period(45, 0.15), 0);
+		check(result, "нулевая сила молчит", Integer.MAX_VALUE,
+				AnomalyMadness.period(45, 0.0), 0);
+		report(result, "окно детерминировано",
+				AnomalyMadness.window(100L, 7L, 60, 1) == AnomalyMadness.window(100L, 7L, 60, 1));
+		report(result, "в окне семи секунд из минуты событие есть",
+				AnomalyMadness.window(0L, 0L, 60, 7));
+		report(result, "вне окна события нет", !AnomalyMadness.window(30L, 0L, 60, 7));
+	}
+
+	// --- обучение ---
+
+	private static void checkTeaching(Result result) {
+		java.util.Set<net.minecraft.sounds.SoundEvent> sounds = new java.util.HashSet<>();
+		boolean all = true;
+		for (AnomalyComponent component : AnomalyComponent.values()) {
+			var sound = component.signature();
+			all &= sound != null;
+			sounds.add(sound);
+		}
+		report(result, "у каждого компонента есть звук-подпись", all);
+		report(result, "звуки-подписи не повторяются (" + sounds.size() + " из "
+				+ AnomalyComponent.values().length + ")",
+				sounds.size() == AnomalyComponent.values().length);
+		report(result, "30 с с полной дозой в опасной зоне — выживание",
+				AnomalyProgress.survives(AnomalyProgress.SURVIVE_TICKS, 0.6, true, true));
+		report(result, "мимоходом — нет",
+				!AnomalyProgress.survives(200, 0.6, true, true));
+		report(result, "без полной дозы — нет",
+				!AnomalyProgress.survives(AnomalyProgress.SURVIVE_TICKS, 0.5, true, true));
+		report(result, "в безопасной зоне — нет",
+				!AnomalyProgress.survives(AnomalyProgress.SURVIVE_TICKS, 0.6, false, true));
+		report(result, "мёртвому не выдают",
+				!AnomalyProgress.survives(AnomalyProgress.SURVIVE_TICKS, 0.6, true, false));
+	}
+
+	// --- суточный лимит генерации чанков ---
+
+	private static void checkChunkBudget(Result result, AnomalyConfig config) {
+		AnomalyConfig cfg = new AnomalyConfig();
+		AnomalyFieldData data = new AnomalyFieldData();
+		data.gen_day = 0;
+		data.gen_count = 5;
+		cfg.chunk_gen_per_day = 5;
+		report(result, "на лимите генерация останавливается",
+				!AnomalyScars.chunkBudgetAllows(data, cfg, 1000L));
+		cfg.chunk_gen_per_day = 6;
+		report(result, "под лимитом генерация идёт", AnomalyScars.chunkBudgetAllows(data, cfg, 1000L));
+		cfg.chunk_gen_per_day = 0;
+		report(result, "нулевой лимит — без ограничений", AnomalyScars.chunkBudgetAllows(data, cfg, 1000L));
+		cfg.chunk_gen_per_day = 5;
+		data.gen_count = 5;
+		report(result, "новые сутки сбрасывают счётчик",
+				AnomalyScars.chunkBudgetAllows(data, cfg, AnomalyField.DAY_MS + 1L) && data.gen_count == 0);
+	}
+
+	// --- рейды остатка ---
+
+	private static void checkResidueRaids(Result result, AnomalyConfig config) {
+		check(result, "до пелены никто не идёт", 0, AnomalyResidue.raidCount(11.9), 0);
+		check(result, "на пелене — один", 1, AnomalyResidue.raidCount(12.0), 0);
+		check(result, "на голоде глубины — три", 3, AnomalyResidue.raidCount(24.0), 0);
+		check(result, "без остатка зона обычная", 1.0, AnomalyResidue.hazardScale(0.0), 1e-9);
+		check(result, "оскомина не усиливает", 1.0, AnomalyResidue.hazardScale(5.0), 1e-9);
+		check(result, "на пике зона в полтора раза злее", 1.5, AnomalyResidue.hazardScale(16.0), 1e-9);
+		report(result, "усиление монотонно",
+				AnomalyResidue.hazardScale(8.0) > AnomalyResidue.hazardScale(6.0)
+						&& AnomalyResidue.hazardScale(12.0) > AnomalyResidue.hazardScale(8.0));
 	}
 
 	// --- отчёт ---

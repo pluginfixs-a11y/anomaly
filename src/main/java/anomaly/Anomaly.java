@@ -71,8 +71,30 @@ public final class Anomaly {
 	 */
 	public boolean remnant;
 
+	/**
+	 * Часы, набежавшие от присутствия игроков внутри: зона «кормится». Идут в возраст
+	 * ({@link #ageHours}), поэтому кемпинг старит зону в десятки раз быстрее и она умирает
+	 * вместе с лутом и узлами. Раз в час реального стояния — {@code camp_feed} часов поля.
+	 */
+	public double fed_hours;
+
+	/** Предвестник: зона ещё не родилась, но уже шумит в точке будущего рождения. */
+	public boolean precursor;
+	/** Время поля, когда предвестник станет настоящей зоной. */
+	public long birth_at;
+
+	/** id большой зоны, внутри которой родилась эта: вложенность, 0 — сама по себе. */
+	public long parent_id;
+
 	/** План следов разрушения. Хранится правилами, а не списком блоков. */
 	public List<ScarOp> scars = new ArrayList<>();
+
+	/** Точка, вокруг которой планировались последние следы: по ней виден дрейф зрелой зоны. */
+	public double scar_cx;
+	public double scar_cz;
+
+	/** Родилась на этом тике: один сигнал для игроков рядом (не пишется в файл). */
+	public transient boolean justBorn;
 
 	/** Рейдовые узлы: кладовая, алтарь и три якоря. Появляются при первом подходе к ядру. */
 	public boolean nodes_placed;
@@ -103,7 +125,8 @@ public final class Anomaly {
 	// --- время ---
 
 	public double ageHours(long now) {
-		return (now - born) / HOUR_MS;
+		// набежавшее от кемпинга ускоряет всю жизнь зоны: рост, зрелость и распад
+		return (now - born) / HOUR_MS + Math.max(0.0, fed_hours);
 	}
 
 	public boolean alive(long now) {
@@ -201,9 +224,42 @@ public final class Anomaly {
 
 	/** Радиус с учётом фазы жизни и уже случившегося сжатия у центра. */
 	public double radius(double ageHours) {
+		// предвестник ещё не зона: радиуса нет, поэтому ни дозы, ни границы, ни узлов
+		if (precursor) {
+			return 0.0;
+		}
 		// тестовая зона сразу полноразмерная: иначе её не видно первые часы после /anomaly spawn
 		double full = r0 * (pinned ? 1.0 : envelope(ageHours));
 		return Math.max(0.0, full * shrink);
+	}
+
+	// --- кэш расстояния до границы ---
+
+	private transient double sdAge;
+	private transient double sdPx;
+	private transient double sdPz;
+	private transient double sdRadius;
+	private transient double sdValue;
+	private transient boolean sdValid;
+
+	/**
+	 * То же, что {@link #signedDistance}, но с памятью на последний вызов: за один тик у зоны
+	 * спрашивают расстояние 4–6 раз (содержимость, глубина, сортировка, эффект), и каждый раз
+	 * это сумма синусов гармоник. Кэш живёт на записи, а не на {@link Zone}, потому что зону
+	 * создают заново на каждом запросе.
+	 */
+	public double signedDistanceCached(double px, double pz, double ageHours, double radius) {
+		if (sdValid && sdAge == ageHours && sdPx == px && sdPz == pz && sdRadius == radius) {
+			return sdValue;
+		}
+		double value = signedDistance(px, pz, ageHours, radius);
+		sdAge = ageHours;
+		sdPx = px;
+		sdPz = pz;
+		sdRadius = radius;
+		sdValue = value;
+		sdValid = true;
+		return value;
 	}
 
 	/**
@@ -309,6 +365,25 @@ public final class Anomaly {
 		}
 		if (!(Double.isFinite(shrink) && shrink > 0.0 && shrink <= 4.0)) {
 			shrink = 1.0;
+		}
+		// накопленное кормление из файла: отрицательное или бесконечное ломало бы возраст
+		if (!(Double.isFinite(fed_hours) && fed_hours >= 0.0)) {
+			fed_hours = 0.0;
+		}
+		fed_hours = Math.min(fed_hours, life_hours * 4.0);
+		if (!(Double.isFinite(scar_cx) && Double.isFinite(scar_cz))) {
+			scar_cx = 0.0;
+			scar_cz = 0.0;
+		}
+		if (parent_id < 0L || parent_id == id) {
+			parent_id = 0L;
+		}
+		if (!precursor) {
+			birth_at = 0L;
+		} else if (birth_at <= 0L) {
+			// предвестник без даты рождения — не предвестник, а зона без радиуса: рождаем сразу
+			precursor = false;
+			birth_at = 0L;
 		}
 		// узел из файла: битые координаты просто отменяют постановку, а не роняют зону
 		if (!(Double.isFinite(node_cx) && Double.isFinite(node_cz) && Double.isFinite(node_cy)

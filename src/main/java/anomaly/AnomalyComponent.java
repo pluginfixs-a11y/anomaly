@@ -1,17 +1,31 @@
 package anomaly;
 
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.component.DataComponents;
 import net.minecraft.core.particles.ParticleTypes;
 import net.minecraft.resources.Identifier;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.sounds.SoundEvent;
 import net.minecraft.sounds.SoundEvents;
 import net.minecraft.sounds.SoundSource;
 import net.minecraft.world.effect.MobEffectInstance;
 import net.minecraft.world.effect.MobEffects;
+import net.minecraft.world.entity.EquipmentSlot;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.Mob;
+import net.minecraft.world.entity.item.FallingBlockEntity;
 import net.minecraft.world.entity.item.ItemEntity;
+import net.minecraft.world.entity.projectile.arrow.Arrow;
 import net.minecraft.world.food.FoodData;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.Items;
+import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.CampfireBlock;
+import net.minecraft.world.level.block.CandleBlock;
+import net.minecraft.world.level.block.DoorBlock;
+import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.levelgen.Heightmap;
 import net.minecraft.world.phys.AABB;
 
@@ -50,6 +64,16 @@ public enum AnomalyComponent {
 	BAD_SLEEP("bad_sleep", "дурной сон", Kind.PASSIVE, AnomalyClass.SAFE, 1, null, 0x4A3F55),
 	/** Мобы слышат дальше: подходят раньше, чем их видно. */
 	MOB_EARS("mob_ears", "чуткие мобы", Kind.PASSIVE, AnomalyClass.SAFE, 1, null, 0x8C7F6A),
+	/** Свет гаснет вокруг: свечи, фонари, костры — и сами закрываются двери. */
+	DARK_SUCKING("dark_sucking", "свет гаснет", Kind.PASSIVE, AnomalyClass.DANGER, 2, null, 0x2B2B33),
+	/** Гибельный цвет: трава под ногами умирает пятнами, как после долгой засухи. */
+	HUSK_BLOOM("husk_bloom", "гибельный цвет", Kind.PASSIVE, AnomalyClass.DANGER, 2, null, 0x8A7B4A),
+	/** Износ: броня и инструмент в руке стачиваются сами. */
+	WEAR("wear", "износ", Kind.PASSIVE, AnomalyClass.DANGER, 2, null, 0x9A9080),
+	/** Порча: еда в сумке скисает в гниль, и это видно только когда её достал. */
+	LOOT_SOUR("loot_sour", "порча", Kind.PASSIVE, AnomalyClass.DANGER, 2, "food", 0x6B7A3A),
+	/** Кривые стрелы: снаряды в зоне уводит в сторону, и стрелок промахивается. */
+	ARROW_BEND("arrow_bend", "кривые стрелы", Kind.PASSIVE, AnomalyClass.DANGER, 1, null, 0xC0A86A),
 
 	// --- видимые ---
 	LIGHT_WALL("light_wall", "световая стена", Kind.VISIBLE, AnomalyClass.SAFE, 1, "show", 0),
@@ -59,7 +83,11 @@ public enum AnomalyComponent {
 	GLOW_ALL("glow_all", "подсветка", Kind.VISIBLE, AnomalyClass.DANGER, 2, null, 0xA8E6CF),
 	FLOAT_ALL("float_all", "невесомость", Kind.VISIBLE, AnomalyClass.DANGER, 3, null, 0xD8C8FF),
 	/** Чёрная фигура вдалеке: стоит и смотрит, исчезает, когда подходишь. */
-	SHADES("shades", "силуэты", Kind.VISIBLE, AnomalyClass.SAFE, 1, "show", 0x2A2A33);
+	SHADES("shades", "силуэты", Kind.VISIBLE, AnomalyClass.SAFE, 1, "show", 0x2A2A33),
+	/** Наковальни падают с неба: не молния, а именно чугун сверху. */
+	ANVIL_RAIN("anvil_rain", "наковальни", Kind.VISIBLE, AnomalyClass.DANGER, 3, "show", 0x6E6E78),
+	/** Кольцо шёпота: в нескольких шагах кругом что-то говорит, а никого нет. */
+	MADNESS_RING("madness_ring", "кольцо шёпота", Kind.VISIBLE, AnomalyClass.DANGER, 2, "show", 0x7A5FA0);
 
 	public enum Kind {
 		PASSIVE, VISIBLE
@@ -355,6 +383,20 @@ public enum AnomalyComponent {
 			}
 			case TRACTION -> AnomalyEffects.shoveTowards(player, zone, 0.02 + 0.05 * dose, state);
 			case REPULSION -> AnomalyEffects.shoveAway(player, zone, 0.02 + 0.05 * dose, state);
+			// износ: раз в ~20 с одна вещь теряет единицу прочности. Медленно, но за долгий
+			// поход это ровно та цена, которую видно только дома
+			case WEAR -> {
+				long period = 400L + 10L * Math.floorMod(zone.id(), 20L);
+				if (state.pulseTicks % period == 0L) {
+					wearArmour(player);
+				}
+			}
+			// порча: раз в ~30 с часть еды в сумке скисает в гниль
+			case LOOT_SOUR -> {
+				if (state.pulseTicks % 600L == 0L) {
+					sourFood(player);
+				}
+			}
 			default -> {
 				// видимые в apply ничего не делают; DRIP и NIGHT_TOLL работают через pulse/множитель
 			}
@@ -373,7 +415,9 @@ public enum AnomalyComponent {
 		// тоже внутри: за краем игрок должен видеть только косметику, а не воронки у себя под ногами.
 		if (sd > 0.0 && (this == HUNGER_DRAIN || this == SATURATION_BURN || this == XP_LEAK
 				|| this == AIR_DRAIN || this == TRACTION || this == REPULSION || this == MOB_EARS
-				|| this == ECHO_BURSTS || this == STORM_CORE || this == PRESSURE)) {
+				|| this == ECHO_BURSTS || this == STORM_CORE || this == PRESSURE
+				|| this == WEAR || this == LOOT_SOUR || this == ARROW_BEND
+				|| this == DARK_SUCKING || this == HUSK_BLOOM || this == ANVIL_RAIN)) {
 			return;
 		}
 		switch (this) {
@@ -519,6 +563,45 @@ public enum AnomalyComponent {
 							player.getZ() + (rnd.nextDouble() - 0.5) * 6.0, 0.6, 1, player.getY());
 				}
 			}
+			case DARK_SUCKING -> {
+				// свет в зоне не держится: свечи и костры гаснут, двери закрываются сами
+				if (rnd.nextInt(30) == 0) {
+					darkSuck(level, player);
+				}
+			}
+			case HUSK_BLOOM -> {
+				// трава умирает пятнами: то же, что гарь от молнии, но без вспышки
+				if (rnd.nextInt(60) == 0 && canMark(level, player.getX(), player.getZ())) {
+					AnomalyScars.scorch(level,
+							player.getX() + (rnd.nextDouble() - 0.5) * 10.0,
+							player.getZ() + (rnd.nextDouble() - 0.5) * 10.0, 2.5, player.getY());
+				}
+			}
+			case ARROW_BEND -> {
+				// снаряды в зоне ведёт в сторону: стрелок целится в игрока, а попадает мимо
+				for (Arrow arrow : level.getEntitiesOfClass(Arrow.class,
+						new AABB(player.getX() - 24.0, player.getY() - 12.0, player.getZ() - 24.0,
+								player.getX() + 24.0, player.getY() + 12.0, player.getZ() + 24.0))) {
+					var motion = arrow.getDeltaMovement();
+					double length = Math.hypot(motion.x, motion.z);
+					if (length < 0.15) {
+						continue;
+					}
+					arrow.push(-motion.z / length * 0.09, 0.0, motion.x / length * 0.09);
+				}
+			}
+			case ANVIL_RAIN -> {
+				// наковальня с неба: то, чего никто не ждёт и что трудно списать на баг
+				if (rnd.nextInt(60) == 0) {
+					anvilRain(level, player, rnd);
+				}
+			}
+			case MADNESS_RING -> {
+				// кольцо шёпота: голоса в трёх шагах кругом, а никого нет
+				if (rnd.nextInt(8) == 0) {
+					whisperRing(level, player, rnd);
+				}
+			}
 			default -> {
 			}
 		}
@@ -606,9 +689,151 @@ public enum AnomalyComponent {
 		level.sendParticles(player, ink, true, true, sx, base + 0.15, sz, 2, 0.3, 0.1, 0.3, 0.0);
 	}
 
-	/** Высота рельефа для точки или запасное значение, если чанк не загружен. */
-	private static double surfaceOr(ServerLevel level, double x, double z, double fallback) {
+	/** Износ: одна случайная надеваемая вещь теряет единицу прочности. */
+	private static void wearArmour(ServerPlayer player) {
+		EquipmentSlot[] slots = {EquipmentSlot.CHEST, EquipmentSlot.LEGS, EquipmentSlot.HEAD,
+				EquipmentSlot.FEET, EquipmentSlot.MAINHAND};
+		int start = player.getRandom().nextInt(slots.length);
+		for (int i = 0; i < slots.length; i++) {
+			EquipmentSlot slot = slots[(start + i) % slots.length];
+			ItemStack stack = player.getItemBySlot(slot);
+			if (stack.isEmpty() || !stack.isDamageableItem()) {
+				continue;
+			}
+			stack.hurtAndBreak(1, player, slot);
+			return;
+		}
+	}
+
+	/** Порча: часть еды в сумке превращается в гниль. Не трогаем тотем, зелья и гниль. */
+	private static void sourFood(ServerPlayer player) {
+		var inventory = player.getInventory();
+		for (int i = 0; i < inventory.getContainerSize(); i++) {
+			ItemStack stack = inventory.getItem(i);
+			if (stack.isEmpty() || !stack.has(DataComponents.FOOD) || stack.is(Items.ROTTEN_FLESH)) {
+				continue;
+			}
+			if (player.getRandom().nextInt(4) != 0) {
+				continue;
+			}
+			int count = Math.max(1, stack.getCount() / 2);
+			inventory.setItem(i, new ItemStack(Items.ROTTEN_FLESH, count));
+			return;
+		}
+	}
+
+	/** Свет гаснет: свечи и костры тушатся, открытые двери закрываются. Одна правка за вызов. */
+	private static void darkSuck(ServerLevel level, ServerPlayer player) {
+		BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
+		int baseX = (int) Math.floor(player.getX());
+		int baseZ = (int) Math.floor(player.getZ());
+		int baseY = (int) Math.floor(player.getY());
+		for (int dx = -5; dx <= 5; dx++) {
+			for (int dz = -5; dz <= 5; dz++) {
+				for (int dy = -3; dy <= 3; dy++) {
+					pos.set(baseX + dx, baseY + dy, baseZ + dz);
+					BlockState state = level.getBlockState(pos);
+					if (state.isAir()) {
+						continue;
+					}
+					if (state.getBlock() instanceof CandleBlock && state.getValue(CandleBlock.LIT)) {
+						level.setBlock(pos, state.setValue(CandleBlock.LIT, false), Block.UPDATE_ALL);
+						level.playSound(null, pos.getX() + 0.5, pos.getY() + 0.5, pos.getZ() + 0.5,
+								SoundEvents.CANDLE_EXTINGUISH, SoundSource.BLOCKS, 0.8f, 0.7f);
+						return;
+					}
+					if (state.getBlock() instanceof CampfireBlock && state.getValue(CampfireBlock.LIT)) {
+						level.setBlock(pos, state.setValue(CampfireBlock.LIT, false), Block.UPDATE_ALL);
+						level.playSound(null, pos.getX() + 0.5, pos.getY() + 0.5, pos.getZ() + 0.5,
+								SoundEvents.FIRE_EXTINGUISH, SoundSource.BLOCKS, 0.8f, 0.7f);
+						return;
+					}
+					if (state.getBlock() instanceof DoorBlock && state.getValue(DoorBlock.OPEN)) {
+						level.setBlock(pos, state.setValue(DoorBlock.OPEN, false), Block.UPDATE_ALL);
+						level.playSound(null, pos.getX() + 0.5, pos.getY() + 0.5, pos.getZ() + 0.5,
+								SoundEvents.WOODEN_DOOR_CLOSE, SoundSource.BLOCKS, 0.9f, 0.8f);
+						return;
+					}
+				}
+			}
+		}
+	}
+
+	/** Наковальня падает с десяти блоков над точкой рядом с игроком. */
+	private static void anvilRain(ServerLevel level, ServerPlayer player, net.minecraft.util.RandomSource rnd) {
+		double x = player.getX() + (rnd.nextDouble() - 0.5) * 6.0;
+		double z = player.getZ() + (rnd.nextDouble() - 0.5) * 6.0;
 		int bx = (int) Math.floor(x);
+		int bz = (int) Math.floor(z);
+		if (!level.getChunkSource().hasChunk(bx >> 4, bz >> 4)) {
+			return;
+		}
+		int surface = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, bx, bz);
+		if (surface <= level.getMinY() + 2 || surface >= level.getMaxY() - 16) {
+			return;
+		}
+		int startY = Math.min(level.getMaxY() - 4, surface + 12);
+		FallingBlockEntity anvil = FallingBlockEntity.fall(level, new BlockPos(bx, startY, bz),
+				Blocks.ANVIL.defaultBlockState());
+		if (anvil != null) {
+			anvil.setHurtsEntities(2.0f, 40);
+		}
+	}
+
+	/** Кольцо шёпота: восемь точек в шести шагах, у каждой свой голос. */
+	private static void whisperRing(ServerLevel level, ServerPlayer player, net.minecraft.util.RandomSource rnd) {
+		double radius = 5.0 + rnd.nextDouble() * 3.0;
+		double start = rnd.nextDouble() * Math.PI * 2.0;
+		var ink = new net.minecraft.core.particles.DustParticleOptions(0x1A1622, 1.1f);
+		for (int i = 0; i < 8; i++) {
+			double angle = start + i * Math.PI / 4.0;
+			double x = player.getX() + Math.cos(angle) * radius;
+			double z = player.getZ() + Math.sin(angle) * radius;
+			level.sendParticles(player, ink, true, true, x, player.getY() + 1.2, z, 2, 0.1, 0.4, 0.1, 0.0);
+		}
+		level.playSound(null, player.getX(), player.getY(), player.getZ(), SoundEvents.SCULK_CLICKING,
+				SoundSource.AMBIENT, 0.45f, 0.6f);
+		level.playSound(null, player.getX() + 2.0, player.getY(), player.getZ() - 2.0,
+				SoundEvents.WARDEN_TENDRIL_CLICKS, SoundSource.AMBIENT, 0.35f, 1.4f);
+	}
+
+	/**
+	 * Звук-подпись компонента: обучение без букв. У каждого свой звук, поэтому игрок узнаёт,
+	 * что именно в зоне, по слуху — ещё до того, как увидит эффект.
+	 */
+	public SoundEvent signature() {
+		return switch (this) {
+			case HUNGER_DRAIN -> SoundEvents.GENERIC_EAT.value();
+			case SATURATION_BURN -> SoundEvents.GENERIC_DRINK.value();
+			case XP_LEAK -> SoundEvents.EXPERIENCE_ORB_PICKUP;
+			case COLD_CREEP -> SoundEvents.GLASS_STEP;
+			case AIR_DRAIN -> SoundEvents.PLAYER_HURT_DROWN;
+			case PRESSURE -> SoundEvents.BONE_BLOCK_STEP;
+			case NIGHT_TOLL -> SoundEvents.BEACON_AMBIENT;
+			case DRIP -> SoundEvents.CANDLE_AMBIENT;
+			case TRACTION -> SoundEvents.BONE_MEAL_USE;
+			case REPULSION -> SoundEvents.ANVIL_STEP;
+			case BAD_SLEEP -> SoundEvents.PLAYER_BREATH;
+			case MOB_EARS -> SoundEvents.GRASS_STEP;
+			case DARK_SUCKING -> SoundEvents.CANDLE_EXTINGUISH;
+			case HUSK_BLOOM -> SoundEvents.SCULK_BLOCK_SPREAD;
+			case WEAR -> SoundEvents.ANVIL_HIT;
+			case LOOT_SOUR -> SoundEvents.PLAYER_BURP;
+			case ARROW_BEND -> SoundEvents.GLASS_HIT;
+			case LIGHT_WALL -> SoundEvents.AMETHYST_BLOCK_CHIME;
+			case ASH_FALL -> SoundEvents.FIRE_EXTINGUISH;
+			case ECHO_BURSTS -> SoundEvents.FIREWORK_ROCKET_BLAST;
+			case STORM_CORE -> SoundEvents.LIGHTNING_BOLT_THUNDER;
+			case GLOW_ALL -> SoundEvents.AMETHYST_BLOCK_RESONATE;
+			case FLOAT_ALL -> SoundEvents.CONDUIT_ACTIVATE;
+			case SHADES -> SoundEvents.SCULK_CLICKING;
+			case ANVIL_RAIN -> SoundEvents.ANVIL_LAND;
+			case MADNESS_RING -> SoundEvents.RESPAWN_ANCHOR_AMBIENT;
+		};
+	}
+
+	/** Высота рельефа для точки или запасное значение, если чанк не загружен. */
+	private static double surfaceOr(ServerLevel level, double x, double z, double fallback) {		int bx = (int) Math.floor(x);
 		int bz = (int) Math.floor(z);
 		if (!level.getChunkSource().hasChunk(bx >> 4, bz >> 4)) {
 			return fallback;

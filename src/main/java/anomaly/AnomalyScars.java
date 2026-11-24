@@ -1,11 +1,13 @@
 package anomaly;
 
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.tags.BlockTags;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.RotatedPillarBlock;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.levelgen.Heightmap;
 
@@ -23,16 +25,27 @@ import java.util.Random;
  * Применение ленивое: 1–2 чанка и до {@code blocks_per_tick} блоков за секунду, только когда
  * сервер не задыхается (mspt ниже порога). Чанк сперва проверяется на загруженность и только
  * потом грузится — иначе {@code getHeight} вернёт дно мира и мы выроем яму под бедроком.
+ * <p>
+ * Три вещи из 0.3.0: реестр следов (перекрывающиеся объёмы отбрасываются), следы у зрелой зоны
+ * (при дрейфе план достраивается на новом месте) и суточный лимит FULL-генераций чанков.
  */
 public final class AnomalyScars {
 	private static final double TAU = Math.PI * 2.0;
 	private static final int MAX_HEIGHT = 150;
+	/** Больше этого числа следов в одной зоне не копим: файл поля и очередь должны быть конечны. */
+	private static final int MAX_OPS = 64;
 	/** Колонок за проход: ~2000 изменённых блоков и несколько тысяч пустых проверок. */
 	private static final int COLUMNS_PER_PASS = 6000;
 	/** Часы на проход: средний mspt помнит 100 тиков, этого мало для 2000 setBlock подряд. */
 	private static final long NANOS_PER_PASS = 5_000_000L;
 	private static final Block[] SPIKE_BLOCKS = {
 			Blocks.STONE, Blocks.TUFF, Blocks.ANDESITE, Blocks.DEEPSLATE
+	};
+	private static final Block[] RUIN_WALLS = {
+			Blocks.COBBLESTONE, Blocks.CRACKED_STONE_BRICKS, Blocks.MOSSY_COBBLESTONE, Blocks.STONE_BRICKS
+	};
+	private static final Block[] RUIN_FLOOR = {
+			Blocks.GRAVEL, Blocks.COARSE_DIRT, Blocks.COBBLESTONE, Blocks.ANDESITE
 	};
 
 	private AnomalyScars() {
@@ -60,10 +73,34 @@ public final class AnomalyScars {
 			if (op == null) {
 				break;
 			}
+			// реестр следов: два пятна в одной точке нарастают друг на друга и читаются как грязь
+			if (overlaps(ops, op)) {
+				continue;
+			}
 			ops.add(op);
 			used += op.blocks;
 		}
 		return ops;
+	}
+
+	/**
+	 * Перекрываются ли два объёмных следа. Линии (трещины, разломы) пересекаться вправе — они
+	 * читаются как сеть; пятна, пики и провалы — нет.
+	 */
+	static boolean overlaps(List<ScarOp> ops, ScarOp op) {
+		if (op == null || op.isLine()) {
+			return false;
+		}
+		for (ScarOp other : ops) {
+			if (other == null || other.isLine()) {
+				continue;
+			}
+			double need = (Math.max(2.0, op.radius) + Math.max(2.0, other.radius)) * 0.7;
+			if (Math.hypot(op.x - other.x, op.z - other.z) < need) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	private static ScarOp pick(double cx, double cz, double r0, AnomalyClass cls, Random rnd, double remaining,
@@ -74,32 +111,55 @@ public final class AnomalyScars {
 		// получают одни и те же пики и лаву, и пейзаж у них одинаковый.
 		boolean storms = has(components, "storm_core");
 		boolean pushes = storms || has(components, "pressure") || has(components, "night_toll");
+		boolean rot = has(components, "husk_bloom") || has(components, "dark_sucking");
 		double roll = rnd.nextDouble();
 		double[] spot = spot(cx, cz, r0, rnd);
 
-		if (deadly && pushes && remaining > 6000.0 && roll < 0.40) {
+		if (deadly && pushes && remaining > 6000.0 && roll < 0.35) {
 			ScarOp op = ScarOp.spike(spot[0], spot[1], 4.0 + rnd.nextDouble() * 10.0,
 					40 + rnd.nextInt(80), rnd.nextLong());
 			if (op.blocks <= remaining) {
 				return op;
 			}
 		}
-		if (deadly && storms && remaining > 1200.0 && roll < 0.60) {
+		if (deadly && storms && remaining > 1200.0 && roll < 0.50) {
 			ScarOp op = ScarOp.line("lava_fault", spot[0], spot[1], rnd.nextDouble() * TAU,
 					40 + rnd.nextInt(100), 2, 4 + rnd.nextInt(3), rnd.nextLong());
 			if (op.blocks <= remaining) {
 				return op;
 			}
 		}
-		if (dangerous && pushes && remaining > 900.0 && roll < 0.78) {
+		// поднятая плита: то, что видно за километры через voxy — не пик, а пласт земли
+		if (deadly && remaining > 5000.0 && roll < 0.62) {
+			ScarOp op = ScarOp.uplift(spot[0], spot[1], 8.0 + rnd.nextDouble() * 10.0,
+					6 + rnd.nextInt(10), rnd.nextLong());
+			if (op.blocks <= remaining) {
+				return op;
+			}
+		}
+		if (dangerous && pushes && remaining > 900.0 && roll < 0.72) {
 			ScarOp op = ScarOp.spike(spot[0], spot[1], 3.0 + rnd.nextDouble() * 4.0,
 					15 + rnd.nextInt(30), rnd.nextLong());
 			if (op.blocks <= remaining) {
 				return op;
 			}
 		}
+		// обрушенные постройки: стены без крыш и пол из обломков — «здесь жили»
+		if (dangerous && remaining > 1800.0 && roll < 0.80) {
+			ScarOp op = ScarOp.ruin(spot[0], spot[1], 5.0 + rnd.nextDouble() * 8.0, rnd.nextLong());
+			if (op.blocks <= remaining) {
+				return op;
+			}
+		}
+		// поваленный лес плашмя: самое читаемое издалека, а вблизи — стволы лежат, кроны снесены
+		if (dangerous && remaining > 400.0 && roll < 0.88) {
+			ScarOp op = ScarOp.forest(spot[0], spot[1], 10.0 + rnd.nextDouble() * 14.0, rnd.nextLong());
+			if (op.blocks <= remaining) {
+				return op;
+			}
+		}
 		// провал — отдельная геология: не пик и не пятно, а дыра в рельефе
-		if (dangerous && remaining > 2500.0 && roll < 0.88) {
+		if (dangerous && remaining > 2500.0 && roll < 0.94) {
 			ScarOp op = ScarOp.sinkhole(spot[0], spot[1], 3.0 + rnd.nextDouble() * 5.0,
 					3 + rnd.nextInt(6), rnd.nextLong());
 			if (op.blocks <= remaining) {
@@ -109,9 +169,9 @@ public final class AnomalyScars {
 		// площадные следы: мёртвая земля или обломки — под остаток бюджета
 		double soilBudget = Math.min(remaining * 0.7, deadly ? 3000.0 : 1500.0);
 		double soilRadius = Math.max(3.0, Math.min(24.0, Math.sqrt(soilBudget / Math.PI)));
-		ScarOp soil = rnd.nextDouble() < 0.65
-				? ScarOp.disk("dead_soil", spot[0], spot[1], soilRadius, rnd.nextLong())
-				: ScarOp.disk("rubble", spot[0], spot[1], soilRadius * 0.7, rnd.nextLong());
+		String soilType = rot ? "dead_soil" : (rnd.nextDouble() < 0.65 ? "dead_soil" : "rubble");
+		ScarOp soil = ScarOp.disk(soilType, spot[0], spot[1],
+				soilType.equals("rubble") ? soilRadius * 0.7 : soilRadius, rnd.nextLong());
 		if (soil.blocks <= remaining) {
 			return soil;
 		}
@@ -140,7 +200,78 @@ public final class AnomalyScars {
 		};
 	}
 
+	/**
+	 * Следы у зрелой зоны: план считается один раз в точке рождения, а зона уезжает на 0.5–3
+	 * блока в минуту — до 10 км за жизнь. Без пересчёта у старой зоны следы остаются там, где
+	 * она родилась. Раз в порог смещения достраиваем план на новом месте, с реестром против
+	 * наложения и потолком числа следов.
+	 */
+	static boolean trail(AnomalyFieldData data, AnomalyConfig config, long now) {
+		boolean changed = false;
+		for (Anomaly anomaly : data.anomalies) {
+			if (anomaly.pinned || anomaly.remnant || anomaly.precursor || anomaly.scars == null) {
+				continue;
+			}
+			double[] pos = anomaly.position(anomaly.ageHours(now));
+			if (!Double.isFinite(pos[0]) || !Double.isFinite(pos[1])) {
+				continue;
+			}
+			if (anomaly.scar_cx == 0.0 && anomaly.scar_cz == 0.0) {
+				// файлы 0.2.x не знали точки привязки: принимаем текущую, ничего не генерируя
+				anomaly.scar_cx = pos[0];
+				anomaly.scar_cz = pos[1];
+				continue;
+			}
+			if (anomaly.scars.size() >= MAX_OPS) {
+				continue;
+			}
+			double moved = Math.hypot(pos[0] - anomaly.scar_cx, pos[1] - anomaly.scar_cz);
+			double threshold = Math.max(40.0, Math.min(400.0, anomaly.r0 * 0.2));
+			if (moved < threshold) {
+				continue;
+			}
+			AnomalyClass cls = AnomalyClass.byId(anomaly.cls);
+			anomaly.scar_cx = pos[0];
+			anomaly.scar_cz = pos[1];
+			if (!cls.damages() || config == null || !config.scar_enabled) {
+				continue;
+			}
+			List<ScarOp> planned = planAt(pos[0], pos[1], Math.min(anomaly.r0, 900.0), cls,
+					new Random(anomaly.id * 31L + (long) (moved * 7.0)), false, anomaly.components);
+			double budget = AnomalyClass.damageBudget(anomaly.r0, cls) * 0.18;
+			double used = 0.0;
+			for (ScarOp op : planned) {
+				if (used + op.blocks > budget || anomaly.scars.size() >= MAX_OPS) {
+					break;
+				}
+				if (overlaps(anomaly.scars, op)) {
+					continue;
+				}
+				anomaly.scars.add(op);
+				used += op.blocks;
+				changed = true;
+			}
+		}
+		return changed;
+	}
+
 	// --- применение ---
+
+	/** С какой записи начинать следующий проход: строгий FIFO морил голодом всё поле за первой зоной. */
+	private static int rotate;
+
+	/**
+	 * Суточный лимит FULL-генераций чанков под следы. Без него первое поле на 600 зон
+	 * растягивает worldgen на 10–30 тыс. генераций и часы работы сервера.
+	 */
+	static boolean chunkBudgetAllows(AnomalyFieldData data, AnomalyConfig config, long now) {
+		int day = (int) (now / AnomalyField.DAY_MS);
+		if (data.gen_day != day) {
+			data.gen_day = day;
+			data.gen_count = 0;
+		}
+		return config == null || config.chunk_gen_per_day <= 0 || data.gen_count < config.chunk_gen_per_day;
+	}
 
 	/**
 	 * Возвращает true, если что-то продвинулось: по этому полю решается, пора ли сохранять файл.
@@ -149,27 +280,25 @@ public final class AnomalyScars {
 	 * воде и камне {@code applyColumn} возвращает 0 — по одним изменённым блокам проход не
 	 * остановился бы никогда и за тик выгреб бы весь план зоны.
 	 */
-	/** С какой записи начинать следующий проход: строгий FIFO морил голодом всё поле за первой зоной. */
-	private static int rotate;
-
 	public static boolean tick(MinecraftServer server, ServerLevel level, AnomalyFieldData data,
 			AnomalyConfig config) {
 		if (!config.scar_enabled) {
 			return false;
 		}
+		boolean changed = trail(data, config, AnomalyClock.now());
 		// средний mspt — грубый предохранитель с памятью в 100 тиков; точный — по часам внутри прохода
 		if (server.getAverageTickTimeNanos() / 1_000_000.0 > config.mspt_limit) {
-			return false;
+			return changed;
 		}
 		long deadline = System.nanoTime() + NANOS_PER_PASS;
 		int chunksThisTick = 0;
 		int columnsThisTick = 0;
 		int blocksThisTick = 0;
-		boolean progressed = false;
+		boolean progressed = changed;
 
 		int size = data.anomalies.size();
 		if (size == 0) {
-			return false;
+			return progressed;
 		}
 		if (rotate < 0 || rotate >= size) {
 			rotate = 0;
@@ -205,11 +334,13 @@ public final class AnomalyScars {
 					int chunkX = column[0] >> 4;
 					int chunkZ = column[1] >> 4;
 					if (!level.getChunkSource().hasChunk(chunkX, chunkZ)) {
-						if (chunksThisTick >= config.chunks_per_tick) {
+						// суточный лимит: остаток плана ждёт следующего дня, а не съедает worldgen
+						if (chunksThisTick >= config.chunks_per_tick || !chunkBudgetAllows(data, config, AnomalyClock.now())) {
 							finished = false;
 							break;
 						}
 						level.getChunk(chunkX, chunkZ);
+						data.gen_count++;
 						chunksThisTick++;
 					}
 					// курсор двигаем только после проверок: иначе колонка на стыке бюджета чанков теряется
@@ -267,6 +398,9 @@ public final class AnomalyScars {
 			case "lava_fault" -> trench(level, x, surface, z, op.depth, true);
 			case "spike" -> spike(level, op, x, surface, z);
 			case "sinkhole" -> sinkhole(level, op, x, surface, z);
+			case "fallen_forest" -> fallenForest(level, op, x, surface, z, height);
+			case "ruin" -> ruin(level, op, x, surface, z);
+			case "uplift" -> uplift(level, op, x, surface, z);
 			default -> 0;
 		};
 		// дерево сносим после следа и по исходной высоте: до правки ствол ещё на месте,
@@ -417,6 +551,119 @@ public final class AnomalyScars {
 			if (state.blocksMotion()) {
 				break;
 			}
+		}
+		return changed;
+	}
+
+	/**
+	 * Поваленный лес плашмя: ствол сносится, но не исчезает — он ложится на землю в сторону
+	 * {@code op.angle}. Это единственный след, который видно за километры через voxy, и при этом
+	 * вблизи он читается как «лес положило».
+	 */
+	private static int fallenForest(ServerLevel level, ScarOp op, int x, int surface, int z, int height) {
+		BlockState top = level.getBlockState(new BlockPos(x, height - 1, z));
+		if (!isTreePart(top) || !hasFoliage(level, x, height, z)) {
+			return 0;
+		}
+		Block log = top.getBlock();
+		int changed = clearTreeColumn(level, x, height, z);
+		int hash = (int) ((x * 31L) ^ (z * 17L) ^ op.seed);
+		int length = 4 + Math.floorMod(hash, 4);
+		BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
+		for (int i = 0; i < length; i++) {
+			int bx = (int) Math.floor(x + Math.cos(op.angle) * i);
+			int bz = (int) Math.floor(z + Math.sin(op.angle) * i);
+			if (!level.getChunkSource().hasChunk(bx >> 4, bz >> 4)) {
+				break;
+			}
+			int columnHeight = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, bx, bz);
+			if (columnHeight <= level.getMinY() + 2 || columnHeight >= level.getMaxY() - 2) {
+				break;
+			}
+			int y = groundY(level, bx, columnHeight, bz);
+			BlockState ground = level.getBlockState(pos.set(bx, y - 1, bz));
+			if (protectedBlock(ground) || builtBlock(ground) || !ground.getFluidState().isEmpty()
+					|| !ground.blocksMotion()) {
+				break;
+			}
+			clearPlant(level, bx, y, bz);
+			BlockState place = level.getBlockState(pos.set(bx, y, bz));
+			if (!place.isAir() && !place.canBeReplaced()) {
+				break;
+			}
+			BlockState lay = log.defaultBlockState();
+			if (log instanceof RotatedPillarBlock pillar) {
+				// лежащий ствол: ось вдоль направления падения, а не вертикально
+				double ax = Math.abs(Math.cos(op.angle));
+				double az = Math.abs(Math.sin(op.angle));
+				lay = pillar.defaultBlockState().setValue(RotatedPillarBlock.AXIS,
+						ax >= az ? Direction.Axis.X : Direction.Axis.Z);
+			}
+			level.setBlock(pos, lay, Block.UPDATE_ALL);
+			changed++;
+		}
+		return changed;
+	}
+
+	/** Обрушенные постройки: пол из обломков и стены без крыш и углов — «здесь кто-то жил». */
+	private static int ruin(ServerLevel level, ScarOp op, int x, int surface, int z) {
+		int hash = (int) ((x * 73856093L) ^ (z * 19349663L) ^ op.seed);
+		int changed = 0;
+		if (Math.floorMod(hash, 3) != 0) {
+			BlockPos ground = new BlockPos(x, surface - 1, z);
+			BlockState state = level.getBlockState(ground);
+			if (!protectedBlock(state) && !state.isAir() && state.getFluidState().isEmpty()
+					&& !builtBlock(state)) {
+				clearPlant(level, x, surface, z);
+				level.setBlock(ground, pick(hash, RUIN_FLOOR).defaultBlockState(), Block.UPDATE_ALL);
+				changed++;
+			}
+		}
+		if (Math.floorMod(hash, 3) == 0) {
+			int stack = 1 + Math.floorMod(hash >> 3, 3);
+			BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
+			for (int i = 0; i < stack; i++) {
+				BlockState at = level.getBlockState(pos.set(x, surface + i, z));
+				if (protectedBlock(at) || (!at.isAir() && at.blocksMotion())) {
+					break;
+				}
+				level.setBlock(pos, pick(hash + i, RUIN_WALLS).defaultBlockState(), Block.UPDATE_ALL);
+				changed++;
+			}
+		}
+		return changed;
+	}
+
+	/** Поднятая плита: пласт земли, вывернутый вверх. Плоский верх — то, что видно за километры. */
+	private static int uplift(ServerLevel level, ScarOp op, int x, int surface, int z) {
+		double distance = Math.hypot(x - op.x, z - op.z);
+		double falloff = 1.0 - Math.min(1.0, distance / Math.max(0.5, op.radius));
+		if (falloff <= 0.0) {
+			return 0;
+		}
+		int hash = (int) ((x * 341873128L) ^ (z * 132897987L) ^ op.seed);
+		int height = (int) Math.round(op.height * (0.25 + 0.75 * falloff)
+				* (0.8 + Math.floorMod(hash, 100) / 250.0));
+		height = Math.max(1, Math.min(40, height));
+		BlockState ground = level.getBlockState(new BlockPos(x, surface - 1, z));
+		if (protectedBlock(ground) || builtBlock(ground) || !ground.getFluidState().isEmpty()
+				|| !ground.blocksMotion()) {
+			return 0;
+		}
+		clearPlant(level, x, surface, z);
+		int changed = 0;
+		BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
+		for (int i = 0; i < height; i++) {
+			BlockState at = level.getBlockState(pos.set(x, surface + i, z));
+			if (protectedBlock(at) || (!at.isAir() && at.blocksMotion() && !at.canBeReplaced())) {
+				break;
+			}
+			// верх плиты — грунт, внутри камень: сверху это холм, а не каменный столб
+			Block filler = i == height - 1
+					? pick(hash, Blocks.COARSE_DIRT, Blocks.GRASS_BLOCK, Blocks.TUFF)
+					: pick(hash, Blocks.STONE, Blocks.TUFF, Blocks.DEEPSLATE);
+			level.setBlock(pos, filler.defaultBlockState(), Block.UPDATE_ALL);
+			changed++;
 		}
 		return changed;
 	}

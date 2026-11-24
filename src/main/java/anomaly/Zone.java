@@ -21,7 +21,12 @@ public record Zone(Anomaly anomaly, long now, double x, double z, double radius,
 
 	public double strength() {
 		// осколок — память, а не угроза: дозу он не набирает и чужие зоны не перебивает
-		return remnant() ? 0.0 : cls().strength;
+		if (remnant() || precursor()) {
+			return 0.0;
+		}
+		// «зона кормится»: чем дольше в ней стоят, тем сильнее она бьёт — до +60 %
+		double fed = Math.min(2.0, Math.max(0.0, anomaly.fed_hours));
+		return cls().strength * (1.0 + 0.3 * fed);
 	}
 
 	public boolean pinned() {
@@ -32,9 +37,19 @@ public record Zone(Anomaly anomaly, long now, double x, double z, double radius,
 		return anomaly.remnant;
 	}
 
-	/** Отрицательное внутри, положительное снаружи. */
+	/** Предвестник: зона ещё не родилась, у неё нет ни радиуса, ни дозы. */
+	public boolean precursor() {
+		return anomaly.precursor;
+	}
+
+	/** Вложенная зона помнит большую, внутри которой родилась (0 — сама по себе). */
+	public long parentId() {
+		return anomaly.parent_id;
+	}
+
+	/** Отрицательное внутри, положительное снаружи. Через кэш на записи: за тик спрашивают 4–6 раз. */
 	public double signedDistance(double px, double pz) {
-		return anomaly.signedDistance(px, pz, ageHours, radius);
+		return anomaly.signedDistanceCached(px, pz, ageHours, radius);
 	}
 
 	public boolean contains(double px, double pz) {
