@@ -170,8 +170,9 @@ function makeField(seed) {
   const rnd = mulberry32(seed);
   const out = [];
   let guard = 0;
-  // 3800 «записей» на 14 суток даёт ~250 живых в любой момент (в среднем жизнь ~21 ч)
-  while (out.length < 3800 && guard++ < 200000) {
+  // 8200 «записей» на 14 суток даёт ~600 живых в любой момент (в среднем жизнь ~21 ч):
+  // столько же, сколько держит мод (population 600) — иначе превью врёт про плотность
+  while (out.length < 8200 && guard++ < 400000) {
     const x = (rnd() * 2 - 1) * WORLD_R;
     const z = (rnd() * 2 - 1) * WORLD_R;
     const d = Math.hypot(x, z);
@@ -226,7 +227,15 @@ function makeField(seed) {
       coreAngle: rnd() * Math.PI * 2,
       coreSpin: (rnd() - 0.5) * 0.03,
       breath: 0.01 + rnd() * 0.02,          // общий радиус «вздыхает» на 1–3 %
-      breathSpeed: 0.2 + rnd() * 0.4
+      breathSpeed: 0.2 + rnd() * 0.4,
+      // вложенность (0.3.0): четверть крупных зон содержит малую
+      nest: radius >= 900 && rnd() < 0.25
+        ? { dist: 0.45 * Math.sqrt(rnd()), ang: rnd() * Math.PI * 2, r: 0.16 + rnd() * 0.14 }
+        : null,
+      // новая география (0.3.0): лес плашмя, руины, поднятая плита
+      geo: radius >= 600
+        ? { forest: rnd() < 0.65, ruins: rnd() < 0.5, uplift: radius >= 1600 && rnd() < 0.35 }
+        : null
     });
   }
   return out;
@@ -533,6 +542,17 @@ function drawAnomaly(a, st) {
     ctx.restore();
   }
   if (state.show.damage) drawDamage(a, st);
+  // вложенная зона: своя граница внутри родителя (0.3.0)
+  if (a.nest && state.show.forms) {
+    const nx = st.x + Math.cos(a.nest.ang) * st.radius * a.nest.dist;
+    const nz = st.z + Math.sin(a.nest.ang) * st.radius * a.nest.dist;
+    polygonPath(shapePoints(a, { x: nx, z: nz, radius: st.radius * a.nest.r }));
+    ctx.fillStyle = withAlpha(a.cls.color, 0.13);
+    ctx.fill();
+    ctx.strokeStyle = withAlpha(a.cls.color, 0.75 * (fresh ? 1 : 0.7));
+    ctx.lineWidth = 1;
+    ctx.stroke();
+  }
 }
 
 // последствия: большие опасные/смертельные уродуют землю, мелкие — почти нет
@@ -584,6 +604,55 @@ function drawDamage(a, st) {
     ctx.lineWidth = 1;
     ctx.stroke();
   }
+
+  // поваленный лес плашмя: короткие штрихи, все вдоль одного направления падения
+  if (a.geo && a.geo.forest) {
+    const fall = rnd() * Math.PI * 2;
+    const logs = Math.max(4, Math.round(10 * strength));
+    ctx.strokeStyle = `rgba(96, 74, 48, ${0.45 + 0.4 * strength})`;
+    ctx.lineWidth = Math.max(1, s * 1.2);
+    for (let i = 0; i < logs; i++) {
+      const ang = rnd() * Math.PI * 2;
+      const dist = Math.sqrt(rnd()) * st.radius * 0.42;
+      const [sx, sy] = toScreen(st.x + Math.cos(ang) * dist, st.z + Math.sin(ang) * dist);
+      const len = Math.max(3, (4 + rnd() * 3) * s);
+      ctx.beginPath();
+      ctx.moveTo(sx, sy);
+      ctx.lineTo(sx + Math.cos(fall) * len, sy + Math.sin(fall) * len);
+      ctx.stroke();
+    }
+  }
+
+  // обрушенные постройки: пол из обломков и стены без крыш
+  if (a.geo && a.geo.ruins) {
+    const houses = 1 + Math.round(2 * strength);
+    for (let i = 0; i < houses; i++) {
+      const ang = rnd() * Math.PI * 2;
+      const dist = Math.sqrt(rnd()) * st.radius * 0.4;
+      const [sx, sy] = toScreen(st.x + Math.cos(ang) * dist, st.z + Math.sin(ang) * dist);
+      const w = Math.max(3, (8 + rnd() * 8) * s);
+      ctx.fillStyle = `rgba(150, 146, 138, ${0.35 + 0.3 * strength})`;
+      ctx.fillRect(sx - w / 2, sy - w / 2, w, w);
+      ctx.strokeStyle = `rgba(74, 70, 64, ${0.6 + 0.3 * strength})`;
+      ctx.lineWidth = 1;
+      ctx.strokeRect(sx - w / 2, sy - w / 2, w, w);
+    }
+  }
+
+  // поднятая плита: светлый пласт с тенью по нижнему краю
+  if (a.geo && a.geo.uplift) {
+    const ang = rnd() * Math.PI * 2;
+    const dist = rnd() * st.radius * 0.3;
+    const cx = st.x + Math.cos(ang) * dist;
+    const cz = st.z + Math.sin(ang) * dist;
+    const rr = st.radius * (0.12 + rnd() * 0.08);
+    polygonPath(shapePoints(a, { x: cx, z: cz, radius: rr }));
+    ctx.fillStyle = `rgba(188, 178, 152, ${0.30 + 0.35 * strength})`;
+    ctx.fill();
+    ctx.strokeStyle = `rgba(58, 52, 40, ${0.55 + 0.3 * strength})`;
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+  }
 }
 
 function drawPlayerMark() {
@@ -606,12 +675,15 @@ function updateStats(alive) {
   let biggest = null;
   let damageTotal = 0;
   let bigScars = 0;
+  let nested = 0;
   for (const [a, st] of alive) {
     byClass[a.cls.key]++;
-    area += Math.PI * st.radius * st.radius;
+    // площадь эллипса, как в моде: вытянутость 0.55–2.25 заметно меняет покрытие
+    area += Math.PI * st.radius * st.radius * Math.max(0.2, a.stretch);
     const dmg = damageBlocks(a);
     damageTotal += dmg;
     if (dmg >= 5000) bigScars++;
+    if (a.nest) nested++;
     if (!biggest || st.radius > biggest.st.radius) biggest = { a, st };
   }
   const fmt = (v) => v >= 1e6 ? (v / 1e6).toFixed(1) + " млн" : Math.round(v / 1000) + " тыс";
@@ -622,6 +694,7 @@ function updateStats(alive) {
     ["безопасных", byClass.safe],
     ["опасных", byClass.danger],
     ["смертельных", byClass.deadly],
+    ["вложенных", nested],
     ["покрыто", share.toFixed(1) + " %"],
     ["крупных следов", bigScars],
     ["урон, блоков", fmt(damageTotal)],

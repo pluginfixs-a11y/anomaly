@@ -137,6 +137,11 @@ public final class AnomalyField {
 				data.anomalies.size(), config == null ? 0 : config.population,
 				String.format("%.1f", AnomalyClock.fieldMs() / (double) HOUR_MS),
 				fresh ? " (новое поле, население посеяно)" : "");
+		// замер сразу после загрузки: покрытие — единственное число, которое нельзя проверить глазами
+		Stats measured = stats();
+		AnomalyMod.LOGGER.info("Anomaly: покрытие {} %, классов safe/danger/deadly {}/{}/{}, бюджет {} блоков",
+				String.format("%.1f", measured.coveragePercent()),
+				measured.safe(), measured.danger(), measured.deadly(), Math.round(measured.budget()));
 	}
 
 	private static long newestBorn() {
