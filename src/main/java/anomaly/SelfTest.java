@@ -464,9 +464,9 @@ public final class SelfTest {
 				inBudget = false;
 			}
 			double distance = Math.hypot(op.x - deadly.x0, op.z - deadly.z0);
-			// следы живут в полосе 45–85 % радиуса: это та часть зоны, которую игрок пересекает,
-			// и край перестаёт выглядеть нетронутым (раньше всё лежало в ядре — 35 %)
-			if (distance > deadly.r0 * 0.9) {
+			// следы живут от ядра до самого края: полоса раны по контуру (0.90–0.97 r0) —
+			// это и есть граница класса, поэтому предел здесь 1.0 r0
+			if (distance > deadly.r0) {
 				insideZone = false;
 			}
 			outer |= distance > deadly.r0 * 0.4;

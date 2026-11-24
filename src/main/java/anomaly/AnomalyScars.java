@@ -81,6 +81,26 @@ public final class AnomalyScars {
 			ops.add(op);
 			used += op.blocks;
 		}
+		// опоясывающая рана по контуру: граница класса становится материальной, иначе край
+		// трёхкилометровой зоны ничем не отмечен и «вход» не читается
+		if (r0 >= 300.0 && used < budget) {
+			int ring = 10;
+			for (int i = 0; i < ring; i++) {
+				double angle = i * Math.PI * 2.0 / ring + rnd.nextDouble() * 0.4;
+				double rr = r0 * (0.90 + rnd.nextDouble() * 0.07);
+				double ox = x + Math.cos(angle) * rr;
+				double oz = z + Math.sin(angle) * rr;
+				ScarOp spot = ScarOp.disk("dead_soil", ox, oz, 2.5 + rnd.nextDouble() * 1.5, rnd.nextLong());
+				if (used + spot.blocks > budget) {
+					break;
+				}
+				if (overlaps(ops, spot)) {
+					continue;
+				}
+				ops.add(spot);
+				used += spot.blocks;
+			}
+		}
 		return ops;
 	}
 
@@ -395,6 +415,12 @@ public final class AnomalyScars {
 				// и возвращает null, поэтому привязка к scar_cursor == 0 не срабатывала никогда
 				if (anomaly.scar_wet_for != anomaly.scar_next && !anomaly.scar_retry_tree) {
 					int wet = wetOpState(level, op, data, config);
+					if (wet < 0) {
+						// исчерпан суточный лимит генераций: след ждёт следующего дня, op не трогаем
+						finished = false;
+						limitHit = true;
+						break;
+					}
 					if (wet == 0) {
 						// бюджет/дедлайн не дали даже одного чанка: это не «сухо», а «не знаю» —
 						// не помечаем op проверенным и возвращаемся к нему в следующем проходе
@@ -423,6 +449,13 @@ public final class AnomalyScars {
 					anomaly.scar_telegraph_for = anomaly.scar_next;
 					AnomalyEffects.scarTelegraph(level, op.x, op.z, AnomalyClass.byId(anomaly.cls).color);
 				}
+					if (!anomaly.scar_retry_tree && anomaly.scar_telegraph_for != anomaly.scar_next) {
+						// сигнал от первой реальной колонки, а не от центра опа: у линии работа
+						// уходит на сотню блоков, и центр мог оказаться в стороне (или в незагруженном чанке)
+						AnomalyEffects.scarTelegraph(level, column[0], column[1],
+								AnomalyClass.byId(anomaly.cls).color);
+						anomaly.scar_telegraph_for = anomaly.scar_next;
+					}
 					// курсор двигаем только после проверок: иначе колонка на стыке бюджета чанков теряется
 					anomaly.scar_cursor++;
 					columnsThisTick++;
@@ -442,6 +475,13 @@ public final class AnomalyScars {
 							AnomalyMod.LOGGER.warn("Anomaly: след #{} в {}, {} не применён ({})",
 									anomaly.id, column[0], column[1], e.toString());
 						}
+					}
+					if (applied == -2) {
+						// игрок стоит в объёме следа: откладываем op, а не колонку
+						anomaly.scar_cursor--;
+						finished = false;
+						limitHit = true;
+						break;
 					}
 					if (applied < 0) {
 						// дерево не доделано: возвращаем курсор, иначе остаток кроны останется
@@ -501,6 +541,10 @@ public final class AnomalyScars {
 		}
 		if (isFragileSurface(ground) && !op.type.equals("crack") && !op.type.equals("sinkhole")) {
 			return 0;
+		}
+		// игрок в объёме следа: откладываем op целиком, иначе в провале остаётся столб-остров
+		if (opHasPlayer(level, op)) {
+			return -2;
 		}
 		// игрок вплотную: камень в ступнях — это удушье, а вынутый блок — падение
 		if (playersNear(level, x, surface, z)) {
@@ -663,17 +707,6 @@ public final class AnomalyScars {
 		return changed;
 	}
 
-	/** Повтор колонки, у которой op уже применён, а дерево не доделано: только снос. */
-	private static int finishTree(ServerLevel level, int x, int z) {
-		// MOTION_BLOCKING, а не NO_LEAVES: ствол уже снесён, и высотная карта без листвы
-		// падает до земли — крона оставалась висеть над обрубком
-		int height = level.getHeight(Heightmap.Types.MOTION_BLOCKING, x, z);
-		if (height <= level.getMinY() + 3 || height >= level.getMaxY() - 2) {
-			return 0;
-		}
-		return deforestForce(level, x, height, z);
-	}
-
 	/** Листва или грибные шляпы вокруг ствола: по ним дерево отличается от сруба из брёвен. */
 	private static boolean hasFoliage(ServerLevel level, int x, int height, int z) {
 		BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
@@ -705,9 +738,11 @@ public final class AnomalyScars {
 
 	private static int clearTreeColumn(ServerLevel level, int x, int height, int z) {
 		BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
-		// сверху вниз: крона висит и ниже верхушки ствола, а земля — единственный стоп-блок
-		int top = Math.min(level.getMaxY() - 2, height + 8);
-		int bottom = Math.max(level.getMinY() + 1, height - 24);
+		// сверху вниз: крона висит и ниже верхушки ствола, а земля — единственный стоп-блок.
+		// Высоту берём свою: у соседнего дерева крона выше, и top от чужого ствола её не видел
+		int own = level.getHeight(Heightmap.Types.MOTION_BLOCKING, x, z);
+		int top = Math.min(level.getMaxY() - 2, Math.max(height + 8, own + 2));
+		int bottom = Math.max(level.getMinY() + 1, height - 40);
 		int changed = 0;
 		for (int y = top; y >= bottom; y--) {
 			// дерево — это до 48 setBlock в одной колонке: проверяем бюджет внутри, иначе
@@ -857,7 +892,7 @@ public final class AnomalyScars {
 		// и ступеньки по 1 блоку читались как ошибка генерации, а не как выдавленная земля
 		int cell = ((x >> 2) * 31) ^ ((z >> 2) * 17) ^ (int) op.seed;
 		int height = (int) Math.round(op.height * (0.25 + 0.75 * falloff)
-				* (0.8 + Math.floorMod(hash, 100) / 250.0));
+				* (0.8 + Math.floorMod(cell, 100) / 250.0));
 		height = Math.max(2, Math.min(40, height));
 		height -= height % 2;
 		if (protectedBlock(ground) || builtBlock(ground) || !ground.getFluidState().isEmpty()
@@ -868,6 +903,10 @@ public final class AnomalyScars {
 		int changed = 0;
 		BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
 		for (int i = 0; i < height; i++) {
+			// игрок на плите сверху — не повод ставить ему камень в ноги
+			if (playersNear(level, x, surface + i, z)) {
+				break;
+			}
 			BlockState at = level.getBlockState(pos.set(x, surface + i, z));
 			if (protectedBlock(at) || (!at.isAir() && at.blocksMotion() && !at.canBeReplaced())) {
 				break;
@@ -886,7 +925,7 @@ public final class AnomalyScars {
 					filler = pick(cell, Blocks.STONE, Blocks.GRAVEL, Blocks.TUFF);
 				}
 			} else {
-				filler = pick(hash, Blocks.STONE, Blocks.TUFF, Blocks.DEEPSLATE);
+				filler = pick(cell, Blocks.STONE, Blocks.TUFF, Blocks.DEEPSLATE);
 			}
 			level.setBlock(pos, filler.defaultBlockState(), Block.UPDATE_ALL);
 			changed++;
@@ -974,8 +1013,9 @@ public final class AnomalyScars {
 				BlockPos rim = new BlockPos(x, surface - 1, z);
 				BlockState at = level.getBlockState(rim);
 				if (!protectedBlock(at) && !builtBlock(at)) {
-					level.setBlock(rim, (roll == 0 ? Blocks.MAGMA_BLOCK : Blocks.BASALT).defaultBlockState(),
-							Block.UPDATE_ALL);
+					// только базальт: магма на кромке жгла бы стоящего рядом игрока, а шов
+					// и без урона читается как остывшая лава
+					level.setBlock(rim, Blocks.BASALT.defaultBlockState(), Block.UPDATE_ALL);
 					changed++;
 				}
 			}
@@ -1037,12 +1077,16 @@ public final class AnomalyScars {
 			int chunkZ = bz >> 4;
 			if (!level.getChunkSource().hasChunk(chunkX, chunkZ)) {
 				// в свежей местности загружен только чанк первой колонки, и все сэмплы молча
-				// пропускались — проверка воды не работала вовсе. Не больше двух чанков и только
-				// пока не вышел дедлайн прохода: иначе это залп генераций в одном тике
-				if (loads >= Math.max(1, config.chunks_per_tick) || (passDeadline != 0L && System.nanoTime() > passDeadline)
-						|| !chunkBudgetAllows(data, config, AnomalyClock.now())) {
+				// пропускались — проверка воды не работала вовсе
+				if (!chunkBudgetAllows(data, config, AnomalyClock.now())) {
+					// суточный лимит генераций: след ждёт следующего дня, а не выбрасывается
 					budgetStop = true;
 					break;
+				}
+				if (loads >= Math.max(1, config.chunks_per_tick)
+						|| (passDeadline != 0L && System.nanoTime() > passDeadline)) {
+					// не хватило тика: «не знаю», повторим в следующем проходе
+					return 0;
 				}
 				level.getChunk(chunkX, chunkZ);
 				data.gen_count++;
@@ -1064,7 +1108,7 @@ public final class AnomalyScars {
 			AnomalyField.markDirty();
 		}
 		if (budgetStop) {
-			return 0;
+			return -1;
 		}
 		// одна лужа у края не повод выбрасывать весь след: у прибрежной зоны иначе не остаётся
 		// ни одного шрама. Мокрым считаем op, если вода в двух и более точках — там воронка
@@ -1162,6 +1206,10 @@ public final class AnomalyScars {
 		int changed = 0;
 		int top = Math.min(level.getMaxY() - 2, surface + height);
 		for (int y = surface; y <= top; y++) {
+			// игрок выше земли (на скале, в полёте) тоже не должен получить камень в голову
+			if (playersNear(level, x, y, z)) {
+				break;
+			}
 			BlockState state = level.getBlockState(pos.set(x, y, z));
 			if (protectedBlock(state)) {
 				break;
@@ -1226,7 +1274,40 @@ public final class AnomalyScars {
 	// --- микрособытия: то, что делает мир живым между большими следами ---
 
 	/**
-	 * Близко ли игрок к клетке: след не должен ставить камень в игрока (удушье) или вынимать
+	 * Игрок внутри объёма следа: мир не должен меняться под ногами, и колонку нельзя просто
+	 * пропустить — в воронке остался бы столб-остров с вертикальными стенками. Такой op
+	 * откладывается целиком, пока игрок не выйдет.
+	 */
+	static boolean opHasPlayer(ServerLevel level, ScarOp op) {
+		for (ServerPlayer player : level.players()) {
+			double dx = player.getX() - op.x;
+			double dz = player.getZ() - op.z;
+			if (op.isLine()) {
+				// расстояние до отрезка вдоль angle длиной length
+				double cos = Math.cos(op.angle);
+				double sin = Math.sin(op.angle);
+				double along = Math.max(0.0, Math.min(op.length, dx * cos + dz * sin));
+				dx -= cos * along;
+				dz -= sin * along;
+				if (Math.hypot(dx, dz) <= 4.0) {
+					return true;
+				}
+				continue;
+			}
+			if (Math.hypot(dx, dz) <= Math.max(0.5, op.radius) + 3.0) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/** Дно уже выбитой воронки: повторный хлопок в ту же точку просаживал землю без предела. */
+	static boolean isCraterFloor(BlockState state) {
+		return state.is(Blocks.COBBLESTONE) || state.is(Blocks.COBBLED_DEEPSLATE)
+				|| state.is(Blocks.MOSSY_COBBLESTONE);
+	}
+
+	/** Близко ли игрок к клетке: след не должен ставить камень в игрока (удушье) или вынимать
 	 * блок у него из-под ног. Радиус в 3 блока — это «вплотную», дальше игрок видит и успевает.
 	 */
 	static boolean playersNear(ServerLevel level, int x, int y, int z) {
@@ -1274,7 +1355,7 @@ public final class AnomalyScars {
 				}
 				BlockState ground = level.getBlockState(pos.set(x0, surface - 1, z0));
 				if (protectedBlock(ground) || builtBlock(ground) || isFragileSurface(ground)
-						|| !ground.getFluidState().isEmpty()) {
+						|| !ground.getFluidState().isEmpty() || isCraterFloor(ground)) {
 					continue;
 				}
 				// кромка: грунт вывернут и обломан
@@ -1419,6 +1500,9 @@ public final class AnomalyScars {
 		return sum;
 	}
 }
+
+
+
 
 
 
