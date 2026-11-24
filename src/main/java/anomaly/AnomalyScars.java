@@ -776,15 +776,13 @@ public final class AnomalyScars {
 			// COARSE_DIRT — ровный коричневый диск, который читается как /fill.
 			// Пропорции как у выгоревшей земли: грубая земля, гравий, корни, подзол
 			int cell = ((x / 3) * 37) ^ ((z / 3) * 19) ^ (int) seed;
-			int roll = Math.floorMod(cell, 20);
-			Block burned = roll < 12 ? Blocks.COARSE_DIRT
-					: roll < 16 ? Blocks.GRAVEL
-					: roll == 16 ? Blocks.ROOTED_DIRT
-					: roll == 17 ? Blocks.PODZOL
-					: Blocks.COARSE_DIRT;
+			// выгоревшая земля: разливы грубой земли с вкраплениями гравия и корней.
+			// Материал — пятнами по 13 блоков, иначе диск выглядит как посыпка
+			Block burned = blotch(x, z, seed + 11, Blocks.COARSE_DIRT, Blocks.GRAVEL,
+					Blocks.ROOTED_DIRT, Blocks.PODZOL);
 			// в пустыне, бэдлендах и на камне «мёртвая земля» из грубой земли — клякса:
 			// выгоревший грунт берёт материал биома, как и обломки
-			Block replacement = soil(state) ? burned : rubbleBlock(state, cell);
+			Block replacement = soil(state) ? burned : rubbleBlock(state, x, z, seed);
 			level.setBlock(ground, replacement.defaultBlockState(), Block.UPDATE_ALL);
 			changed++;
 		}
@@ -903,8 +901,11 @@ public final class AnomalyScars {
 
 	/** Ствол и всё, что считается деревом: грибная ножка, бамбук, корни мангров не входят в #logs. */
 	private static boolean isTreePart(BlockState state) {
-		return state.is(BlockTags.LOGS) || state.is(Blocks.MUSHROOM_STEM) || state.is(Blocks.BAMBOO_BLOCK)
-				|| state.is(Blocks.MANGROVE_ROOTS);
+		// шляпки грибных деревьев — тоже «дерево»: без них пик и плита врастали в
+		// красный блок, и след читался как ошибка генерации на грибном острове
+		return state.is(BlockTags.LOGS) || state.is(Blocks.MUSHROOM_STEM)
+				|| state.is(Blocks.RED_MUSHROOM_BLOCK) || state.is(Blocks.BROWN_MUSHROOM_BLOCK)
+				|| state.is(Blocks.BAMBOO_BLOCK) || state.is(Blocks.MANGROVE_ROOTS);
 	}
 
 	private static int clearTreeColumn(ServerLevel level, int x, int height, int z) {
@@ -1033,26 +1034,31 @@ public final class AnomalyScars {
 				? Math.hypot(Math.max(ex, 0.0), Math.max(ez, 0.0))
 				: Math.max(ex, ez);
 		BlockState ground = level.getBlockState(new BlockPos(x, surface - 1, z));
-		// пол — по ячейке 3×3 и из материала биома: поблочный хеш давал шахматку 1×1
-		// из гравия, земли и булыжника — ровно то, от чего уже ушли плита и мёртвая земля
-		int floorCell = ((x / 3) * 37) ^ ((z / 3) * 19) ^ (int) op.seed;
-		if (edge < -1.0 && Math.floorMod(floorCell, 4) != 0) {
+		// Пол — не ковёр на всю площадь: у брошенного дома остаются полосы у стен и
+		// отдельные уцелевшие плиты, середина зарастает. Прежний пол красил 75 %
+		// прямоугольника клетками 3×3 и читался как клетчатое одеяло, а не как руина
+		int patch = (int) (((x / 5) * 37L) ^ ((z / 5) * 19L) ^ op.seed);
+		boolean apron = edge > -3.5;
+		boolean slab = Math.floorMod(patch, 9) == 0;
+		if (edge < -1.0 && (apron || slab)) {
 			if (!protectedBlock(ground) && !ground.isAir() && ground.getFluidState().isEmpty()
 					&& !builtBlock(ground)) {
 				clearPlant(level, x, surface, z);
 				level.setBlock(new BlockPos(x, surface - 1, z),
-						ruinFloor(ground, floorCell).defaultBlockState(), Block.UPDATE_ALL);
+						ruinFloor(ground, x, z, op.seed).defaultBlockState(), Block.UPDATE_ALL);
 				changed++;
 			}
 		}
-		// стены: полоса 1.2 блока по периметру прямоугольника, 2–4 блока высотой, обвалы
-		// кусками по 3 блока вдоль стены — угол и обрыв читаются как «здесь жили и это упало»
+		// стены: полоса 1.2 блока по периметру, 3–6 блоков высотой, обвалы кусками по
+		// 3 блока вдоль стены — угол и обрыв читаются как «здесь жили и это упало»
 		if (Math.abs(edge) > 1.2) {
 			return changed;
 		}
 		double along = lx >= lz ? lz : lx;
 		int segment = (int) Math.floor(along / 3.0);
-		if (Math.floorMod(segment * 31 + (int) (op.seed & 0x7F), 5) == 0) {
+		int roll = Math.floorMod(segment * 31 + (int) (op.seed & 0x7F), 12);
+		if (roll < 3) {
+			// каждый четвёртый сегмент обвалился целиком, ещё один — до фундамента
 			return changed;
 		}
 		if (protectedBlock(ground) || builtBlock(ground) || !ground.getFluidState().isEmpty()) {
@@ -1062,8 +1068,8 @@ public final class AnomalyScars {
 		// булыжник, треснувший кирпич, мшистый булыжник и каменный кирпич вперемешку
 		// давали шахматку — ту же «странность генерации», от которой ушли у плиты и шипа
 		int wallCell = segment * 53 + (int) (op.seed & 0xFF);
-		int height = 2 + Math.floorMod(wallCell >> 3, 3);
-		Block wall = ruinBlock(ground, wallCell);
+		int height = roll == 3 ? 1 : 3 + Math.floorMod(wallCell >> 3, 4);
+		Block wall = ruinBlock(ground, x, z, wallCell);
 		BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
 		for (int i = 0; i < height; i++) {
 			BlockState at = level.getBlockState(pos.set(x, surface + i, z));
@@ -1072,6 +1078,15 @@ public final class AnomalyScars {
 			}
 			level.setBlock(pos, wall.defaultBlockState(), Block.UPDATE_ALL);
 			changed++;
+		}
+		// под стеной всегда лежит осыпь: кирпич не стоит на траве без мусора вокруг
+		if (Math.floorMod(wallCell, 3) == 0 && edge > -2.0) {
+			BlockState below = level.getBlockState(new BlockPos(x, surface - 1, z));
+			if (!protectedBlock(below) && below.getFluidState().isEmpty() && !below.isAir()) {
+				level.setBlock(new BlockPos(x, surface - 1, z),
+						rubbleBlock(below, x, z, op.seed).defaultBlockState(), Block.UPDATE_ALL);
+				changed++;
+			}
 		}
 		return changed;
 	}
@@ -1115,16 +1130,16 @@ public final class AnomalyScars {
 			Block filler;
 			if (i == height - 1) {
 				if (soil(ground)) {
-					filler = pick(cell, Blocks.COARSE_DIRT, Blocks.COARSE_DIRT, Blocks.GRASS_BLOCK);
+					filler = blotch(x, z, op.seed, Blocks.COARSE_DIRT, Blocks.GRASS_BLOCK);
 				} else if (ground.is(BlockTags.SAND)) {
-					filler = pick(cell, Blocks.SAND, Blocks.SANDSTONE);
+					filler = blotch(x, z, op.seed, Blocks.SAND, Blocks.SANDSTONE);
 				} else if (ground.is(BlockTags.TERRACOTTA)) {
-					filler = pick(cell, Blocks.TERRACOTTA, Blocks.STONE);
+					filler = blotch(x, z, op.seed, Blocks.TERRACOTTA, Blocks.STONE);
 				} else {
-					filler = pick(cell, Blocks.STONE, Blocks.GRAVEL, Blocks.TUFF);
+					filler = blotch(x, z, op.seed, Blocks.STONE, Blocks.GRAVEL, Blocks.TUFF);
 				}
 			} else {
-				filler = pick(cell, Blocks.STONE, Blocks.TUFF, Blocks.DEEPSLATE);
+				filler = blotch(x, z, op.seed + 3, Blocks.STONE, Blocks.TUFF, Blocks.DEEPSLATE);
 			}
 			level.setBlock(pos, filler.defaultBlockState(), Block.UPDATE_ALL);
 			changed++;
@@ -1141,40 +1156,54 @@ public final class AnomalyScars {
 				|| state.is(Blocks.DIRT_PATH)) {
 			return 0;
 		}
-		Block block = rubbleBlock(state, hash);
+		Block block = rubbleBlock(state, x, z, seed);
 		clearPlant(level, x, surface, z);
 		level.setBlock(ground, block.defaultBlockState(), Block.UPDATE_ALL);
 		return 1;
 	}
 
+	private static Block pick(int hash, Block... blocks) {
+		return blocks[Math.floorMod(hash, blocks.length)];
+	}
+
+	/**
+	 * Материал следа пятнами по 10–14 блоков: ведущая порода держит ~70 % площади, остальное
+	 * идёт вкраплениями. Хеш по клеткам 2×2 и 3×3 давал «перец с солью» — кашу из кусочков
+	 * разного цвета, которая на скриншоте читается как ошибка генерации, а не как порода.
+	 */
+	private static Block blotch(int x, int z, long seed, Block... blocks) {
+		double n = smoothNoise(x, z, 13, seed * 341873128712L + 132897987541L);
+		if (blocks.length == 1 || n < 0.7) {
+			return blocks[0];
+		}
+		int rest = blocks.length - 1;
+		return blocks[1 + Math.min(rest - 1, (int) ((n - 0.7) / 0.3 * rest))];
+	}
+
 	/** Обломки из того же материала, что и грунт: булыжник посреди песка или терракоты — клякса. */
-	private static Block rubbleBlock(BlockState ground, int hash) {
+	private static Block rubbleBlock(BlockState ground, int x, int z, long seed) {
 		// трава и земля — не камень: на лугу обломки это вывернутый грунт, а не булыжник,
 		// иначе каждый хлопок у игрока красит луг серым пятном
 		if (soil(ground)) {
-			return pick(hash, Blocks.COARSE_DIRT, Blocks.DIRT, Blocks.GRAVEL);
+			return blotch(x, z, seed, Blocks.COARSE_DIRT, Blocks.DIRT, Blocks.GRAVEL);
 		}
 		if (ground.is(BlockTags.SAND)) {
-			return pick(hash, Blocks.SANDSTONE, Blocks.SANDSTONE, Blocks.GRAVEL);
+			return blotch(x, z, seed, Blocks.SANDSTONE, Blocks.SAND, Blocks.GRAVEL);
 		}
 		if (ground.is(BlockTags.TERRACOTTA)) {
-			return pick(hash, Blocks.TERRACOTTA, Blocks.GRAVEL);
+			return blotch(x, z, seed, Blocks.TERRACOTTA, Blocks.GRAVEL);
 		}
 		if (ground.is(Blocks.GRAVEL)) {
-			return pick(hash, Blocks.GRAVEL, Blocks.COBBLESTONE);
+			return blotch(x, z, seed, Blocks.GRAVEL, Blocks.COBBLESTONE);
 		}
 		if (ground.is(Blocks.CLAY) || ground.is(Blocks.MUD)) {
-			return pick(hash, Blocks.CLAY, Blocks.GRAVEL);
+			return blotch(x, z, seed, Blocks.CLAY, Blocks.GRAVEL);
 		}
 		if (ground.is(Blocks.MOSS_BLOCK)) {
-			return pick(hash, Blocks.MOSS_BLOCK, Blocks.TUFF);
+			return blotch(x, z, seed, Blocks.MOSS_BLOCK, Blocks.TUFF);
 		}
-		return pick(hash, Blocks.COBBLESTONE, Blocks.GRAVEL, Blocks.ANDESITE, Blocks.TUFF,
-				Blocks.COBBLED_DEEPSLATE);
-	}
-
-	private static Block pick(int hash, Block... blocks) {
-		return blocks[Math.floorMod(hash, blocks.length)];
+		return blotch(x, z, seed, Blocks.COBBLESTONE, Blocks.GRAVEL, Blocks.ANDESITE,
+				Blocks.TUFF, Blocks.COBBLED_DEEPSLATE);
 	}
 
 	private static int trench(ServerLevel level, ScarOp op, int x, int surface, int z, int depth, boolean lava) {
@@ -1355,20 +1384,21 @@ public final class AnomalyScars {
 					|| isFragileSurface(ground)) {
 				return 0;
 			}
-			Block rim = rubbleBlock(ground, hash);
+			Block rim = rubbleBlock(ground, x, z, op.seed);
 			level.setBlock(new BlockPos(x, surface - 1, z), rim.defaultBlockState(), Block.UPDATE_ALL);
-			// каждый четвёртый блок губы — валун сверху: край обвалился, а не подрезан
-			if (Math.floorMod(cell, 4) == 0 && level.getBlockState(new BlockPos(x, surface, z)).isAir()) {
-				level.setBlock(new BlockPos(x, surface, z), rim.defaultBlockState(), Block.UPDATE_ALL);
-			}
+			// валунов сверху нет: одиночный блок на траве читался как зуб, а не как
+			// обвал. Кромку держит сама вывернутая земля (surface - 1), и её достаточно
 			clearPlant(level, x, surface, z);
 			return 1;
 		}
 		clearPlant(level, x, surface, z);
 		BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
 		// глубина гуляет по клеткам 2×2 и мельчает к краю: ровное дно читалось как /fill
-		double taper = 0.55 + 0.45 * (1.0 - distance / Math.max(0.5, op.radius));
-		int depth = (int) Math.round(op.depth * taper * (0.8 + Math.floorMod(cell, 100) / 250.0));
+		double taper = 0.7 + 0.3 * (1.0 - distance / Math.max(0.5, op.radius));
+		// яма 4 блока глубиной при 16 поперёк читается не провалом, а вытоптанным
+		// пятном: глубина идёт от радиуса, а не от аргумента, и только растёт от него
+		double want = Math.max(op.depth, op.radius * 0.9);
+		int depth = (int) Math.round(want * taper * (0.8 + Math.floorMod(cell, 100) / 250.0));
 		// и не глубже полутора радиусов: колодец 10 блоков при радиусе 3 — это шахта
 		if (op.radius >= 2.0) {
 			depth = Math.min(Math.max(2, (int) Math.round(op.radius * 1.5)), depth);
@@ -1402,7 +1432,7 @@ public final class AnomalyScars {
 			BlockPos floor = new BlockPos(x, surface - 1 - depth, z);
 			BlockState at = level.getBlockState(floor);
 			if (at.isAir() && !protectedBlock(at)) {
-				level.setBlock(floor, rubbleBlock(level.getBlockState(new BlockPos(x, surface - 2, z)), hash)
+				level.setBlock(floor, rubbleBlock(level.getBlockState(new BlockPos(x, surface - 2, z)), x, z, op.seed)
 						.defaultBlockState(), Block.UPDATE_ALL);
 			}
 		}
@@ -1410,69 +1440,73 @@ public final class AnomalyScars {
 	}
 
 	/** Пол руины по грунту: в пустыне песчаник, в бэдлендах терракота, в болоте грязевой кирпич. */
-	private static Block ruinFloor(BlockState ground, int cell) {
+	private static Block ruinFloor(BlockState ground, int x, int z, long seed) {
 		if (ground.is(BlockTags.SAND)) {
-			return pick(cell, Blocks.SANDSTONE, Blocks.SMOOTH_SANDSTONE, Blocks.SANDSTONE);
+			return blotch(x, z, seed, Blocks.SANDSTONE, Blocks.SMOOTH_SANDSTONE);
 		}
 		if (ground.is(BlockTags.TERRACOTTA)) {
-			return pick(cell, Blocks.TERRACOTTA, Blocks.PACKED_MUD);
+			return blotch(x, z, seed, Blocks.TERRACOTTA, Blocks.PACKED_MUD);
 		}
 		if (ground.is(Blocks.MUD) || ground.is(Blocks.CLAY)) {
-			return pick(cell, Blocks.PACKED_MUD, Blocks.MUD_BRICKS);
+			return blotch(x, z, seed, Blocks.PACKED_MUD, Blocks.MUD_BRICKS);
 		}
 		if (ground.is(Blocks.DEEPSLATE)) {
-			return pick(cell, Blocks.COBBLED_DEEPSLATE, Blocks.DEEPSLATE_TILES);
+			return blotch(x, z, seed, Blocks.COBBLED_DEEPSLATE, Blocks.DEEPSLATE_TILES);
 		}
-		return pick(cell, RUIN_FLOOR);
+		return blotch(x, z, seed, RUIN_FLOOR);
 	}
 
 	/** Материал стен руины по грунту: в пустыне песчаник, в болоте грязевой кирпич. */
-	private static Block ruinBlock(BlockState ground, int hash) {
+	private static Block ruinBlock(BlockState ground, int x, int z, int salt) {
 		if (ground.is(BlockTags.SAND)) {
-			return pick(hash, Blocks.SANDSTONE, Blocks.CUT_SANDSTONE, Blocks.SANDSTONE);
+			return blotch(x, z, salt, Blocks.SANDSTONE, Blocks.CUT_SANDSTONE);
 		}
 		if (ground.is(BlockTags.TERRACOTTA)) {
-			return pick(hash, Blocks.TERRACOTTA, Blocks.BRICKS);
+			return blotch(x, z, salt, Blocks.BRICKS, Blocks.TERRACOTTA);
 		}
 		if (ground.is(Blocks.DEEPSLATE)) {
-			return pick(hash, Blocks.DEEPSLATE_BRICKS, Blocks.COBBLED_DEEPSLATE);
+			return blotch(x, z, salt, Blocks.DEEPSLATE_BRICKS, Blocks.COBBLED_DEEPSLATE);
 		}
 		if (ground.is(Blocks.MUD) || ground.is(Blocks.CLAY)) {
-			return pick(hash, Blocks.MUD_BRICKS, Blocks.BRICKS);
+			return blotch(x, z, salt, Blocks.MUD_BRICKS, Blocks.BRICKS);
 		}
 		if (ground.is(Blocks.MOSS_BLOCK) || ground.is(Blocks.MYCELIUM)) {
-			return pick(hash, Blocks.MOSSY_COBBLESTONE, Blocks.COBBLESTONE);
+			return blotch(x, z, salt, Blocks.MOSSY_COBBLESTONE, Blocks.COBBLESTONE);
 		}
-		return pick(hash, RUIN_WALLS);
+		return blotch(x, z, salt, RUIN_WALLS);
 	}
 
 	/** Материал шипа по биому: след из «местного» камня, а не серый булыжник везде. */
-	private static Block spikeBlock(BlockState ground, int hash) {
+	private static Block spikeBlock(BlockState ground, int x, int z, long seed) {
 		if (ground.is(BlockTags.SAND)) {
-			return pick(hash, Blocks.SANDSTONE, Blocks.SANDSTONE, Blocks.STONE);
+			return blotch(x, z, seed, Blocks.SANDSTONE, Blocks.STONE);
 		}
 		if (ground.is(BlockTags.TERRACOTTA)) {
-			return pick(hash, Blocks.TERRACOTTA, Blocks.STONE);
+			return blotch(x, z, seed, Blocks.TERRACOTTA, Blocks.STONE);
 		}
 		if (ground.is(Blocks.GRAVEL)) {
-			return pick(hash, Blocks.STONE, Blocks.GRAVEL);
+			return blotch(x, z, seed, Blocks.STONE, Blocks.GRAVEL);
 		}
 		if (ground.is(Blocks.MUD) || ground.is(Blocks.CLAY)) {
-			return pick(hash, Blocks.PACKED_MUD, Blocks.STONE);
+			return blotch(x, z, seed, Blocks.PACKED_MUD, Blocks.STONE);
 		}
 		if (ground.is(Blocks.MOSS_BLOCK) || ground.is(Blocks.MYCELIUM)) {
-			return pick(hash, Blocks.STONE, Blocks.TUFF);
+			return blotch(x, z, seed, Blocks.STONE, Blocks.TUFF);
 		}
 		if (ground.is(Blocks.DEEPSLATE)) {
-			return pick(hash, Blocks.DEEPSLATE, Blocks.TUFF);
+			return blotch(x, z, seed, Blocks.DEEPSLATE, Blocks.TUFF);
 		}
-		return SPIKE_BLOCKS[Math.floorMod(hash, SPIKE_BLOCKS.length)];
+		return blotch(x, z, seed, SPIKE_BLOCKS);
 	}
 
 	private static int spike(ServerLevel level, ScarOp op, int x, int surface, int z, BlockState ground) {
 		double dx = x - op.x;
 		double dz = z - op.z;
-		double falloff = 1.0 - Math.min(1.0, Math.sqrt(dx * dx + dz * dz) / Math.max(0.5, op.radius));
+		// контур пика гуляет по шуму 8 блоков: ровный конус с боку читается как
+		// поставленный модом обелиск, а у вырванной скалы рёбра и наплывы
+		double wobble = 1.0 + 0.4 * (smoothNoise(x, z, 8, op.seed + 5) - 0.5);
+		double falloff = 1.0 - Math.min(1.0,
+				Math.sqrt(dx * dx + dz * dz) * wobble / Math.max(0.5, op.radius));
 		// высота и камень — по ячейке 2×2, а не по колонке: «перец с солью» на грани пика
 		// читался как ошибка генерации (то же уже сделано для плиты)
 		int cell = ((x >> 1) * 31) ^ ((z >> 1) * 17) ^ (int) op.seed;
@@ -1483,7 +1517,10 @@ public final class AnomalyScars {
 		// шум высоты билинейный по сетке 5 блоков: ступени, привязанные к сетке 2 блока,
 		// читались как набранная из кубиков крышка
 		double jitter = 0.88 + 0.24 * smoothNoise(x, z, 5, op.seed);
-		int height = (int) Math.round(op.height * profile * jitter);
+		// высота не больше двух с половиной радиусов: игла в 60 блоков на базе 20
+		// читается воткнутой антенной, а у вырванного камня отношение как у скалы
+		double cap = Math.max(6.0, op.radius * 2.5);
+		int height = (int) Math.round(Math.min(op.height, cap) * profile * jitter);
 		// у самой юбки колонна не встаёт вовсе: камни вырастают из обломков, а не из травы.
 		// Проверка после ветки юбки — иначе обломки оставались бы только в кольце 0.24..0.28
 		if (height < 1) {
@@ -1503,21 +1540,17 @@ public final class AnomalyScars {
 			if (Math.floorMod(cell, skip) == 0) {
 				return 0;
 			}
-			Block rim = rubbleBlock(ground, cell);
+			Block rim = rubbleBlock(ground, x, z, op.seed);
 			level.setBlock(new BlockPos(x, surface - 1, z), rim.defaultBlockState(), Block.UPDATE_ALL);
-			// осыпь: каждый седьмой блок кромки — валун сверху
-			if (Math.floorMod(cell >> 3, 7) == 0
-					&& level.getBlockState(new BlockPos(x, surface, z)).isAir()) {
-				level.setBlock(new BlockPos(x, surface, z), rim.defaultBlockState(), Block.UPDATE_ALL);
-			}
+			// над кромкой камней не ставим: одиночный блок на траве читается как зуб
 			clearPlant(level, x, surface, z);
 			return 1;
 		}
 		// камень из того же биома: песчаник в пустыне, терракота в бэдлендах, туф на камне.
 		// Серый булыжник посреди песка читается как чужая постройка, а не как след аномалии
-		Block block = spikeBlock(ground, cell);
+		Block block = spikeBlock(ground, x, z, op.seed);
 		// нижняя треть — тот же камень, но темнее: у настоящей скалы основание всегда в тени
-		Block core = spikeCore(ground, cell);
+		Block core = spikeCore(ground, x, z, op.seed);
 		BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
 		int changed = 0;
 		int top = Math.min(level.getMaxY() - 2, surface + height);
@@ -1578,17 +1611,17 @@ public final class AnomalyScars {
 	}
 
 	/** Нижний пояс пика: тот же камень биома, но тёмный — тень у основания. */
-	private static Block spikeCore(BlockState ground, int cell) {
+	private static Block spikeCore(BlockState ground, int x, int z, long seed) {
 		if (ground.is(BlockTags.SAND)) {
-			return pick(cell, Blocks.STONE, Blocks.SANDSTONE);
+			return blotch(x, z, seed, Blocks.STONE, Blocks.SANDSTONE);
 		}
 		if (ground.is(BlockTags.TERRACOTTA)) {
-			return pick(cell, Blocks.TERRACOTTA, Blocks.STONE);
+			return blotch(x, z, seed, Blocks.TERRACOTTA, Blocks.STONE);
 		}
 		if (ground.is(Blocks.DEEPSLATE)) {
 			return Blocks.DEEPSLATE;
 		}
-		return pick(cell, Blocks.TUFF, Blocks.STONE);
+		return blotch(x, z, seed, Blocks.TUFF, Blocks.STONE);
 	}
 
 	/**
@@ -1748,8 +1781,8 @@ public final class AnomalyScars {
 				// кромка: грунт вывернут и обломан
 				if (distance > radius - 0.4) {
 					if (!playersNear(level, x0, surface, z0)) {
-						level.setBlock(pos.set(x0, surface - 1, z0), rubbleBlock(ground,
-								(int) ((x0 * 73856093L) ^ (z0 * 19349663L))).defaultBlockState(), Block.UPDATE_ALL);
+						level.setBlock(pos.set(x0, surface - 1, z0),
+								rubbleBlock(ground, x0, z0, 20260101L).defaultBlockState(), Block.UPDATE_ALL);
 						clearPlant(level, x0, surface, z0);
 						changed++;
 					}
