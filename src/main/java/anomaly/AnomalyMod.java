@@ -237,10 +237,11 @@ public class AnomalyMod implements ModInitializer {
 			return;
 		}
 		double scaled = Math.hypot(player.getX(), player.getZ()) * 8.0;
-		if (scaled <= config.suppress_until) {
-			return;
-		}
-		double depth = Math.min(1.0, (scaled - config.suppress_until) / 12000.0);
+		// Оброк берётся с первого шага, а не с 6 000: иначе незерит и тотем добывались в аду
+		// рядом с порталом без единой капли риска, и дальние кольца Верхнего мира теряли смысл.
+		// У самого портала цена почти нулевая (регенерация её перекрывает), глубже — растёт
+		double depth = Math.min(1.0, scaled / 24000.0);
+		double ramp = depth * depth;
 		state.dose = Math.min(1.0, state.dose + config.dose_gain_per_second * seconds * depth);
 		state.lastHazard = true;
 		AnomalyResidue.add(player.getUUID(), 3.0 * depth * seconds / 3600.0);
@@ -253,13 +254,16 @@ public class AnomalyMod implements ModInitializer {
 			// за пару секунд до урона — иначе это выглядит как случайный урон от сервера
 			player.level().playSound(null, player.getX(), player.getY(), player.getZ(),
 					net.minecraft.sounds.SoundEvents.SOUL_ESCAPE.value(),
-					net.minecraft.sounds.SoundSource.AMBIENT, 1.6f, 0.55f);
+					net.minecraft.sounds.SoundSource.AMBIENT, 0.9f + 0.7f * (float) depth, 0.55f);
 			((net.minecraft.server.level.ServerLevel) player.level()).sendParticles(
 					new net.minecraft.core.particles.DustColorTransitionOptions(0x6B1A1A, 0x1F1013, 0.7f),
-					player.getX(), player.getY() + 1.0, player.getZ(), 24, 0.9, 0.7, 0.9, 0.01);
-			player.hurt(player.level().damageSources().magic(), (float) (2.0 + 2.4 * depth));
-			// сатурация в аду тоже сливается: иначе полный стейк даёт реген 2 HP/с и оброк не виден
-			player.getFoodData().setSaturation(0.0f);
+					player.getX(), player.getY() + 1.0, player.getZ(), 8 + (int) (16 * depth), 0.9, 0.7, 0.9, 0.01);
+			player.hurt(player.level().damageSources().magic(), (float) (0.5 + 4.2 * ramp));
+			// сатурация в аду тоже сливается — но только там, где оброк уже настоящий:
+			// у портала пусть работает обычная еда, иначе первый поход в ад станет наказанием
+			if (scaled > config.suppress_until) {
+				player.getFoodData().setSaturation(0.0f);
+			}
 		}
 	}
 }

@@ -239,9 +239,10 @@ function makeField(seed) {
       nest: radius >= 900 && rnd() < 0.25
         ? { dist: 0.45 * Math.sqrt(rnd()), ang: rnd() * Math.PI * 2, r: 0.16 + rnd() * 0.14 }
         : null,
-      // новая география (0.3.0): лес плашмя, руины, поднятая плита
+      // новая география (0.3.0): лес плашмя, руины, поднятая плита, грозовое ядро (лава)
       geo: radius >= 600
-        ? { forest: rnd() < 0.65, ruins: rnd() < 0.5, uplift: radius >= 1600 && rnd() < 0.35 }
+        ? { forest: rnd() < 0.65, ruins: rnd() < 0.5, storm: rnd() < 0.45,
+            uplift: radius >= 1600 && rnd() < 0.35 }
         : null
     });
   }
@@ -641,7 +642,8 @@ function pickDamageKind(a, blocks, rnd) {
     if (r < 0.42) return "spike";
     if (r < 0.56) return "sinkhole";
     if (r < 0.66) return "uplift";
-    if (r < 0.76) return "fault";
+    // lava_fault планируется только у зон с грозовым ядром (AnomalyScars.pick)
+    if (r < 0.76 && a.geo && a.geo.storm) return "fault";
   }
   if (r < 0.70) return "soil";
   if (r < 0.88) return "crater";
@@ -733,9 +735,12 @@ function drawDamageOp(a, st, kind, ox, oz, radius, strength, rnd) {
       const size = Math.max(1, (0.7 + rnd() * 1.3) * s);
       ctx.fillRect(qx - size / 2, qy - size / 2, size, size);
     }
-    const blocks = Math.min(120, 18 + Math.sqrt(radius) * 9);
+    // Пик в игре: основание 3–14 блоков радиусом, высота 15–120 блоков (ScarOp.spike) —
+    // от площади опа это не зависит, поэтому рисуем по константам, а не по радиусу пятна
+    const baseR = 6 + rnd() * 8;
+    const blocks = strength > 0.8 ? 35 + rnd() * 60 : 15 + rnd() * 30;
     const hpx = Math.max(3, blocks * s);
-    const wpx = Math.max(1.5, radius * s * (0.55 + rnd() * 0.25));
+    const wpx = Math.max(1.5, baseR * s);
     ctx.beginPath();
     ctx.moveTo(sx, sy - hpx);
     ctx.lineTo(sx - wpx, sy);

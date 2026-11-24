@@ -6,6 +6,7 @@ import net.fabricmc.fabric.api.entity.event.v1.EntitySleepEvents;
 import net.fabricmc.fabric.api.event.player.UseItemCallback;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.core.particles.DustColorTransitionOptions;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.sounds.SoundEvents;
 import net.minecraft.sounds.SoundSource;
@@ -622,7 +623,8 @@ public final class AnomalyResidue {
 				SoundEvents.WARDEN_ROAR, SoundSource.AMBIENT, 0.7f, 0.6f);
 	}
 
-	/** Отказ портала слышно и видно телом: портал гудит низко, а игрока отбрасывает кулдауном. */	public static void onPortalRefused(ServerPlayer player) {
+	/** Отказ портала слышно и видно телом: портал гудит низко, а игрока отбрасывает кулдауном. */
+	public static void onPortalRefused(ServerPlayer player) {
 		Entry entry = entry(player.getUUID());
 		long now = System.currentTimeMillis();
 		if (now - entry.lastRefuseMs < 1500L) {
@@ -630,8 +632,16 @@ public final class AnomalyResidue {
 		}
 		entry.lastRefuseMs = now;
 		player.setPortalCooldown(60);
+		// Отказ должен читаться как правило, а не как баг: обычный гул портала звучит и когда
+		// всё нормально. Здесь — скрик скалка, глухой удар и пыль по раме: «тебя не пускают»
 		player.level().playSound(null, player.getX(), player.getY(), player.getZ(),
-				SoundEvents.PORTAL_AMBIENT, SoundSource.AMBIENT, 0.8f, 0.5f);
+				SoundEvents.SCULK_SHRIEKER_SHRIEK, SoundSource.AMBIENT, 1.5f, 0.6f);
+		player.level().playSound(null, player.getX(), player.getY(), player.getZ(),
+				SoundEvents.PORTAL_AMBIENT, SoundSource.AMBIENT, 0.5f, 0.4f);
+		if (player.level() instanceof ServerLevel level) {
+			level.sendParticles(new DustColorTransitionOptions(0x2B2140, 0x0C0A12, 1.0f),
+					player.getX(), player.getY() + 1.0, player.getZ(), 30, 0.7, 1.1, 0.7, 0.01);
+		}
 	}
 
 	/** События шины: сон снимает 1–2 часа, фейерверк в «оскомине» глохнет. */

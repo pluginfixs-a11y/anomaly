@@ -46,6 +46,8 @@ public final class AnomalyField {
 	private static long lastSaveMs;
 	/** Период снимка поля: сериализация 1.3 МБ идёт на тик-потоке, чаще нельзя. */
 	private static final long SAVE_INTERVAL_MS = 5L * 60_000L;
+	/** Жёсткий предел: если MSPT не даёт сохранить, пишем всё равно — терять данные дороже. */
+	private static final long FORCED_SAVE_MS = 15L * 60_000L;
 	private static long lastTickFieldMs;
 	private static volatile boolean dirty;
 	private AnomalyField() {
@@ -168,8 +170,17 @@ public final class AnomalyField {
 		ServerLevel overworld = server.overworld();
 		Avoid avoid = settled(server, overworld, config);
 		boolean changed = tickData(data, config, random, now, hours, avoid);
-		changed |= AnomalyScars.tick(server, overworld, data, config);
-		AnomalyNodes.tick(server, overworld, config);
+		// один бросок внутри прохода не должен убивать тик сервера: ловим и пишем одну строку
+		try {
+			changed |= AnomalyScars.tick(server, overworld, data, config);
+		} catch (RuntimeException e) {
+			warnOnce("следы", e);
+		}
+		try {
+			AnomalyNodes.tick(server, overworld, config);
+		} catch (RuntimeException e) {
+			warnOnce("узлы", e);
+		}
 		changed |= bornSignals(server, overworld, now);
 		if (changed) {
 			dirty = true;
@@ -179,12 +190,31 @@ public final class AnomalyField {
 		// не чаще раза в 5 минут и только когда сервер не задыхается. Запись на диск — в фоне
 		boolean due = real - lastSaveMs > SAVE_INTERVAL_MS;
 		boolean calm = server.getAverageTickTimeNanos() / 1_000_000.0 < 40.0;
-		if (dirty && due && calm) {
+		// на живом сервере MSPT 40–50 держится постоянно: без жёсткого предела сейв не
+		// случался бы никогда, и падение теряло бы все рождения и прогресс следов
+		boolean overdue = real - lastSaveMs > FORCED_SAVE_MS;
+		if (dirty && (overdue || (due && calm))) {
+			if (overdue && !calm) {
+				AnomalyMod.LOGGER.warn("Anomaly: снимок поля откладывался {} мин (MSPT высокий)",
+						Math.round((real - lastSaveMs) / 60_000.0));
+			}
 			saveAsync();
 		}
 	}
 
 	// --- кемпинг ---
+
+	/** Одна строка на проход, а не на тик: устойчивое исключение иначе топит лог. */
+	private static long lastWarnMs;
+
+	private static void warnOnce(String what, RuntimeException e) {
+		long now = System.currentTimeMillis();
+		if (now - lastWarnMs < 60_000L) {
+			return;
+		}
+		lastWarnMs = now;
+		AnomalyMod.LOGGER.warn("Anomaly: проход «{}» упал ({}), поле продолжает жить", what, e.toString());
+	}
 
 	/** Пометить поле грязным: зовут те, кто меняет данные без изменения состава (кормление, генерации). */
 	public static void markDirty() {

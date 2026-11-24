@@ -261,6 +261,7 @@ public final class AnomalyScars {
 	 */
 	static boolean trail(AnomalyFieldData data, AnomalyConfig config, long now) {
 		boolean changed = false;
+		int worldOps = totalOps(data);
 		for (Anomaly anomaly : data.anomalies) {
 			if (anomaly.pinned || anomaly.remnant || anomaly.precursor || anomaly.scars == null) {
 				continue;
@@ -300,6 +301,10 @@ public final class AnomalyScars {
 				continue;
 			}
 			boolean firstPlan = anomaly.scars.isEmpty();
+			// потолок плана на весь мир: иначе файл и снимок поля растут без предела
+			if (worldOps >= MAX_OPS_WORLD) {
+				continue;
+			}
 			List<ScarOp> planned = planAt(pos[0], pos[1], Math.min(anomaly.r0, 900.0), cls,
 					new Random(anomaly.id * 31L + (long) (moved * 7.0)), false, anomaly.components);
 			// остаток бюджета зоны, а не фиксированная доля: план при рождении уже взял 0.4–0.9,
@@ -310,13 +315,15 @@ public final class AnomalyScars {
 			}
 			double used = 0.0;
 			for (ScarOp op : planned) {
-				if (used + op.blocks > budget || anomaly.scars.size() >= MAX_OPS) {
+				if (used + op.blocks > budget || anomaly.scars.size() >= MAX_OPS
+						|| worldOps >= MAX_OPS_WORLD) {
 					break;
 				}
 				if (overlaps(anomaly.scars, op)) {
 					continue;
 				}
 				anomaly.scars.add(op);
+				worldOps++;
 				used += op.blocks;
 				changed = true;
 			}
@@ -324,13 +331,14 @@ public final class AnomalyScars {
 			// здесь (в born() радиус ещё нулевой, и её следы планирует trail)
 			if (firstPlan) {
 				for (ScarOp ring : woundRing(anomaly, anomaly.ageHours(now), new Random(anomaly.id * 0x5DEECE66DL))) {
-					if (anomaly.scars.size() >= MAX_OPS) {
+					if (anomaly.scars.size() >= MAX_OPS || worldOps >= MAX_OPS_WORLD) {
 						break;
 					}
 					if (overlaps(anomaly.scars, ring)) {
 						continue;
 					}
 					anomaly.scars.add(ring);
+					worldOps++;
 					changed = true;
 				}
 			}
@@ -339,6 +347,23 @@ public final class AnomalyScars {
 	}
 
 	// --- применение ---
+
+	/**
+	 * Потолок плана на весь мир: 600 зон × 64 op — это 38 тыс. следов ≈ 8 МБ файла и ~90 мс
+	 * Gson на тик-потоке. Пять тысяч — уже вдесятеро больше, чем поле успевает применить.
+	 */
+	static final int MAX_OPS_WORLD = 5000;
+
+	/** Сколько следов уже запланировано во всём поле. */
+	static int totalOps(AnomalyFieldData data) {
+		int total = 0;
+		for (Anomaly anomaly : data.anomalies) {
+			if (anomaly.scars != null) {
+				total += anomaly.scars.size();
+			}
+		}
+		return total;
+	}
 
 	/** Сколько блоков уже обещано планом зоны: по нему считается остаток бюджета. */
 	static double plannedBlocks(List<ScarOp> ops) {
@@ -904,39 +929,58 @@ public final class AnomalyScars {
 	private static int ruin(ServerLevel level, ScarOp op, int x, int surface, int z) {
 		int hash = (int) ((x * 73856093L) ^ (z * 19349663L) ^ op.seed);
 		int changed = 0;
-		double distance = Math.hypot(x - op.x, z - op.z);
+		double dx = x - op.x;
+		double dz = z - op.z;
+		double distance = Math.hypot(dx, dz);
 		if (distance > op.radius) {
 			return 0;
 		}
+		// Прямоугольный контур, а не кольцо: круг из булыжника с прорехами читается как загон,
+		// а не как жильё. Полуоси 0.85 и 0.7 радиуса, поворот — угол опа
+		double cos = Math.cos(op.angle);
+		double sin = Math.sin(op.angle);
+		double lx = Math.abs(dx * cos + dz * sin);
+		double lz = Math.abs(-dx * sin + dz * cos);
+		double halfX = op.radius * 0.85;
+		double halfZ = op.radius * 0.70;
+		double ex = lx - halfX;
+		double ez = lz - halfZ;
+		double edge = (ex > 0 || ez > 0)
+				? Math.hypot(Math.max(ex, 0.0), Math.max(ez, 0.0))
+				: Math.max(ex, ez);
+		BlockState ground = level.getBlockState(new BlockPos(x, surface - 1, z));
 		// пол внутри: обломки, а не дискотека из случайных столбиков
-		if (Math.floorMod(hash, 3) != 0) {
-			BlockPos ground = new BlockPos(x, surface - 1, z);
-			BlockState state = level.getBlockState(ground);
-			if (!protectedBlock(state) && !state.isAir() && state.getFluidState().isEmpty()
-					&& !builtBlock(state)) {
+		if (edge < -1.0 && Math.floorMod(hash, 3) != 0) {
+			if (!protectedBlock(ground) && !ground.isAir() && ground.getFluidState().isEmpty()
+					&& !builtBlock(ground)) {
 				clearPlant(level, x, surface, z);
-				level.setBlock(ground, pick(hash, RUIN_FLOOR).defaultBlockState(), Block.UPDATE_ALL);
+				level.setBlock(new BlockPos(x, surface - 1, z), pick(hash, RUIN_FLOOR).defaultBlockState(),
+						Block.UPDATE_ALL);
 				changed++;
 			}
 		}
-		// стены: кольцо в один-полтора блока по периметру, 2–4 блока высотой, с проломами.
-		// Раньше стены ставились по hash%3 по всей площади — получался гравий с частоколом
-		double ring = Math.abs(distance - op.radius * 0.8);
-		if (ring > 1.5) {
+		// стены: полоса 1.2 блока по периметру прямоугольника, 2–4 блока высотой, обвалы
+		// кусками по 3 блока вдоль стены — угол и обрыв читаются как «здесь жили и это упало»
+		if (Math.abs(edge) > 1.2) {
 			return changed;
 		}
-		if (Math.floorMod(hash >> 7, 6) == 0) {
-			// пролом: в стене должно быть видно, что она обрушена
+		double along = lx >= lz ? lz : lx;
+		int segment = (int) Math.floor(along / 3.0);
+		if (Math.floorMod(segment * 31 + (int) (op.seed & 0x7F), 5) == 0) {
+			return changed;
+		}
+		if (protectedBlock(ground) || builtBlock(ground) || !ground.getFluidState().isEmpty()) {
 			return changed;
 		}
 		int height = 2 + Math.floorMod(hash >> 3, 3);
+		Block wall = ruinBlock(ground, hash);
 		BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
 		for (int i = 0; i < height; i++) {
 			BlockState at = level.getBlockState(pos.set(x, surface + i, z));
 			if (protectedBlock(at) || (!at.isAir() && at.blocksMotion())) {
 				break;
 			}
-			level.setBlock(pos, pick(hash + i * 31, RUIN_WALLS).defaultBlockState(), Block.UPDATE_ALL);
+			level.setBlock(pos, wall.defaultBlockState(), Block.UPDATE_ALL);
 			changed++;
 		}
 		return changed;
@@ -1211,7 +1255,11 @@ public final class AnomalyScars {
 		// стенками с 20–200 блоков не читается вовсе. Губа ровно в один блок и только
 		// у настоящих провалов: прежние 1.2 радиуса съедали почти весь диск 3×3, и провал
 		// оставался шахтой 1×1 с обломками вокруг
-		if (op.radius >= 4.0 && distance > op.radius - 1.2) {
+		// кромка провала: грунт вывернут и обломан. Ровная круглая яма с вертикальными
+		// стенками с 20–200 блоков не читается вовсе. Губа нужна при любом радиусе:
+		// у провала r=3 без неё оставалась шахта 6×6 с ровными стенками, выглядящая как /fill
+		double lip = op.radius >= 4.0 ? 1.2 : 0.9;
+		if (op.radius >= 2.0 && distance > op.radius - lip) {
 			BlockState ground = level.getBlockState(new BlockPos(x, surface - 1, z));
 			if (protectedBlock(ground) || builtBlock(ground) || !ground.getFluidState().isEmpty()
 					|| isFragileSurface(ground)) {
@@ -1228,11 +1276,20 @@ public final class AnomalyScars {
 		}
 		clearPlant(level, x, surface, z);
 		BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
-		int changed = 0;
 		// глубина гуляет по клеткам 2×2 и мельчает к краю: ровное дно читалось как /fill
-		double taper = op.radius >= 4.0 ? 0.55 + 0.45 * (1.0 - distance / Math.max(0.5, op.radius)) : 1.0;
+		double taper = 0.55 + 0.45 * (1.0 - distance / Math.max(0.5, op.radius));
 		int depth = (int) Math.round(op.depth * taper * (0.8 + Math.floorMod(cell, 100) / 250.0));
-		depth = Math.max(1, Math.min(10, depth));
+		// и не глубже полутора радиусов: колодец 10 блоков при радиусе 3 — это шахта
+		if (op.radius >= 2.0) {
+			depth = Math.min(Math.max(2, (int) Math.round(op.radius * 1.5)), depth);
+		}
+		// у самой стенки колонна копается на блок меньше, а у дна кладётся обломок: осыпь
+		// со стены, а не подрезанный край
+		boolean scree = op.radius >= 3.0 && distance > op.radius - lip - 1.0;
+		if (scree) {
+			depth = Math.max(1, depth - 1);
+		}
+		int changed = 0;
 		for (int i = 0; i < depth; i++) {
 			int y = surface - 1 - i;
 			if (y <= level.getMinY()) {
@@ -1250,7 +1307,36 @@ public final class AnomalyScars {
 			level.setBlock(pos, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
 			changed++;
 		}
+		// осыпь у стенки: обломки лежат на дне, стенка не обрывается в пустоту
+		if (scree && changed > 0) {
+			BlockPos floor = new BlockPos(x, surface - 1 - depth, z);
+			BlockState at = level.getBlockState(floor);
+			if (at.isAir() && !protectedBlock(at)) {
+				level.setBlock(floor, rubbleBlock(level.getBlockState(new BlockPos(x, surface - 2, z)), hash)
+						.defaultBlockState(), Block.UPDATE_ALL);
+			}
+		}
 		return changed;
+	}
+
+	/** Материал стен руины по грунту: в пустыне песчаник, в болоте грязевой кирпич. */
+	private static Block ruinBlock(BlockState ground, int hash) {
+		if (ground.is(BlockTags.SAND)) {
+			return pick(hash, Blocks.SANDSTONE, Blocks.CUT_SANDSTONE, Blocks.SANDSTONE);
+		}
+		if (ground.is(BlockTags.TERRACOTTA)) {
+			return pick(hash, Blocks.TERRACOTTA, Blocks.BRICKS);
+		}
+		if (ground.is(Blocks.DEEPSLATE)) {
+			return pick(hash, Blocks.DEEPSLATE_BRICKS, Blocks.COBBLED_DEEPSLATE);
+		}
+		if (ground.is(Blocks.MUD) || ground.is(Blocks.CLAY)) {
+			return pick(hash, Blocks.MUD_BRICKS, Blocks.BRICKS);
+		}
+		if (ground.is(Blocks.MOSS_BLOCK) || ground.is(Blocks.MYCELIUM)) {
+			return pick(hash, Blocks.MOSSY_COBBLESTONE, Blocks.COBBLESTONE);
+		}
+		return pick(hash, RUIN_WALLS);
 	}
 
 	/** Материал шипа по биому: след из «местного» камня, а не серый булыжник везде. */
@@ -1283,23 +1369,31 @@ public final class AnomalyScars {
 		// высота и камень — по ячейке 2×2, а не по колонке: «перец с солью» на грани пика
 		// читался как ошибка генерации (то же уже сделано для плиты)
 		int cell = ((x >> 1) * 31) ^ ((z >> 1) * 17) ^ (int) op.seed;
-		// профиль шипа, а не зиккурата: 0.06 + 0.94·falloff^0.55 даёт тонкую вершину и широкое
-		// основание, а прежние 0.3 + 0.7·falloff росли ступенями по ~6 блоков
-		double profile = 0.06 + 0.94 * Math.pow(Math.max(0.0, falloff), 0.55);
-		int height = (int) Math.round(op.height * profile * (0.9 + Math.floorMod(cell, 100) / 500.0));
+		// Профиль шипа: 0.05 + 0.95·falloff^1.2. У земли колонна ниже 0.16·h, а не 0.40·h —
+		// прежняя степень оставляла на газоне каменную башню шириной с основание
+		double profile = 0.05 + 0.95 * Math.pow(Math.max(0.0, falloff), 1.2);
+		// шум высоты билинейный по сетке 5 блоков: ступени, привязанные к сетке 2 блока,
+		// читались как набранная из кубиков крышка
+		double jitter = 0.88 + 0.24 * smoothNoise(x, z, 5, op.seed);
+		int height = (int) Math.round(op.height * profile * jitter);
 		height = Math.max(2, Math.min(MAX_HEIGHT, height));
-		// кромка: вывернутый грунт и обломки вокруг основания. Без него конус растёт прямо
-		// из целой травы, и с 20–200 блоков это читается как «камень из ничего». Через две
-		// клетки — пропуск: сплошная плита обломков вокруг пика выглядела насыпью
-		if (falloff < 0.16) {
+		// Кромка: вывернутый грунт и обломки вокруг основания, 2–3 клетки в ширину и с
+		// просветами. Без него конус растёт прямо из целой травы, сплошной плитой — насыпь
+		if (falloff < 0.28) {
 			if (protectedBlock(ground) || builtBlock(ground) || !ground.getFluidState().isEmpty()) {
 				return 0;
 			}
-			if (Math.floorMod(cell, 3) == 0) {
+			int skip = falloff > 0.16 ? 2 : 3;
+			if (Math.floorMod(cell, skip) == 0) {
 				return 0;
 			}
 			Block rim = rubbleBlock(ground, cell);
 			level.setBlock(new BlockPos(x, surface - 1, z), rim.defaultBlockState(), Block.UPDATE_ALL);
+			// осыпь: каждый седьмой блок кромки — валун сверху
+			if (Math.floorMod(cell >> 3, 7) == 0
+					&& level.getBlockState(new BlockPos(x, surface, z)).isAir()) {
+				level.setBlock(new BlockPos(x, surface, z), rim.defaultBlockState(), Block.UPDATE_ALL);
+			}
 			clearPlant(level, x, surface, z);
 			return 1;
 		}
@@ -1339,6 +1433,32 @@ public final class AnomalyScars {
 			changed++;
 		}
 		return changed;
+	}
+
+	/**
+	 * Билинейный шум по сетке {@code scale} блоков: 0..1, гладкий. Ячеечный хеш давал
+	 * ступени, привязанные к сетке, — на пике это читалось как набранная из кубиков крышка.
+	 */
+	private static double smoothNoise(int x, int z, int scale, long seed) {
+		double fx = x / (double) scale;
+		double fz = z / (double) scale;
+		int x0 = (int) Math.floor(fx);
+		int z0 = (int) Math.floor(fz);
+		double tx = fx - x0;
+		double tz = fz - z0;
+		tx = tx * tx * (3.0 - 2.0 * tx);
+		tz = tz * tz * (3.0 - 2.0 * tz);
+		double a = lattice(x0, z0, seed);
+		double b = lattice(x0 + 1, z0, seed);
+		double c = lattice(x0, z0 + 1, seed);
+		double d = lattice(x0 + 1, z0 + 1, seed);
+		return (a * (1.0 - tx) + b * tx) * (1.0 - tz) + (c * (1.0 - tx) + d * tx) * tz;
+	}
+
+	private static double lattice(int x, int z, long seed) {
+		long h = x * 374761393L + z * 668265263L + seed * 1442695040888963407L;
+		h = (h ^ (h >>> 13)) * 1274126177L;
+		return ((h ^ (h >>> 16)) & 0xFFFF) / 65535.0;
 	}
 
 	/** Нижний пояс пика: тот же камень биома, но тёмный — тень у основания. */

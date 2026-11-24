@@ -256,6 +256,11 @@ public final class AnomalyNodes {
 					if (loads >= 2) {
 						break;
 					}
+					// синхронная генерация — 10–50 мс в тик-потоке; при живых игроках узлы
+					// ждут, пока чанк загрузится сам: игрок всё равно стоит далеко
+					if (!level.players().isEmpty()) {
+						break;
+					}
 					level.getChunk(cx2, cz2);
 					loads++;
 				}
@@ -397,7 +402,11 @@ public final class AnomalyNodes {
 		}
 		if (!level.getChunkSource().hasChunk(pos.getX() >> 4, pos.getZ() >> 4)) {
 			// чанк выгружен — а без игрока рядом он всегда выгружен, и «занято» его и не пускало:
-			// рефилл был недостижим. Грузим сами; восстановлений не больше трёх за жизнь зоны
+			// рефилл был недостижим. Грузим сами, но только на пустом сервере: при игроках
+			// это 10–50 мс синхронной генерации в тик-потоке
+			if (!level.players().isEmpty()) {
+				return false;
+			}
 			level.getChunk(pos.getX() >> 4, pos.getZ() >> 4);
 		}
 		if (level.getBlockState(pos).is(Blocks.CHEST)) {
