@@ -1564,6 +1564,10 @@ public final class SelfTest {
 		report(result, "вложенная целиком внутри родителя (центр " + Math.round(distance) + ")",
 				distance + child.r0 < host.r0);
 		report(result, "класс вложенной — как у родителя", child.cls.equals(host.cls));
+		// клиренс действует и на вложенные: ребёнок не рождается на базе игрока
+		AnomalyField.Avoid blocked = new AnomalyField.Avoid(List.of(new double[]{9000.0, 0.0, 5000.0}), null, 0);
+		report(result, "вложенная не рождается в запретной зоне",
+				AnomalyField.spawnNested(field, cfg, new Random(5L), 0L, blocked) == null);
 		// столкновение с родителем — не столкновение: иначе вложенность невозможна
 		report(result, "родитель не считается столкновением", field.anomalies.contains(child));
 		report(result, "статистика видит вложенную",
