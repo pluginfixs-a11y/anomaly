@@ -117,6 +117,9 @@ public final class Anomaly {
 	/** Сколько раз проверку воды не дали закончить бюджет/дедлайн: после трёх считаем сухим. */
 	public transient int scar_wet_tries;
 
+	/** Для какого op уже сыгран сигнал перед следом (не пишется в файл). */
+	public transient int scar_telegraph_for = -1;
+
 	/** Попытки поставить узлы и время последней: зона в океане не должна грузить чанки вечно. */
 	public transient int node_tries;
 	public transient long node_try_ms;
@@ -466,6 +469,7 @@ public final class Anomaly {
 		return false;
 	}
 }
+
 
 
 

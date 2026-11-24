@@ -4,6 +4,7 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.tags.BlockTags;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
@@ -197,7 +198,7 @@ public final class AnomalyScars {
 	 */
 	private static double[] spot(double cx, double cz, double r0, Random rnd) {
 		double angle = rnd.nextDouble() * TAU;
-		double distance = r0 * (0.18 + 0.67 * Math.sqrt(rnd.nextDouble()));
+		double distance = r0 * (0.08 + 0.78 * Math.sqrt(rnd.nextDouble()));
 		return new double[]{
 				cx + Math.cos(angle) * distance,
 				cz + Math.sin(angle) * distance
@@ -398,6 +399,12 @@ public final class AnomalyScars {
 						}
 					}
 				}
+				if (anomaly.scar_telegraph_for != anomaly.scar_next && !anomaly.scar_retry_tree) {
+					// перед блоками: игрок должен обернуться на звук и пыль, а не обнаружить
+					// гору post factum. Один пакет и один звук на след
+					anomaly.scar_telegraph_for = anomaly.scar_next;
+					AnomalyEffects.scarTelegraph(level, op.x, op.z, AnomalyClass.byId(anomaly.cls).color);
+				}
 					// курсор двигаем только после проверок: иначе колонка на стыке бюджета чанков теряется
 					anomaly.scar_cursor++;
 					columnsThisTick++;
@@ -477,6 +484,26 @@ public final class AnomalyScars {
 		if (isFragileSurface(ground) && !op.type.equals("crack") && !op.type.equals("sinkhole")) {
 			return 0;
 		}
+		// игрок вплотную: камень в ступнях — это удушье, а вынутый блок — падение
+		if (playersNear(level, x, surface, z)) {
+			return 0;
+		}
+		// дерево сносим ДО следа: иначе шип, упёршись в ствол, оставлял шахту 1×1 на всю высоту,
+		// ровным рядом по местам деревьев, а deforest потом убирал ствол — сквозь конус видно небо.
+		// fallen_forest сносит своё дерево сам
+		int treeFallen = 0;
+		if (tree && !op.type.equals("fallen_forest")) {
+			treeFallen = deforest(level, x, height, z);
+			if (treeFallen < 0) {
+				return -1;
+			}
+			height = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, x, z);
+			surface = groundY(level, x, height, z);
+			ground = level.getBlockState(new BlockPos(x, surface - 1, z));
+			if (!ground.getFluidState().isEmpty() || builtBlock(ground)) {
+				return treeFallen;
+			}
+		}
 		int changed = switch (op.type) {
 			case "dead_soil" -> deadSoil(level, x, surface, z, op.seed);
 			case "rubble" -> rubble(level, x, surface, z, op.seed);
@@ -493,16 +520,7 @@ public final class AnomalyScars {
 			// дерево не доделано (дедлайн/незагруженный чанк): колонка не считается обработанной
 			return -1;
 		}
-		// дерево сносим после следа и по исходной высоте: до правки ствол ещё на месте,
-		// а обломки или траншея уже снесли бы дешёвую проверку
-		if (tree) {
-			int fallen = deforest(level, x, height, z);
-			if (fallen < 0) {
-				return -1;
-			}
-			changed += fallen;
-		}
-		return changed;
+		return changed + treeFallen;
 	}
 
 	/**
@@ -713,6 +731,17 @@ public final class AnomalyScars {
 			// с лежащим бревном останется обрубок
 			return -1;
 		}
+		// пень: 1–2 блока ствола у земли. Без него «поваленный лес» читается как «кто-то
+		// напилил дров и унёс», а не как лес, который положило
+		BlockPos.MutableBlockPos stump = new BlockPos.MutableBlockPos();
+		for (int i = 0; i < 2; i++) {
+			BlockState at = level.getBlockState(stump.set(x, surface + i, z));
+			if (at.blocksMotion() || protectedBlock(at)) {
+				break;
+			}
+			level.setBlock(stump, log.defaultBlockState(), Block.UPDATE_ALL);
+			changed++;
+		}
 		int hash = (int) ((x * 31L) ^ (z * 17L) ^ op.seed);
 		int length = 4 + Math.floorMod(hash, 4);
 		BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
@@ -801,9 +830,13 @@ public final class AnomalyScars {
 			return 0;
 		}
 		int hash = (int) ((x * 341873128L) ^ (z * 132897987L) ^ op.seed);
+		// палитра и высота — по ячейке 4×4, а не по колонке: «перец с солью» из туфа в траве
+		// и ступеньки по 1 блоку читались как ошибка генерации, а не как выдавленная земля
+		int cell = ((x >> 2) * 31) ^ ((z >> 2) * 17) ^ (int) op.seed;
 		int height = (int) Math.round(op.height * (0.25 + 0.75 * falloff)
 				* (0.8 + Math.floorMod(hash, 100) / 250.0));
-		height = Math.max(1, Math.min(40, height));
+		height = Math.max(2, Math.min(40, height));
+		height -= height % 2;
 		if (protectedBlock(ground) || builtBlock(ground) || !ground.getFluidState().isEmpty()
 				|| !ground.blocksMotion()) {
 			return 0;
@@ -821,13 +854,13 @@ public final class AnomalyScars {
 			Block filler;
 			if (i == height - 1) {
 				if (soil(ground)) {
-					filler = pick(hash, Blocks.COARSE_DIRT, Blocks.GRASS_BLOCK, Blocks.TUFF);
+					filler = pick(cell, Blocks.COARSE_DIRT, Blocks.COARSE_DIRT, Blocks.GRASS_BLOCK);
 				} else if (ground.is(BlockTags.SAND)) {
-					filler = pick(hash, Blocks.SAND, Blocks.SANDSTONE);
+					filler = pick(cell, Blocks.SAND, Blocks.SANDSTONE);
 				} else if (ground.is(BlockTags.TERRACOTTA)) {
-					filler = pick(hash, Blocks.TERRACOTTA, Blocks.STONE);
+					filler = pick(cell, Blocks.TERRACOTTA, Blocks.STONE);
 				} else {
-					filler = pick(hash, Blocks.STONE, Blocks.TUFF, Blocks.GRAVEL);
+					filler = pick(cell, Blocks.STONE, Blocks.GRAVEL, Blocks.TUFF);
 				}
 			} else {
 				filler = pick(hash, Blocks.STONE, Blocks.TUFF, Blocks.DEEPSLATE);
@@ -899,6 +932,21 @@ public final class AnomalyScars {
 			BlockState target = bottom && lava ? Blocks.LAVA.defaultBlockState() : Blocks.AIR.defaultBlockState();
 			level.setBlock(pos.set(x, y, z), target, Block.UPDATE_ALL);
 			changed++;
+		}
+		if (lava && changed > 0) {
+			// остывший шов по кромке: магма и базальт через колонку — светящаяся линия видна
+			// с 20–30 блоков и не поджигает лес, в отличие от лавы на поверхности
+			int hash = (int) ((x * 73856093L) ^ (z * 19349663L));
+			int roll = Math.floorMod(hash, 5);
+			if (roll == 0 || roll == 1) {
+				BlockPos rim = new BlockPos(x, surface - 1, z);
+				BlockState at = level.getBlockState(rim);
+				if (!protectedBlock(at) && !builtBlock(at)) {
+					level.setBlock(rim, (roll == 0 ? Blocks.MAGMA_BLOCK : Blocks.BASALT).defaultBlockState(),
+							Block.UPDATE_ALL);
+					changed++;
+				}
+			}
 		}
 		// разлом посреди леса тоже оставляет мёртвую землю — дерево сносится в applyColumn
 		return changed;
@@ -994,6 +1042,21 @@ public final class AnomalyScars {
 
 	/** Провал: вынимаем колонку на depth блоков, стенки остаются как есть. */
 	private static int sinkhole(ServerLevel level, ScarOp op, int x, int surface, int z) {
+		// кромка провала: грунт вывернут и обломан. Ровная круглая яма с вертикальными
+		// стенками с 20–200 блоков не читается вовсе
+		double distance = Math.hypot(x - op.x, z - op.z);
+		if (op.radius >= 3.0 && distance > op.radius - 1.2) {
+			BlockState ground = level.getBlockState(new BlockPos(x, surface - 1, z));
+			if (protectedBlock(ground) || builtBlock(ground) || !ground.getFluidState().isEmpty()
+					|| isFragileSurface(ground)) {
+				return 0;
+			}
+			int hash = (int) ((x * 73856093L) ^ (z * 19349663L) ^ op.seed);
+			level.setBlock(new BlockPos(x, surface - 1, z),
+					rubbleBlock(ground, hash).defaultBlockState(), Block.UPDATE_ALL);
+			clearPlant(level, x, surface, z);
+			return 1;
+		}
 		clearPlant(level, x, surface, z);
 		BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
 		int changed = 0;
@@ -1049,6 +1112,17 @@ public final class AnomalyScars {
 		double jitter = 0.9 + Math.floorMod(hash, 100) / 500.0;
 		int height = (int) Math.round(op.height * (0.3 + 0.7 * falloff) * jitter);
 		height = Math.max(2, Math.min(MAX_HEIGHT, height));
+		// кромка: вывернутый грунт и обломки вокруг основания. Без него конус растёт прямо
+		// из целой травы, и с 20–200 блоков это читается как «камень из ничего»
+		if (falloff < 0.18) {
+			if (protectedBlock(ground) || builtBlock(ground) || !ground.getFluidState().isEmpty()) {
+				return 0;
+			}
+			Block rim = rubbleBlock(ground, hash);
+			level.setBlock(new BlockPos(x, surface - 1, z), rim.defaultBlockState(), Block.UPDATE_ALL);
+			clearPlant(level, x, surface, z);
+			return 1;
+		}
 		// камень из того же биома: песчаник в пустыне, терракота в бэдлендах, туф на камне.
 		// Серый булыжник посреди песка читается как чужая постройка, а не как след аномалии
 		Block block = spikeBlock(ground, hash);
@@ -1110,6 +1184,20 @@ public final class AnomalyScars {
 	// --- микрособытия: то, что делает мир живым между большими следами ---
 
 	/**
+	 * Близко ли игрок к клетке: след не должен ставить камень в игрока (удушье) или вынимать
+	 * блок у него из-под ног. Радиус в 3 блока — это «вплотную», дальше игрок видит и успевает.
+	 */
+	static boolean playersNear(ServerLevel level, int x, int y, int z) {
+		for (ServerPlayer player : level.players()) {
+			if (Math.abs(player.getX() - (x + 0.5)) <= 3.0 && Math.abs(player.getZ() - (z + 0.5)) <= 3.0
+					&& Math.abs(player.getY() - y) <= 6.0) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
 	 * Маленький кратер от хлопка или молнии: 1–2 блока в глубину, обломки на дне.
 	 * Живёт только возле игрока, где чанк уже загружен, и подчиняется тем же запретам, что следы.
 	 * {@code nearY} — высота игрока: если рельеф на 4+ блока выше, игрок в шахте и событие
@@ -1122,11 +1210,14 @@ public final class AnomalyScars {
 			return 0;
 		}
 		BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
-		int side = (int) Math.ceil(radius);
+		int side = (int) Math.ceil(radius) + 1;
 		int changed = 0;
 		for (int dx = -side; dx <= side; dx++) {
 			for (int dz = -side; dz <= side; dz++) {
-				if (dx * dx + dz * dz > radius * radius) {
+				double distance = Math.sqrt(dx * dx + dz * dz);
+				// внешний блок — кромка: грунт вывернут и обломан, иначе дыра 3×3 в траве
+				// читается как выкопанная лопатой
+				if (distance > radius + 1.0) {
 					continue;
 				}
 				int x0 = bx + dx;
@@ -1142,6 +1233,19 @@ public final class AnomalyScars {
 				BlockState ground = level.getBlockState(pos.set(x0, surface - 1, z0));
 				if (protectedBlock(ground) || builtBlock(ground) || isFragileSurface(ground)
 						|| !ground.getFluidState().isEmpty()) {
+					continue;
+				}
+				// кромка: грунт вывернут и обломан
+				if (distance > radius - 0.4) {
+					if (!playersNear(level, x0, surface, z0)) {
+						level.setBlock(pos.set(x0, surface - 1, z0), rubbleBlock(ground,
+								(int) ((x0 * 73856093L) ^ (z0 * 19349663L))).defaultBlockState(), Block.UPDATE_ALL);
+						clearPlant(level, x0, surface, z0);
+						changed++;
+					}
+					continue;
+				}
+				if (playersNear(level, x0, surface, z0)) {
 					continue;
 				}
 				clearPlant(level, x0, surface, z0);
@@ -1273,6 +1377,7 @@ public final class AnomalyScars {
 		return sum;
 	}
 }
+
 
 
 

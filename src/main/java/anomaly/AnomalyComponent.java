@@ -454,7 +454,7 @@ public enum AnomalyComponent {
 					// хлопок — не только картинка: маленькая воронка на 1–2 блока. Только у
 					// классов, которые вообще рушат мир: у безопасной зоны бюджет нулевой
 					if (zone.cls().damages() && canMark(level, x, z)) {
-						AnomalyScars.microCrater(level, x, z, 0.8 + rnd.nextDouble() * 0.8, 1 + rnd.nextInt(2), player.getY());
+						AnomalyScars.microCrater(level, x, z, 2.2 + rnd.nextDouble() * 0.8, 1 + rnd.nextInt(2), player.getY());
 					}
 				}
 			}
@@ -474,7 +474,7 @@ public enum AnomalyComponent {
 					if (canMark(level, x, z)) {
 						AnomalyScars.scorch(level, x, z, 1.5 + rnd.nextDouble(), player.getY());
 						if (rnd.nextInt(3) == 0) {
-							AnomalyScars.microCrater(level, x, z, 0.7, 1, player.getY());
+							AnomalyScars.microCrater(level, x, z, 2.2, 1, player.getY());
 						}
 					}
 				}
@@ -887,5 +887,6 @@ public enum AnomalyComponent {
 				+ cost + ")";
 	}
 }
+
 
 

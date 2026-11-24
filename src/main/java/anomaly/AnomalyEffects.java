@@ -506,6 +506,19 @@ public final class AnomalyEffects {
 		}
 	}
 
+	/** Сигнал перед следом: мир не должен менять блоки молча. */
+	static void scarTelegraph(ServerLevel level, double x, double z, int color) {
+		int bx = (int) Math.floor(x);
+		int bz = (int) Math.floor(z);
+		if (!level.getChunkSource().hasChunk(bx >> 4, bz >> 4)) {
+			return;
+		}
+		double y = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, bx, bz) + 0.6;
+		level.playSound(null, x, y, z, SoundEvents.STONE_BREAK, SoundSource.AMBIENT, 1.4f, 0.55f);
+		level.sendParticles(new DustColorTransitionOptions(color, darken(color), 0.8f),
+				x, y + 1.0, z, 26, 2.2, 1.4, 2.2, 0.02);
+	}
+
 	/** Вход в аномалию: звук и вспышка пыли у ног. Текст в UI не выводим — механики объясняются средой. */
 	public static void entry(ServerLevel level, ServerPlayer player, Zone zone) {
 		// звук входа не должен совпадать ни с одной подписью компонента: иначе «что это за
