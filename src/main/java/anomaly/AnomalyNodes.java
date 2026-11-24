@@ -153,10 +153,17 @@ public final class AnomalyNodes {
 				if (Math.hypot(zone.coreX() - player.getX(), zone.coreZ() - player.getZ()) > REACH + NODE_SPREAD) {
 					continue;
 				}
-				Anomaly anomaly = zone.anomaly();
-				placeNodes(level, anomaly, zone);
-				restoreCache(level, anomaly, occupied(server, level, zone));
+				placeNodes(level, zone.anomaly(), zone);
 			}
+		}
+		// восстановление кладовой — для всех зон с узлами, а не только для тех, что рядом с игроком:
+		// у недрейфовавшей зоны кладовая в 0–160 блоках от ядра, то есть всегда «рядом», и проверка
+		// занятости по 512 блокам отменяла бы восстановление навсегда
+		for (Anomaly anomaly : AnomalyField.all()) {
+			if (!anomaly.nodes_placed || anomaly.remnant || !anomaly.node_cache_ok) {
+				continue;
+			}
+			restoreCache(level, anomaly, occupied(server, level, anomaly));
 		}
 	}
 
@@ -280,19 +287,15 @@ public final class AnomalyNodes {
 	}
 
 	/** Стоит ли кто-то в зоне или у кладовой: пока стоит, зона «кормится», а кладовая молчит. */
-	private static boolean occupied(MinecraftServer server, ServerLevel level, Zone zone) {
-		double cx = zone.anomaly().node_cx;
-		double cz = zone.anomaly().node_cz;
-		boolean placed = zone.anomaly().node_cache_ok;
+	private static boolean occupied(MinecraftServer server, ServerLevel level, Anomaly anomaly) {
+		double cx = anomaly.node_cx;
+		double cz = anomaly.node_cz;
 		for (ServerPlayer other : server.getPlayerList().getPlayers()) {
 			if (other.level() != level) {
 				continue;
 			}
-			if (zone.contains(other.getX(), other.getZ())) {
-				return true;
-			}
 			// шаг за границу мелкой зоны не должен снимать «занято»
-			if (placed && Math.hypot(other.getX() - cx, other.getZ() - cz) < CACHE_CLEAR) {
+			if (Math.hypot(other.getX() - cx, other.getZ() - cz) < CACHE_CLEAR) {
 				return true;
 			}
 		}
@@ -481,26 +484,29 @@ public final class AnomalyNodes {
 
 	private static BlockPos collapse(ServerLevel level, Anomaly anomaly, ServerPlayer actor) {
 		Zone zone = anomaly.zone(AnomalyClock.now());
+		// чанки вокруг узла грузим ДО поиска места: ringSpot на незагруженном чанке возвращает
+		// null, и награда падала бы в колонку кладовой (а fillChest её чистит)
+		int nodeChunkX = (int) Math.floor(anomaly.node_cx) >> 4;
+		int nodeChunkZ = (int) Math.floor(anomaly.node_cz) >> 4;
+		for (int dx = -1; dx <= 1; dx++) {
+			for (int dz = -1; dz <= 1; dz++) {
+				if (!level.getChunkSource().hasChunk(nodeChunkX + dx, nodeChunkZ + dz)) {
+					level.getChunk(nodeChunkX + dx, nodeChunkZ + dz);
+				}
+			}
+		}
 		// награда там же, где кладовая: узлы прибиты к точке постановки, а зона с тех пор
 		// уехала на километры — волна и лут не должны ждать игрока в чистом поле
 		BlockPos reward = ringSpot(level, anomaly.node_cx, anomaly.node_cz);
 		if (reward == null) {
-			reward = surface(level, anomaly.node_cx, anomaly.node_cz);
-		}
-		if (reward == null) {
 			reward = surface(level, zone.coreX(), zone.coreZ());
+		}
+		// на колонку кладовой не встаём никогда: там могут лежать вещи игрока
+		if (reward != null && reward.equals(blockPos(anomaly.node_cx, anomaly.node_cy, anomaly.node_cz))) {
+			reward = null;
 		}
 		double cx = reward != null ? reward.getX() + 0.5 : anomaly.node_cx;
 		double cz = reward != null ? reward.getZ() + 0.5 : anomaly.node_cz;
-		// коллапс рушит узел: чанки 3×3 нужны загруженными, иначе getHeight отдаст дно мира
-		// и половина волны родится в бедроке
-		int chunkX = (int) Math.floor(cx) >> 4;
-		int chunkZ = (int) Math.floor(cz) >> 4;
-		for (int dx = -1; dx <= 1; dx++) {
-			for (int dz = -1; dz <= 1; dz++) {
-				level.getChunk(chunkX + dx, chunkZ + dz);
-			}
-		}
 		Random rnd = new Random(anomaly.id * 0x9E3779B97F4A7C15L);
 		AnomalyClass cls = AnomalyClass.byId(anomaly.cls);
 		int mobs = cls == AnomalyClass.DEADLY ? 5 : cls == AnomalyClass.DANGER ? 3 : 2;

@@ -220,6 +220,7 @@ public final class AnomalyScars {
 				// файлы 0.2.x не знали точки привязки: принимаем текущую, ничего не генерируя
 				anomaly.scar_cx = pos[0];
 				anomaly.scar_cz = pos[1];
+				changed = true;
 				continue;
 			}
 			if (anomaly.scars.size() >= MAX_OPS) {
@@ -233,6 +234,9 @@ public final class AnomalyScars {
 			AnomalyClass cls = AnomalyClass.byId(anomaly.cls);
 			anomaly.scar_cx = pos[0];
 			anomaly.scar_cz = pos[1];
+			// точка привязки уехала — это изменение данных, его надо записать, иначе после
+			// рестарта trail() решит, что зона сместилась на всё это расстояние сразу
+			changed = true;
 			if (!cls.damages() || config == null || !config.scar_enabled) {
 				continue;
 			}

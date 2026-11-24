@@ -45,7 +45,7 @@ public final class AnomalyField {
 	private static Random random = new Random(1L);
 	private static long lastSaveMs;
 	private static long lastTickFieldMs;
-	private static boolean dirty;
+	private static volatile boolean dirty;
 	private AnomalyField() {
 	}
 
@@ -785,52 +785,87 @@ public final class AnomalyField {
 				thread.setDaemon(true);
 				return thread;
 			});
+	/** Один замок на запись и порядок снимков: файл всегда последний, а не «кто успел». */
+	private static final Object SAVE_LOCK = new Object();
+	private static long writeSeq;
+	private static long lastWrittenSeq;
 	private static volatile boolean saving;
 
 	static boolean saveNow() {
-		// дожидаемся текущей фоновой записи: иначе stop и воркер пишут один файл одновременно
-		try {
-			WRITER.submit(() -> {
-			}).get(2L, java.util.concurrent.TimeUnit.SECONDS);
-		} catch (Exception ignored) {
-			// воркер занят: пишем сами, уникальный tmp не даст смешать файлы
+		if (path == null) {
+			return false;
 		}
-		data.clock_ms = AnomalyClock.now();
-		lastSaveMs = System.currentTimeMillis();
-		boolean ok = path != null && write(path, data);
-		// не сбросили dirty при сбое: следующий тик попробует снова, а не через пять минут
-		dirty = !ok;
-		return ok;
+		synchronized (SAVE_LOCK) {
+			data.clock_ms = AnomalyClock.now();
+			lastSaveMs = System.currentTimeMillis();
+			boolean ok = writeLocked(path, GSON.toJson(data), ++writeSeq);
+			// не сбросили dirty при сбое: следующий тик попробует снова, а не через пять минут
+			dirty = !ok;
+			return ok;
+		}
 	}
 
-	/** Снимок на тик-потоке, запись — в фоне. Один снимок в полёте: очередь не копим. */
+	/**
+	 * Снимок на тик-потоке, запись — в фоне. Снимки нумеруются: воркер, доехавший позже
+	 * более нового синхронного снимка, не должен откатить файл назад (так терялись рождения
+	 * и флаги узлов на /stop).
+	 */
 	static void saveAsync() {
-		if (saving || path == null) {
+		if (path == null) {
 			return;
 		}
-		data.clock_ms = AnomalyClock.now();
-		lastSaveMs = System.currentTimeMillis();
 		String json;
-		try {
-			json = GSON.toJson(data);
-		} catch (RuntimeException e) {
-			AnomalyMod.LOGGER.error("Anomaly: не смог сериализовать поле", e);
-			return;
-		}
-		saving = true;
-		dirty = false;
+		long seq;
 		Path file = path;
+		synchronized (SAVE_LOCK) {
+			if (saving) {
+				return;
+			}
+			data.clock_ms = AnomalyClock.now();
+			lastSaveMs = System.currentTimeMillis();
+			try {
+				json = GSON.toJson(data);
+			} catch (RuntimeException e) {
+				AnomalyMod.LOGGER.error("Anomaly: не смог сериализовать поле", e);
+				return;
+			}
+			seq = ++writeSeq;
+			saving = true;
+			dirty = false;
+		}
 		WRITER.execute(() -> {
-			boolean ok = writeText(file, json);
-			saving = false;
-			if (!ok) {
+			try {
+				boolean ok;
+				synchronized (SAVE_LOCK) {
+					ok = writeLocked(file, json, seq);
+				}
+				if (!ok) {
+					dirty = true;
+				}
+			} catch (RuntimeException e) {
+				// воркер не должен умереть молча: иначе поле перестанет сохраняться совсем
+				AnomalyMod.LOGGER.error("Anomaly: фоновая запись поля упала", e);
 				dirty = true;
+			} finally {
+				saving = false;
 			}
 		});
 	}
 
 	public static boolean save() {
 		return saveNow();
+	}
+
+	/** Пишем под замком: снимок старше уже записанного пропускаем. */
+	private static boolean writeLocked(Path file, String json, long seq) {
+		if (seq < lastWrittenSeq) {
+			return true;
+		}
+		boolean ok = writeText(file, json);
+		if (ok) {
+			lastWrittenSeq = seq;
+		}
+		return ok;
 	}
 
 	static boolean write(Path file, AnomalyFieldData field) {
@@ -909,7 +944,7 @@ public final class AnomalyField {
 			boolean herald) {
 		// вложенность: иногда зона рождается внутри большой, и там уже своё разрушение
 		if (config.nested_chance > 0.0 && rnd.nextDouble() < config.nested_chance) {
-			Anomaly nested = spawnNested(field, config, rnd, now);
+			Anomaly nested = spawnNested(field, config, rnd, now, avoid);
 			if (nested != null) {
 				if (herald) {
 					herald(nested, now, config, rnd);
@@ -947,7 +982,7 @@ public final class AnomalyField {
 	}
 
 	/** Вложенная зона: маленькая внутри большой, со своим набором компонентов и своим классом. */
-	static Anomaly spawnNested(AnomalyFieldData field, AnomalyConfig config, Random rnd, long now) {
+	static Anomaly spawnNested(AnomalyFieldData field, AnomalyConfig config, Random rnd, long now, Avoid avoid) {
 		List<Anomaly> hosts = new ArrayList<>();
 		for (Anomaly anomaly : field.anomalies) {
 			if (!anomaly.pinned && !anomaly.remnant && !anomaly.precursor && anomaly.r0 >= 600.0) {
@@ -969,6 +1004,10 @@ public final class AnomalyField {
 		double x = center[0] + Math.cos(angle) * distance;
 		double z = center[1] + Math.sin(angle) * distance;
 		double radius = Math.max(config.radius_min, hostRadius * (0.16 + rnd.nextDouble() * 0.14));
+		// ребёнок не должен родиться на базе: клиренс действует и для вложенных зон
+		if (avoid.blocks(x, z, radius * 0.5)) {
+			return null;
+		}
 		Anomaly child = create(field, config, rnd, now, x, z, radius, AnomalyClass.byId(host.cls), false);
 		child.parent_id = host.id;
 		return child;
