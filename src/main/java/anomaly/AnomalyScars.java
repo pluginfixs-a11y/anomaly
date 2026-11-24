@@ -204,6 +204,8 @@ public final class AnomalyScars {
 		// обрушенные постройки: стены без крыш и пол из обломков — «здесь жили»
 		if (dangerous && remaining > 1800.0 && roll < 0.80) {
 			ScarOp op = ScarOp.ruin(spot[0], spot[1], 5.0 + rnd.nextDouble() * 8.0, rnd.nextLong());
+			// поворот постройки: без него все руины стояли по осям координат
+			op.angle = rnd.nextDouble() * TAU;
 			if (op.blocks <= remaining) {
 				return op;
 			}
@@ -211,6 +213,8 @@ public final class AnomalyScars {
 		// поваленный лес плашмя: самое читаемое издалека, а вблизи — стволы лежат, кроны снесены
 		if (dangerous && remaining > 400.0 && roll < 0.88) {
 			ScarOp op = ScarOp.forest(spot[0], spot[1], 10.0 + rnd.nextDouble() * 14.0, rnd.nextLong());
+			// направление падения своё у каждого опа: иначе во всём мире один и тот же ветер
+			op.angle = rnd.nextDouble() * TAU;
 			if (op.blocks <= remaining) {
 				return op;
 			}
@@ -317,7 +321,8 @@ public final class AnomalyScars {
 					new Random(anomaly.id * 31L + (long) (moved * 7.0)), false, anomaly.components);
 			// остаток бюджета зоны, а не фиксированная доля: план при рождении уже взял 0.4–0.9,
 			// и дрейфовые добавки утраивали обещанный damageBudget
-			double budget = AnomalyClass.damageBudget(anomaly.r0, cls) - plannedBlocks(anomaly.scars);
+			double budget = AnomalyClass.damageBudget(anomaly.r0, cls)
+					- anomaly.scar_spent - plannedBlocks(anomaly.scars);
 			if (budget <= 0.0) {
 				continue;
 			}
@@ -605,8 +610,21 @@ public final class AnomalyScars {
 					// ждёт смены суток; уперлись в блоки/время — продолжаем с этой же
 					rotate = limitHit ? (index + 1) % size : index;
 					return progressed;
-				}				anomaly.scar_next++;
+				}				// след применён: его блоки уходят в счётчик, а сам op выбрасываем. Иначе
+				// список зоны растёт до 64 записей, которые никогда не применятся снова, и файл
+				// поля пухнет до 7 МБ (42 мс Gson на тик-потоке)
+				anomaly.scar_spent += Math.max(0, op.blocks);
+				anomaly.scar_next++;
 				anomaly.scar_cursor = 0;
+				// довели очередь до конца — чистим план зоны и начинаем заново при следующем дрейфе
+				if (anomaly.scar_next >= anomaly.scars.size()) {
+					anomaly.scars.clear();
+					anomaly.scar_next = 0;
+					anomaly.scar_telegraph_for = -1;
+					anomaly.scar_hold_for = -1;
+					anomaly.scar_wet_for = -1;
+					AnomalyField.markDirty();
+				}
 				if (blocksThisTick >= config.blocks_per_tick || chunksThisTick >= config.chunks_per_tick
 						|| columnsThisTick >= COLUMNS_PER_PASS) {
 					rotate = (index + 1) % size;
@@ -962,13 +980,15 @@ public final class AnomalyScars {
 				? Math.hypot(Math.max(ex, 0.0), Math.max(ez, 0.0))
 				: Math.max(ex, ez);
 		BlockState ground = level.getBlockState(new BlockPos(x, surface - 1, z));
-		// пол внутри: обломки, а не дискотека из случайных столбиков
-		if (edge < -1.0 && Math.floorMod(hash, 3) != 0) {
+		// пол — по ячейке 3×3 и из материала биома: поблочный хеш давал шахматку 1×1
+		// из гравия, земли и булыжника — ровно то, от чего уже ушли плита и мёртвая земля
+		int floorCell = ((x / 3) * 37) ^ ((z / 3) * 19) ^ (int) op.seed;
+		if (edge < -1.0 && Math.floorMod(floorCell, 4) != 0) {
 			if (!protectedBlock(ground) && !ground.isAir() && ground.getFluidState().isEmpty()
 					&& !builtBlock(ground)) {
 				clearPlant(level, x, surface, z);
-				level.setBlock(new BlockPos(x, surface - 1, z), pick(hash, RUIN_FLOOR).defaultBlockState(),
-						Block.UPDATE_ALL);
+				level.setBlock(new BlockPos(x, surface - 1, z),
+						ruinFloor(ground, floorCell).defaultBlockState(), Block.UPDATE_ALL);
 				changed++;
 			}
 		}
@@ -1330,6 +1350,23 @@ public final class AnomalyScars {
 			}
 		}
 		return changed;
+	}
+
+	/** Пол руины по грунту: в пустыне песчаник, в бэдлендах терракота, в болоте грязевой кирпич. */
+	private static Block ruinFloor(BlockState ground, int cell) {
+		if (ground.is(BlockTags.SAND)) {
+			return pick(cell, Blocks.SANDSTONE, Blocks.SMOOTH_SANDSTONE, Blocks.SANDSTONE);
+		}
+		if (ground.is(BlockTags.TERRACOTTA)) {
+			return pick(cell, Blocks.TERRACOTTA, Blocks.PACKED_MUD);
+		}
+		if (ground.is(Blocks.MUD) || ground.is(Blocks.CLAY)) {
+			return pick(cell, Blocks.PACKED_MUD, Blocks.MUD_BRICKS);
+		}
+		if (ground.is(Blocks.DEEPSLATE)) {
+			return pick(cell, Blocks.COBBLED_DEEPSLATE, Blocks.DEEPSLATE_TILES);
+		}
+		return pick(cell, RUIN_FLOOR);
 	}
 
 	/** Материал стен руины по грунту: в пустыне песчаник, в болоте грязевой кирпич. */

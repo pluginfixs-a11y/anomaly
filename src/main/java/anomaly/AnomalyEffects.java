@@ -174,7 +174,10 @@ public final class AnomalyEffects {
 				|| anomaly.node_r <= 0.0) {
 			return false;
 		}
-		double r = Math.max(radius, 0.32 * anomaly.node_r + 2.0);
+		// Карман — вокруг самой кладовой (18–24 блока), а не доля node_r: node_r теперь
+		// расстояние от ядра (до 2640), и «0.32·node_r» накрывало 846 блоков — 40 % зоны
+		// без урона и с аметистовым звоном на весь диск
+		double r = Math.max(radius, 24.0);
 		if (Math.abs(player.getY() - anomaly.node_cy) > 16.0) {
 			return false;
 		}
@@ -473,6 +476,11 @@ public final class AnomalyEffects {
 		ParticleOptions accent = accent(zone);
 		var rnd = player.getRandom();
 		for (int i = 0; i < points; i++) {
+			// мелкая зона в кадре: каждый второй пакет лишний — плотность держим сдвоенным
+			// count, а пакетов вдвое меньше (128 пакетов/с на зону — это лаг у клиента)
+			if (full && (i & 1) == 1) {
+				continue;
+			}
 			double angle = toPlayer - half + 2.0 * half * (i + rnd.nextDouble()) / points;
 			double[] point = zone.anomaly().boundaryPoint(angle, zone.ageHours(), radius);
 			if (Math.hypot(point[0] - player.getX(), point[1] - player.getZ()) > reach) {
@@ -486,11 +494,12 @@ public final class AnomalyEffects {
 			double y = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, bx, bz) + 0.6;
 			// у стены есть толщина: нулевой разброс давал плоскость в один пиксель, которую
 			// видно только строго сбоку
-			level.sendParticles(player, dust, true, true, point[0], y, point[1], count, 0.6, spread, 0.6, 0.0);
-			if (i % (full ? 10 : 5) == 0) {
+			int batch = full ? count * 2 : count;
+			level.sendParticles(player, dust, true, true, point[0], y, point[1], batch, 0.6, spread, 0.6, 0.0);
+			if (i % (full ? 16 : 5) == 0) {
 				// приземная полоса: в лесу и на склоне стена не должна висеть только на уровне глаз
 				level.sendParticles(player, dust, true, true, point[0], y - 0.4, point[1],
-						Math.max(2, count / 2), 0.5, 1.0, 0.5, 0.0);
+						Math.max(2, batch / 2), 0.5, 1.0, 0.5, 0.0);
 			}
 			if (i % (full ? 6 : 4) == 0 && !far) {
 				// верхние клочья: стена выше и не обрывается ровной линией по грудь

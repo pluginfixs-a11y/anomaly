@@ -127,6 +127,9 @@ public final class Anomaly {
 	public transient int scar_hold_for = -1;
 	public transient long scar_hold_until;
 
+	/** Блоков уже потрачено на применённые следы: применяемые op выбрасываются из плана. */
+	public double scar_spent;
+
 	/** Попытки поставить узлы и время последней: зона в океане не должна грузить чанки вечно. */
 	public transient int node_tries;
 	public transient long node_try_ms;

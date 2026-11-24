@@ -50,6 +50,14 @@ public abstract class PortalProcessorMixin {
 				&& AnomalyPortals.tooFar(level, far)) {
 			AnomalyPortals.collapse(level, far);
 			cir.setReturnValue(false);
+			return;
+		}
+		// Обратный ход из Нижнего не запрещаем (иначе игрок заперт), но дальний портал
+		// сгорает сразу после прибытия: иначе правило обходится порталом в аду за 1250 блоков
+		if (cir.getReturnValue() && level.dimension() == Level.NETHER
+				&& entity instanceof ServerPlayer back
+				&& AnomalyPortals.tooFar(level, back)) {
+			AnomalyPortals.collapseAfterArrival(back);
 		}
 	}
 }

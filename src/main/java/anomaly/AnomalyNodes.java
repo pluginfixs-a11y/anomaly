@@ -547,11 +547,16 @@ public final class AnomalyNodes {
 		List<ItemStack> loot = new ArrayList<>();
 		switch (cls) {
 			case SAFE -> {
+				// Зелёное кольцо — не склад на дороге: там нет урона, значит платить должна
+				// редкость. Опыт в бутылках и аметист — то, чего у дома не накопаешь
+				loot.add(new ItemStack(Items.EXPERIENCE_BOTTLE, 3 + rnd.nextInt(5)));
+				loot.add(new ItemStack(Items.AMETHYST_SHARD, 4 + rnd.nextInt(6)));
 				loot.add(new ItemStack(Items.BREAD, 2 + rnd.nextInt(3)));
-				loot.add(new ItemStack(Items.IRON_INGOT, 1 + rnd.nextInt(2)));
-				loot.add(new ItemStack(Items.TORCH, 4 + rnd.nextInt(5)));
 				if (rnd.nextBoolean()) {
-					loot.add(new ItemStack(Items.APPLE, 1 + rnd.nextInt(2)));
+					loot.add(new ItemStack(Items.ENCHANTED_BOOK));
+				}
+				if (rnd.nextInt(3) == 0) {
+					loot.add(new ItemStack(Items.IRON_INGOT, 2 + rnd.nextInt(3)));
 				}
 			}
 			case DANGER -> {
@@ -629,9 +634,10 @@ public final class AnomalyNodes {
 			prize = new ItemStack(Items.IRON_BLOCK, 2 + rnd.nextInt(3));
 		}
 		player.getInventory().placeItemBackInInventory(prize);
-		// алтарь берёт своё: риск превращается в часы остатка
+		// алтарь берёт своё, но не часами: 1.5–3 ч за обмен означали, что три обмена
+		// включают «печать ада» на 8 ч и лучшая награда мода закрывает Нижний
 		if (residue) {
-			AnomalyResidue.add(player.getUUID(), 1.5 + rnd.nextDouble() * 1.5);
+			AnomalyResidue.add(player.getUUID(), 0.35 + rnd.nextDouble() * 0.4);
 		}
 		level.playSound(null, player.getX(), player.getY(), player.getZ(),
 				SoundEvents.BEACON_ACTIVATE, SoundSource.BLOCKS, 0.9f, 0.6f);

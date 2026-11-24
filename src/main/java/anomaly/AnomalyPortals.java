@@ -1,6 +1,7 @@
 package anomaly;
 
 import net.minecraft.core.BlockPos;
+import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.sounds.SoundEvents;
@@ -39,6 +40,27 @@ public final class AnomalyPortals {
 	public static boolean tooFar(ServerLevel level, ServerPlayer player) {
 		int limit = limit();
 		return limit > 0 && equivalent(level, player.getX(), player.getZ()) > limit;
+	}
+
+	/**
+	 * Погасить портал, в который игрок только что шагнул из Нижнего. Вернуться домой запретить
+	 * нельзя — это запирание в аду, — но дальний портал сгорает сразу после перехода: обойти
+	 * правило, наладив портал в аду за 1250 блоками, не выйдет.
+	 */
+	public static void collapseAfterArrival(ServerPlayer player) {
+		MinecraftServer server = player.level().getServer();
+		if (server == null) {
+			return;
+		}
+		java.util.UUID id = player.getUUID();
+		server.execute(() -> {
+			ServerPlayer online = server.getPlayerList().getPlayer(id);
+			if (online == null || online.level() != server.overworld()) {
+				return;
+			}
+			collapseAt(online.level(), online.blockPosition());
+			online.setPortalCooldown(80);
+		});
 	}
 
 	/**

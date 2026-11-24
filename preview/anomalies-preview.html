@@ -972,7 +972,8 @@ cv.addEventListener("wheel", (e) => {
   const rect = cv.getBoundingClientRect();
   const [wx, wz] = toWorld(e.clientX - rect.left, e.clientY - rect.top);
   const factor = Math.exp(-e.deltaY * 0.0015);
-  state.zoom = Math.max(0.35, Math.min(40, state.zoom * factor));
+  // до 400×: без этого нельзя снять крупный план — 40× давало 0.76 px на блок
+  state.zoom = Math.max(0.35, Math.min(400, state.zoom * factor));
   // держим точку под курсором
   const s2 = baseScale();
   state.panX = wx - (e.clientX - rect.left - W / 2) / s2;
