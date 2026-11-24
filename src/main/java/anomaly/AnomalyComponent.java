@@ -445,8 +445,9 @@ public enum AnomalyComponent {
 			}
 			case ECHO_BURSTS -> {
 				if (rnd.nextInt(24) == 0) {
-					double x = player.getX() + (rnd.nextDouble() - 0.5) * 24.0;
-					double z = player.getZ() + (rnd.nextDouble() - 0.5) * 24.0;
+					double[] spot = eventSpot(level, player, zone, rnd);
+					double x = spot[0];
+					double z = spot[1];
 					double y = surfaceOr(level, x, z, player.getY()) + 1.0;
 					level.sendParticles(player, ParticleTypes.EXPLOSION, true, true, x, y, z, 1, 0.0, 0.0, 0.0, 0.0);
 					// радиус слышимости ванильного звука = max(16, 16·vol): 0.35 до игрока не доходил
@@ -460,8 +461,9 @@ public enum AnomalyComponent {
 			}
 			case STORM_CORE -> {
 				if (rnd.nextInt(40) == 0) {
-					double x = player.getX() + (rnd.nextDouble() - 0.5) * 32.0;
-					double z = player.getZ() + (rnd.nextDouble() - 0.5) * 32.0;
+					double[] spot = eventSpot(level, player, zone, rnd);
+					double x = spot[0];
+					double z = spot[1];
 					double boltY = surfaceOr(level, x, z, player.getY());
 					AnomalyEffects.visualBolt(level, x, boltY, z);
 					// молния должна бить: визуальная вспышка без урона учила, что гроза безопасна
@@ -629,6 +631,30 @@ public enum AnomalyComponent {
 				&& Math.hypot(x, z) >= config.suppress_until
 				&& level.getServer().getAverageTickTimeNanos() / 1_000_000.0
 						<= Math.min(config.mspt_limit, 30.0);
+	}
+
+	/**
+	 * Где рвать и куда бить молнией: обычно рядом с игроком, но раз в четыре раза — в 40–140
+	 * блоках, всё ещё внутри зоны. Дальний хлопок видно и слышно (частицы и звук уходят по своим
+	 * координатам), а воронка остаётся там: следы не обязаны появляться под ногами.
+	 */
+	private static double[] eventSpot(ServerLevel level, ServerPlayer player, Zone zone,
+			net.minecraft.util.RandomSource rnd) {
+		double angle = rnd.nextDouble() * Math.PI * 2.0;
+		if (rnd.nextInt(4) == 0) {
+			double far = 40.0 + rnd.nextDouble() * 100.0;
+			double fx = player.getX() + Math.cos(angle) * far;
+			double fz = player.getZ() + Math.sin(angle) * far;
+			if (zone.signedDistance(fx, fz) <= 0.0
+					&& level.getChunkSource().hasChunk((int) Math.floor(fx) >> 4, (int) Math.floor(fz) >> 4)) {
+				return new double[]{fx, fz};
+			}
+		}
+		// рядом — как было: ±12 блока, а не точка вплотную к игроку
+		double near = 4.0 + rnd.nextDouble() * 8.0;
+		return new double[]{
+				player.getX() + Math.cos(angle) * near,
+				player.getZ() + Math.sin(angle) * near};
 	}
 
 	/** Пыль между игроком и ядром: тяга и отторжение перестают быть невидимыми. */

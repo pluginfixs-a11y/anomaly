@@ -416,10 +416,13 @@ public final class AnomalyScars {
 	/** С какой записи начинать следующий проход: строгий FIFO морил голодом всё поле за первой зоной. */
 	private static int rotate;
 
-	/** Раз в столько миллисекунд миру достаётся один тихий след. */
-	private static final long DRIP_PERIOD_MS = 6_000L;
+	/**
+	 * Раз в столько тиков миру достаётся один тихий след (120 = 6 с). Счёт на тиках, а не на
+	 * полевых часах: {@code /anomaly timescale 3600} не должен превращать дрип в поток.
+	 */
+	private static final int DRIP_PERIOD_TICKS = 120;
 	private static final Random DRIP_RANDOM = new Random(0x5EED5CA7L);
-	private static long dripAt;
+	private static int dripTicks;
 	private static boolean dripLogged;
 
 	/**
@@ -438,10 +441,10 @@ public final class AnomalyScars {
 		if (config == null || !config.scar_enabled) {
 			return false;
 		}
-		if (now < dripAt) {
+		if (++dripTicks < DRIP_PERIOD_TICKS) {
 			return false;
 		}
-		dripAt = now + DRIP_PERIOD_MS;
+		dripTicks = 0;
 		return dripOnce(data, config, now, rnd);
 	}
 
