@@ -180,7 +180,7 @@ public final class AnomalyMadness {
 			FIGURES.remove(player.getUUID());
 			return;
 		}
-		// тёмная пыль: 12 точек дают читаемый человеческий силуэт в 20–30 блоках
+		// тёмная пыль: десять точек дают читаемый человеческий силуэт в 20–30 блоках
 		var ink = new DustParticleOptions(0x0C0C12, 1.8f);
 		double x = figure.x();
 		double y = figure.y();
@@ -216,3 +216,4 @@ public final class AnomalyMadness {
 		figure(level, player);
 	}
 }
+

@@ -52,8 +52,18 @@ public final class AnomalyNodes {
 	/** Сколько раз кладовая наполняется за жизнь зоны: ферма у сундука не должна кормить вечно. */
 	private static final int CACHE_MAX_RESTORES = 3;
 	/** Сколько уровней стоит один обмен на алтаре. */
-	private static final int ALTAR_LEVELS = 5;
+	private static final int ALTAR_LEVELS = 15;
 	private static final long ALTAR_COOLDOWN_MS = 1500L;
+	/** Обменов на зону на игрока: «риск как валюта» не должен превращаться в станок. */
+	private static final int ALTAR_MAX_TRADES = 2;
+	/** Счётчик обменов: зона+игрок → сколько раз. Живёт в памяти, сбрасывается рестартом. */
+	private static final java.util.Map<String, Integer> ALTAR_TRADES =
+			new java.util.LinkedHashMap<>(64, 0.75f, true) {
+				@Override
+				protected boolean removeEldestEntry(java.util.Map.Entry<String, Integer> eldest) {
+					return size() > 4096;
+				}
+			};
 	/** Максимальная плата за обмен, часы остатка: под потолком должно оставаться место на неё. */
 	private static final double PAY_MAX = 3.0;
 
@@ -67,6 +77,9 @@ public final class AnomalyNodes {
 
 	private AnomalyNodes() {
 	}
+
+	/** Счётчик тиков: узлы работают раз в две секунды. */
+	private static int nodeTicker;
 
 	public static void register() {
 		// Алтарь: правый клик по якорю-алтарю — обмен. Ваниль этот блок так не использует
@@ -118,16 +131,11 @@ public final class AnomalyNodes {
 			serverLevel.playSound(null, pos.getX() + 0.5, pos.getY(), pos.getZ() + 0.5,
 					SoundEvents.RESPAWN_ANCHOR_DEPLETE.value(), SoundSource.BLOCKS, 1.0f, 0.6f);
 			if (Integer.bitCount(anomaly.anchors_broken) >= 3) {
-				// третий якорь обрушивает зону только если игрок внутри: иначе это просто
-				// сломанный блок в чистом поле, а не рейд
+				// третий якорь обрушивает зону безусловно: сломанные якоря не возвращаются,
+				// и проверка «игрок внутри» оставляла зону несхлопываемой навсегда, если
+				// третий удар пришёлся снаружи (якоря стоят на 62 % радиуса рейда)
 				ServerPlayer actor = player instanceof ServerPlayer sp ? sp : null;
-				Zone zone = anomaly.zone(AnomalyClock.now());
-				if (actor != null && zone.contains(actor.getX(), actor.getZ())) {
-					collapse(serverLevel, anomaly, actor);
-				} else {
-					serverLevel.playSound(null, pos.getX() + 0.5, pos.getY(), pos.getZ() + 0.5,
-							SoundEvents.RESPAWN_ANCHOR_DEPLETE.value(), SoundSource.BLOCKS, 0.8f, 0.4f);
-				}
+				collapse(serverLevel, anomaly, actor);
 			}
 		});
 	}
@@ -140,6 +148,11 @@ public final class AnomalyNodes {
 	 */
 	public static void tick(MinecraftServer server, ServerLevel level, AnomalyConfig config) {
 		if (!config.nodes_enabled) {
+			return;
+		}
+		// раз в две секунды: узлы — не эффект, им хватает; полная прокрутка поля на каждого
+		// игрока каждую секунду — это третья лишняя копия работы tickPlayer
+		if ((++nodeTicker & 1) != 0) {
 			return;
 		}
 		for (ServerPlayer player : server.getPlayerList().getPlayers()) {
@@ -159,7 +172,7 @@ public final class AnomalyNodes {
 		// восстановление кладовой — для всех зон с узлами, а не только для тех, что рядом с игроком:
 		// у недрейфовавшей зоны кладовая в 0–160 блоках от ядра, то есть всегда «рядом», и проверка
 		// занятости по 512 блокам отменяла бы восстановление навсегда
-		for (Anomaly anomaly : AnomalyField.all()) {
+		for (Anomaly anomaly : AnomalyField.raw()) {
 			if (!anomaly.nodes_placed || anomaly.remnant || !anomaly.node_cache_ok) {
 				continue;
 			}
@@ -184,6 +197,9 @@ public final class AnomalyNodes {
 			anomaly.node_cache_ok = false;
 			anomaly.node_altar_ok = false;
 			anomaly.node_cache_ms = 0L;
+			// точка привязки узлов должна пережить рестарт, даже если ни один узел не встал
+			// (океан, лёд, лава): иначе после рестарта она пересчитается от сдвинувшегося ядра
+			AnomalyField.markDirty();
 		}
 		boolean changed = false;
 		if (!anomaly.node_cache_ok) {
@@ -237,7 +253,9 @@ public final class AnomalyNodes {
 				(int) Math.floor(zone.coreX()), (int) Math.floor(zone.coreZ()));
 		level.playSound(null, zone.coreX(), coreY, zone.coreZ(),
 				SoundEvents.BEACON_ACTIVATE, SoundSource.AMBIENT, 0.8f, 0.7f);
-		AnomalyField.save();
+		// только пометка: снимок поля на 1.3 МБ не должен попадать в тик игрока. Периодика
+		// (30 с) и остановка сервера и так его запишут
+		AnomalyField.markDirty();
 		return true;
 	}
 
@@ -261,7 +279,9 @@ public final class AnomalyNodes {
 		}
 		BlockPos pos = blockPos(anomaly.node_cx, anomaly.node_cy, anomaly.node_cz);
 		if (!level.getChunkSource().hasChunk(pos.getX() >> 4, pos.getZ() >> 4)) {
-			return;
+			// чанк выгружен — а без игрока рядом он всегда выгружен, и «занято» его и не пускало:
+			// рефилл был недостижим. Грузим сами; восстановлений не больше трёх за жизнь зоны
+			level.getChunk(pos.getX() >> 4, pos.getZ() >> 4);
 		}
 		if (level.getBlockState(pos).is(Blocks.CHEST)) {
 			anomaly.node_cache_ms = now;
@@ -275,7 +295,7 @@ public final class AnomalyNodes {
 		placeChest(level, anomaly, pos);
 		anomaly.node_cache_ms = now;
 		anomaly.cache_restores++;
-		AnomalyField.save();
+		AnomalyField.markDirty();
 	}
 
 	/** Пора ли восстанавливать кладовую: чистая функция, по ней же гоняется самопроверка. */
@@ -442,6 +462,22 @@ public final class AnomalyNodes {
 		if (last != null && now - last < ALTAR_COOLDOWN_MS) {
 			return;
 		}
+		// обмен только внутри зоны: дрейф уносит узлы из зоны, и алтарь в чистом поле —
+		// это магазин без риска
+		Zone zone = anomaly.zone(AnomalyClock.now());
+		if (!zone.contains(player.getX(), player.getZ())) {
+			level.playSound(null, player.getX(), player.getY(), player.getZ(),
+					SoundEvents.VILLAGER_NO, SoundSource.BLOCKS, 0.8f, 0.6f);
+			return;
+		}
+		// и не больше двух обменов на зону: иначе 21 час остатка превращается в поток тотемов
+		String key = player.getUUID() + ":" + anomaly.id;
+		int trades = ALTAR_TRADES.getOrDefault(key, 0);
+		if (trades >= ALTAR_MAX_TRADES) {
+			level.playSound(null, player.getX(), player.getY(), player.getZ(),
+					SoundEvents.VILLAGER_NO, SoundSource.BLOCKS, 0.8f, 0.5f);
+			return;
+		}
 		if (player.experienceLevel < ALTAR_LEVELS) {
 			level.playSound(null, player.getX(), player.getY(), player.getZ(),
 					SoundEvents.VILLAGER_NO, SoundSource.BLOCKS, 0.8f, 0.7f);
@@ -456,13 +492,15 @@ public final class AnomalyNodes {
 			return;
 		}
 		ALTAR_LAST.put(player.getUUID(), now);
+		ALTAR_TRADES.put(key, trades + 1);
 		player.giveExperienceLevels(-ALTAR_LEVELS);
 		AnomalyClass cls = AnomalyClass.byId(anomaly.cls);
 		Random rnd = new Random(player.getUUID().getLeastSignificantBits() ^ System.nanoTime());
 		ItemStack prize;
 		if (cls == AnomalyClass.DEADLY) {
-			prize = rnd.nextBoolean() ? new ItemStack(Items.TOTEM_OF_UNDYING)
-					: new ItemStack(Items.NETHERITE_INGOT, 1 + rnd.nextInt(2));
+			// тотема здесь нет: он остался редкой находкой в кладовой, а не товаром
+			prize = rnd.nextBoolean() ? new ItemStack(Items.NETHERITE_INGOT, 1 + rnd.nextInt(2))
+					: new ItemStack(Items.ENCHANTED_GOLDEN_APPLE);
 		} else if (cls == AnomalyClass.DANGER) {
 			prize = rnd.nextBoolean() ? new ItemStack(Items.DIAMOND, 4 + rnd.nextInt(4))
 					: new ItemStack(Items.ENCHANTED_GOLDEN_APPLE);
@@ -725,3 +763,4 @@ public final class AnomalyNodes {
 				: String.valueOf(Math.round(value));
 	}
 }
+

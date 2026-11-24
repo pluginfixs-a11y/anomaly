@@ -66,7 +66,7 @@ public class AnomalyConfig {
 	// --- разрушения ---
 	public boolean scar_enabled = true;
 	/** Чанков за проход: 2 — это 2 в секунду, проход один и только когда mspt ниже порога. */
-	public int chunks_per_tick = 2;
+	public int chunks_per_tick = 1;
 	/** Блоков за тик: потолок работы разрушений, чтобы не вешать сервер. */
 	public int blocks_per_tick = 2000;
 	/** Порог mspt: выше него разрушения ждут следующего тика. */
@@ -117,7 +117,7 @@ public class AnomalyConfig {
 	/** Базовый спад, часов остатка за реальный час. Сон и компания ускоряют его отдельно. */
 	public double residue_decay_per_hour = 0.8;
 
-	public int view_range = 128;
+	public int view_range = 192;
 	/** Период серверного тика эффектов (10 = 0.5 с). Поле тикает раз в секунду отдельно. */
 	public int tick_period = 10;
 
@@ -198,8 +198,8 @@ public class AnomalyConfig {
 		mspt_limit = Math.max(1.0, Math.min(1000.0, mspt_limit));
 		if (view_range < 64) {
 			// 0.2.0-alpha2 писал сюда 48: с такой дальностью зону не видно вообще
-			view_range = 128;
-			AnomalyMod.LOGGER.info("Anomaly: view_range < 64, поднят до 128 — иначе край зоны не виден");
+			view_range = 192;
+			AnomalyMod.LOGGER.info("Anomaly: view_range < 64, поднят до 192 — иначе край зоны не виден");
 		}
 		if (danger_from < spawn_min_radius) {
 			danger_from = spawn_min_radius;
@@ -299,3 +299,4 @@ public class AnomalyConfig {
 		}
 	}
 }
+

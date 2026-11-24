@@ -83,7 +83,7 @@ public record Zone(Anomaly anomaly, long now, double x, double z, double radius,
 
 	/**
 	 * Ваниль множит цвет пыли на 0.6–1.0, поэтому насыщенность и яркость нормализуются.
-	 * Оттенок при этом держится в пределах 12° от цвета класса: оттенки компонентов — добавка
+	 * Оттенок при этом держится в пределах 6° от цвета класса: оттенки компонентов — добавка
 	 * к характеру, а не замена классу.
 	 */
 	private static int vividWithin(int color, int base) {
@@ -165,3 +165,4 @@ public record Zone(Anomaly anomaly, long now, double x, double z, double radius,
 		return Math.toDegrees(anomaly.arc * anomaly.life_hours);
 	}
 }
+

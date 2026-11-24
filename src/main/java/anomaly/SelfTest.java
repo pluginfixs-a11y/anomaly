@@ -454,6 +454,7 @@ public final class SelfTest {
 		int total = 0;
 		boolean inBudget = true;
 		boolean insideZone = true;
+		boolean outer = false;
 		boolean kinds = false;
 		double budget = AnomalyClass.damageBudget(deadly.r0, AnomalyClass.DEADLY);
 		for (ScarOp op : plan) {
@@ -462,13 +463,16 @@ public final class SelfTest {
 				inBudget = false;
 			}
 			double distance = Math.hypot(op.x - deadly.x0, op.z - deadly.z0);
-			if (distance > deadly.r0 * 0.4) {
+			// следы живут в полосе 45–85 % радиуса: это та часть зоны, которую игрок пересекает,
+			// и край перестаёт выглядеть нетронутым (раньше всё лежало в ядре — 35 %)
+			if (distance > deadly.r0 * 0.9) {
 				insideZone = false;
 			}
+			outer |= distance > deadly.r0 * 0.4;
 			kinds |= "spike".equals(op.type);
 		}
 		report(result, "следы не превышают бюджет (" + total + " из " + Math.round(budget) + ")", inBudget);
-		report(result, "следы в ядре, а не по всему краю", insideZone);
+		report(result, "следы не выходят за зону и доходят до внешней половины", insideZone && outer);
 		report(result, "у смертельной бывают пики", kinds);
 
 		List<ScarOp> safePlan = AnomalyScars.plan(

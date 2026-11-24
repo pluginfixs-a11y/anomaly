@@ -417,7 +417,8 @@ public enum AnomalyComponent {
 				|| this == AIR_DRAIN || this == TRACTION || this == REPULSION || this == MOB_EARS
 				|| this == ECHO_BURSTS || this == STORM_CORE || this == PRESSURE
 				|| this == WEAR || this == LOOT_SOUR || this == ARROW_BEND
-				|| this == DARK_SUCKING || this == HUSK_BLOOM || this == ANVIL_RAIN)) {
+				|| this == DARK_SUCKING || this == HUSK_BLOOM || this == ANVIL_RAIN
+				|| this == GLOW_ALL || this == FLOAT_ALL || this == ASH_FALL || this == MADNESS_RING)) {
 			return;
 		}
 		switch (this) {
@@ -460,7 +461,14 @@ public enum AnomalyComponent {
 				if (rnd.nextInt(40) == 0) {
 					double x = player.getX() + (rnd.nextDouble() - 0.5) * 32.0;
 					double z = player.getZ() + (rnd.nextDouble() - 0.5) * 32.0;
-					AnomalyEffects.visualBolt(level, x, surfaceOr(level, x, z, player.getY()), z);
+					double boltY = surfaceOr(level, x, z, player.getY());
+					AnomalyEffects.visualBolt(level, x, boltY, z);
+					// молния должна бить: визуальная вспышка без урона учила, что гроза безопасна
+					for (LivingEntity victim : nearby(level, player, 8.0)) {
+						if (Math.hypot(victim.getX() - x, victim.getZ() - z) < 3.0) {
+							victim.hurt(level.damageSources().magic(), 3.0f);
+						}
+					}
 					// молния оставляет гарь, а иногда и воронку: следы, которые видно потом
 					if (canMark(level, x, z)) {
 						AnomalyScars.scorch(level, x, z, 1.5 + rnd.nextDouble(), player.getY());
@@ -795,14 +803,20 @@ public enum AnomalyComponent {
 		var ink = new net.minecraft.core.particles.DustParticleOptions(0x1A1622, 1.1f);
 		for (int i = 0; i < 8; i++) {
 			double angle = start + i * Math.PI / 4.0;
-			double x = player.getX() + Math.cos(angle) * radius;
-			double z = player.getZ() + Math.sin(angle) * radius;
-			level.sendParticles(player, ink, true, true, x, player.getY() + 1.2, z, 2, 0.1, 0.4, 0.1, 0.0);
+			// разброс по радиусу и высоте: ровная окружность читается как геометрический артефакт
+			double r = radius + (rnd.nextDouble() - 0.5) * 3.0;
+			double x = player.getX() + Math.cos(angle) * r;
+			double z = player.getZ() + Math.sin(angle) * r;
+			level.sendParticles(player, ink, true, true, x, player.getY() + 0.6 + rnd.nextDouble() * 1.6, z,
+					2, 0.25, 0.35, 0.25, 0.0);
+			// голос в самой точке: шёпот «с той стороны», а не в ушах игрока
+			if (i % 3 == 0) {
+				level.playSound(null, x, player.getY(), z, SoundEvents.SCULK_CLICKING,
+						SoundSource.AMBIENT, 0.35f, 1.2f + (float) rnd.nextDouble() * 0.6f);
+			}
 		}
-		level.playSound(null, player.getX(), player.getY(), player.getZ(), SoundEvents.SCULK_CLICKING,
-				SoundSource.AMBIENT, 0.45f, 0.6f);
-		level.playSound(null, player.getX() + 2.0, player.getY(), player.getZ() - 2.0,
-				SoundEvents.WARDEN_TENDRIL_CLICKS, SoundSource.AMBIENT, 0.35f, 1.4f);
+		level.playSound(null, player.getX(), player.getY(), player.getZ(), SoundEvents.WARDEN_TENDRIL_CLICKS,
+				SoundSource.AMBIENT, 0.3f, 1.4f);
 	}
 
 	/**

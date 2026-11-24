@@ -190,10 +190,14 @@ public final class AnomalyScars {
 		return components != null && components.contains(id);
 	}
 
-	/** Точка в ядре: 35 % радиуса от центра. Туда же попадает почти всё разрушение. */
+	/**
+	 * Точка в зоне, где ставится след. Не только ядро: у зоны на 3000 блоков следы в 35 %
+	 * радиуса означали, что игрок идёт два километра по нетронутому рельефу и не понимает,
+	 * что уже внутри. Теперь от 45 % до 85 % радиуса — полоса, которую он пересекает.
+	 */
 	private static double[] spot(double cx, double cz, double r0, Random rnd) {
 		double angle = rnd.nextDouble() * TAU;
-		double distance = r0 * 0.35 * Math.sqrt(rnd.nextDouble());
+		double distance = r0 * (0.45 + 0.40 * Math.sqrt(rnd.nextDouble()));
 		return new double[]{
 				cx + Math.cos(angle) * distance,
 				cz + Math.sin(angle) * distance
@@ -263,6 +267,8 @@ public final class AnomalyScars {
 
 	/** С какой записи начинать следующий проход: строгий FIFO морил голодом всё поле за первой зоной. */
 	private static int rotate;
+	/** Дедлайн текущего прохода: деревья внутри одной колонки умеют съесть его целиком. */
+	private static long passDeadline;
 
 	/**
 	 * Суточный лимит FULL-генераций чанков под следы. Без него первое поле на 600 зон
@@ -295,6 +301,7 @@ public final class AnomalyScars {
 			return changed;
 		}
 		long deadline = System.nanoTime() + NANOS_PER_PASS;
+		passDeadline = deadline;
 		int chunksThisTick = 0;
 		int columnsThisTick = 0;
 		int blocksThisTick = 0;
@@ -518,6 +525,11 @@ public final class AnomalyScars {
 		// крона дуба/тёмного дуба шире 5×5: с радиусом 2 оставались висящие кольца листвы
 		for (int dx = -4; dx <= 4; dx++) {
 			for (int dz = -4; dz <= 4; dz++) {
+				// дедлайн проверяем внутри: одна колонка с деревом — это 81 колонка и до 48 блоков
+				// на каждую, и проход перебирал 5 мс в разы
+				if (passDeadline != 0L && System.nanoTime() > passDeadline) {
+					return changed;
+				}
 				if (!level.getChunkSource().hasChunk((x + dx) >> 4, (z + dz) >> 4)) {
 					continue;
 				}
@@ -1037,3 +1049,4 @@ public final class AnomalyScars {
 		return sum;
 	}
 }
+

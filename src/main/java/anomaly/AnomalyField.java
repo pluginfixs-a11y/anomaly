@@ -561,6 +561,11 @@ public final class AnomalyField {
 		return List.copyOf(data.anomalies);
 	}
 
+	/** Живой список для внутренних читателей (узлы, отладка): без копии 600 ссылок в секунду. */
+	static List<Anomaly> raw() {
+		return data.anomalies;
+	}
+
 	/** Живые предвестники: для команды и для отладки. */
 	public static List<Anomaly> precursors() {
 		List<Anomaly> out = new ArrayList<>();
@@ -698,7 +703,9 @@ public final class AnomalyField {
 	public static boolean remove(long id) {
 		boolean removed = data.anomalies.removeIf(anomaly -> anomaly.id == id);
 		if (removed) {
-			saveNow();
+			// не saveNow: удаление зоны третьим якорем идёт из тика игрока, а снимок поля
+			// в 1.3 МБ — это стол. Периодика и остановка сервера его запишут
+			markDirty();
 		}
 		return removed;
 	}
@@ -858,14 +865,31 @@ public final class AnomalyField {
 
 	/** Пишем под замком: снимок старше уже записанного пропускаем. */
 	private static boolean writeLocked(Path file, String json, long seq) {
-		if (seq < lastWrittenSeq) {
-			return true;
+		synchronized (SAVE_LOCK) {
+			if (seq < lastWrittenSeq) {
+				return true;
+			}
 		}
-		boolean ok = writeText(file, json);
-		if (ok) {
-			lastWrittenSeq = seq;
+		// файл пишем ВНЕ замка: иначе синхронное сохранение на /stop ждёт дисковый I/O
+		Path tmp = writeTmp(file, json);
+		if (tmp == null) {
+			return false;
 		}
-		return ok;
+		synchronized (SAVE_LOCK) {
+			if (seq < lastWrittenSeq) {
+				try {
+					Files.deleteIfExists(tmp);
+				} catch (IOException ignored) {
+					// временный файл уберёт следующая запись
+				}
+				return true;
+			}
+			boolean ok = move(tmp, file);
+			if (ok) {
+				lastWrittenSeq = seq;
+			}
+			return ok;
+		}
 	}
 
 	static boolean write(Path file, AnomalyFieldData field) {
@@ -873,6 +897,12 @@ public final class AnomalyField {
 	}
 
 	private static boolean writeText(Path file, String json) {
+		Path tmp = writeTmp(file, json);
+		return tmp != null && move(tmp, file);
+	}
+
+	/** Записать строку в уникальный временный файл рядом с целью. null — не вышло. */
+	private static Path writeTmp(Path file, String json) {
 		try {
 			Path parent = file.getParent();
 			if (parent != null) {
@@ -882,6 +912,16 @@ public final class AnomalyField {
 			// писать один и тот же временный файл
 			Path tmp = file.resolveSibling(file.getFileName() + "." + System.nanoTime() + ".tmp");
 			Files.writeString(tmp, json, StandardCharsets.UTF_8);
+			return tmp;
+		} catch (IOException e) {
+			AnomalyMod.LOGGER.error("Anomaly: не смог записать поле в {}", file, e);
+			return null;
+		}
+	}
+
+	/** Атомарно подменить файл. */
+	private static boolean move(Path tmp, Path file) {
+		try {
 			try {
 				Files.move(tmp, file, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
 			} catch (IOException atomicFailed) {
@@ -889,7 +929,7 @@ public final class AnomalyField {
 			}
 			return true;
 		} catch (IOException e) {
-			AnomalyMod.LOGGER.error("Anomaly: не смог записать поле в {}", file, e);
+			AnomalyMod.LOGGER.error("Anomaly: не смог заменить поле {}", file, e);
 			return false;
 		}
 	}
@@ -967,10 +1007,9 @@ public final class AnomalyField {
 			Anomaly candidate = create(field, config, rnd, now, x, z, null, null, false);
 			// клиренс считается не по точке рождения, а по будущему радиусу: зона на 3000
 			// дорастает до базы за часы, и «260 блоков от игрока» её не спасают
-			if (avoid.blocks(x, z, candidate.r0 * 0.5)) {
+			if (avoid.blocks(x, z, candidate.r0)) {
 				continue;
-			}
-			if (!clashes(field, candidate)) {
+			}			if (!clashes(field, candidate)) {
 				if (herald) {
 					herald(candidate, now, config, rnd);
 				}
@@ -1168,3 +1207,4 @@ public final class AnomalyField {
 		return Math.max(0.2, Math.min(config.lifetime_max_hours, hours));
 	}
 }
+

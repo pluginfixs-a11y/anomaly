@@ -107,14 +107,9 @@ public final class AnomalyEffects {
 			} else if (close) {
 				density = density * 6 / 5;
 			}
-			float scale = scaleFor(zone) * (wall ? 1.35f : 1.0f);
-			double spread = spreadFor(zone) * (wall ? 1.5 : 1.0);
+			float scale = scaleFor(zone) * (wall ? 1.1f : 1.0f);
+			double spread = spreadFor(zone) * (wall ? 1.15 : 1.0);
 			edgeBand(level, player, zone, config.view_range, scale, density, spread, 1.0);
-			// второй контур только если он реально попадает в кадр: при r>800 он уходит за reach.
-			// Это НЕ вложенность: вложенная зона рисуется своим собственным контуром
-			if (wall && zone.radius() * (1.0 - 0.84) <= config.view_range) {
-				edgeBand(level, player, zone, config.view_range, scale * 0.7f, distant ? 7 : 12, spread * 0.8, 0.84);
-			}
 			anchors(level, player, zone);
 		}
 		coreBeacon(level, player, zone, state);
@@ -195,8 +190,10 @@ public final class AnomalyEffects {
 	 */
 	private static void coreBeacon(ServerLevel level, ServerPlayer player, Zone zone, AnomalyState state) {
 		// не player.tickCount: его фаза относительно серверного тика эффектов может не совпасть
-		// с нулём никогда — маяка не было бы у 9 игроков из 10
-		if (state.pulseTicks % 20 >= Math.max(1, state.lastStep)) {
+		// с нулём никогда — маяка не было бы у 9 игроков из 10. Фаза по id зоны: маяки разных
+		// зон не бьют в один тик
+		int phase = Math.floorMod((int) (zone.id() & 0x7L), 20);
+		if (Math.floorMod(state.pulseTicks + phase, 20) >= Math.max(1, state.lastStep)) {
 			return;
 		}
 		double dist = Math.hypot(zone.coreX() - player.getX(), zone.coreZ() - player.getZ());
@@ -353,11 +350,16 @@ public final class AnomalyEffects {
 			half = Math.min(half, 112.0 / radius);
 		}
 		double arc = 2.0 * half * radius;
+		// вытянутость растягивает контур до 2.6×: без поправки на длинной оси шаг точек
+		// втрое больше, а дальняя сторона полного кольца выходит за reach и пропадает
+		arc *= 0.5 * (1.0 + Math.min(2.0, Math.max(0.2, zone.anomaly().stretch)));
+		boolean far = zone.signedDistance(player.getX(), player.getZ()) > 96.0;
 		// полное кольцо у мелкой зоны: шаг 3 блока вместо 8 — иначе между точками провалы
 		// в 6–8 блоков, и кольцо читается как пунктир/конфетти. Потолок 56: при 160 точках
-		// и пяти пакетах на точку один кадр давал 600+ пакетов в тике
-		double spacing = full ? 3.0 : 4.0;
-		int cap = full ? 56 : 56;
+		// и пяти пакетах на точку один кадр давал 600+ пакетов в тике. Дальше 96 блоков от
+		// края режем вдвое: там стена и так в пару пикселей
+		double spacing = 3.0;
+		int cap = far ? 28 : 56;
 		int points = Math.max(24, Math.min(cap, (int) (arc / spacing)));
 		// полное кольцо — это в 5 раз больше точек: плотность на точку вдвое ниже, иначе
 		// один кадр такой зоны вытесняет все остальные частицы у клиента

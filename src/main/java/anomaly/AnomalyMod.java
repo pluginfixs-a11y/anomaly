@@ -131,6 +131,12 @@ public class AnomalyMod implements ModInitializer {
 			AnomalyEffects.herald(level, player, herald, AnomalyClock.now());
 		}
 
+		// Нижний мир — тот же мир в масштабе 1:8. Рейд в аду на 2 тыс. блоков — это 16 км
+		// по Верхнему, и бесплатного обхода поля быть не должно
+		if (level.dimension() == Level.NETHER) {
+			netherToll(player, state, config, seconds);
+		}
+
 		List<Zone> near = AnomalyField.near(level, player.getX(), player.getZ(), config.view_range);
 
 		// кемпинг: зона кормится, пока в ней стоят. Считаем здесь же — второй обход near()
@@ -218,5 +224,29 @@ public class AnomalyMod implements ModInitializer {
 	/** Для самопроверки и для будущих модов: доза игрока, если он уже попадал в аномалию. */
 	static AnomalyState stateOf(UUID playerId) {
 		return STATES.get(playerId);
+	}
+
+	/**
+	 * Нижний мир: 1 блок = 8 блоков Верхнего. Дальний рейд в аду обходил бы поле целиком —
+	 * ни дозы, ни остатка, ни времени. Поэтому глубина считается по координатам ×8: с 3.75 тыс.
+	 * блоков ада начинается то же, что с 30 км в Верхнем, и цена растёт так же.
+	 */
+	static void netherToll(ServerPlayer player, AnomalyState state, AnomalyConfig config, double seconds) {
+		if (player.isCreative() || player.isSpectator()) {
+			return;
+		}
+		double scaled = Math.hypot(player.getX(), player.getZ()) * 8.0;
+		if (scaled <= config.suppress_until) {
+			return;
+		}
+		double depth = Math.min(1.0, (scaled - config.suppress_until) / 12000.0);
+		state.dose = Math.min(1.0, state.dose + config.dose_gain_per_second * seconds * depth);
+		state.lastHazard = true;
+		AnomalyResidue.add(player.getUUID(), 3.0 * depth * seconds / 3600.0);
+		state.hazardTicks += AnomalyState.stepTicks(seconds);
+		if (state.hazardTicks >= 120) {
+			state.hazardTicks = 0;
+			player.hurt(player.level().damageSources().magic(), (float) (0.6 + 0.9 * depth));
+		}
 	}
 }
