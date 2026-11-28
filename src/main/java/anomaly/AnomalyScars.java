@@ -2131,6 +2131,9 @@ public final class AnomalyScars {
 
 	/** Наледь от холода: слой снега на твёрдой земле, не на листве и не на кактусах. */
 	public static int frost(ServerLevel level, double x, double z, double radius, double nearY) {
+		if (!microBudget(level)) {
+			return 0;
+		}
 		int bx = (int) Math.floor(x);
 		int bz = (int) Math.floor(z);
 		if (!level.getChunkSource().hasChunk(bx >> 4, bz >> 4)) {

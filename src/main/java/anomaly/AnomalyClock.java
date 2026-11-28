@@ -28,7 +28,7 @@ public final class AnomalyClock {
 			lastRealMs = real;
 			return fieldMs;
 		}
-		return fieldMs + (long) ((real - lastRealMs) * scale);
+		return fieldMs + (long) (Math.max(0L, real - lastRealMs) * scale);
 	}
 
 	/** Зафиксировать прошедшее реальное время в полевом счётчике. */
@@ -38,7 +38,7 @@ public final class AnomalyClock {
 			lastRealMs = real;
 			return;
 		}
-		fieldMs += (long) ((real - lastRealMs) * scale);
+		fieldMs += (long) (Math.max(0L, real - lastRealMs) * scale);
 		lastRealMs = real;
 	}
 

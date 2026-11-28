@@ -374,6 +374,8 @@ public final class Anomaly {
 		if (!(Double.isFinite(x0) && Double.isFinite(z0) && Double.isFinite(r0) && r0 > 0.0)) {
 			return false;
 		}
+		// r0=1e9 из ручного JSON уводил узлы и следы за пределы мира
+		r0 = Math.min(r0, 10_000.0);
 		if (!(Double.isFinite(life_hours) && life_hours > 0.0)) {
 			return false;
 		}
@@ -385,6 +387,8 @@ public final class Anomaly {
 		}
 		// stretch из ручного JSON в 1e6 делал зону невидимым диском на весь мир
 		stretch = Math.min(stretch, 10.0);
+		// null/неизвестный cls из файла рвал сравнение в clashes()
+		cls = AnomalyClass.byId(cls).id;
 		if (!(Double.isFinite(dir) && Double.isFinite(rotation) && Double.isFinite(breath)
 				&& Double.isFinite(breath_speed))) {
 			return false;

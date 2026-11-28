@@ -56,7 +56,7 @@ public enum AnomalyClass {
 	 * дальше квадратичный рост между ступенями: радиус — это масса.
 	 */
 	public static double damageBudget(double radius, AnomalyClass cls) {
-		if (cls == null || !cls.damages() || radius <= BUDGET[0][0]) {
+		if (cls == null || !cls.damages() || radius < BUDGET[0][0]) {
 			return 0.0;
 		}
 		// у опасной/смертельной зоны есть «подпись»: без пола бюджет в 3–20 блоков не оставлял

@@ -199,9 +199,7 @@ public class AnomalyConfig {
 		portal_limit = portal_limit <= 0 ? 0 : Math.max(1000, Math.min(portal_limit, 200_000));
 		// 100 % в минуту и больше дают отрицательное основание степени и NaN в радиусе
 		dissipate_rate_per_min = Math.max(0.0, Math.min(99.0, dissipate_rate_per_min));
-		if (tick_period < 1) {
-			tick_period = 1;
-		}
+		tick_period = Math.max(1, Math.min(200, tick_period));
 		chunks_per_tick = Math.max(1, Math.min(16, chunks_per_tick));
 		blocks_per_tick = Math.max(100, Math.min(20_000, blocks_per_tick));
 		mspt_limit = Math.max(1.0, Math.min(1000.0, mspt_limit));
@@ -241,7 +239,9 @@ public class AnomalyConfig {
 		}
 		// v2 → v3: появились компоненты, старый список выключенных «типов» больше не значит ничего.
 		// Геометрию при этом не трогаем: пользователь мог её уже настроить.
-		disabled_components = new ArrayList<>();
+		if (config_version < 3) {
+			disabled_components = new ArrayList<>();
+		}
 		// v3 → v4: 250 зон на мир 40 000 блоков — это одна на 2 500 блоков, в поле зрения пусто.
 		// Поднимаем только старое дефолтное значение, выставленное руками не трогаем.
 		if (config_version < 4 && population == 250) {

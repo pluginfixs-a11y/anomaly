@@ -184,7 +184,8 @@ public final class AnomalyField {
 			changed = tickData(data, config, random, now, hours, avoid);
 		} catch (RuntimeException e) {
 			warnOnce("поле", e);
-			changed = false;
+			// до исключения могли родиться/уйти зоны: частичные мутации нельзя терять
+			changed = true;
 		}
 		// один бросок внутри прохода не должен убивать тик сервера: ловим и пишем одну строку
 		try {
@@ -417,11 +418,12 @@ public final class AnomalyField {
 
 		// Население: рожаем ровно столько, сколько не хватает до цели. Никакой демографии —
 		// попытка оценить смертность по сумме 1/жизнь врёт на сдвинутой возрастной структуре
-		// (поле то выгорает, то раздувается). Разрыв восполняется за ~два часа, а на ускоренном
-		// времени — за один тик, и выше цели поле не растёт.
+		// (поле то выгорает, то раздувается). Разрыв восполняется за ~два часа; на ускоренном
+		// времени — не больше 8 зон за тик (иначе одна команда timescale вешает сервер),
+		// и выше цели поле не растёт.
 		int deficit = config.population - reservedCount(field);
 		if (deficit > 0 && hours > 0.0) {
-			int births = Math.min(deficit, Math.max(1, (int) Math.ceil(deficit * 0.5 * hours)));
+			int births = Math.min(Math.min(deficit, 8), Math.max(1, (int) Math.ceil(deficit * 0.5 * hours)));
 			for (int i = 0; i < births; i++) {
 				if (spawnAuto(field, config, rnd, now, avoid, config.herald_enabled) != null) {
 					changed = true;

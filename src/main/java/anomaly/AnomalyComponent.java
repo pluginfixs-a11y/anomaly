@@ -470,7 +470,8 @@ public enum AnomalyComponent {
 					double boltY = surfaceOr(level, x, z, player.getY());
 					AnomalyEffects.visualBolt(level, x, boltY, z);
 					// молния должна бить: визуальная вспышка без урона учила, что гроза безопасна
-					for (LivingEntity victim : nearby(level, player, 8.0)) {
+					for (LivingEntity victim : level.getEntitiesOfClass(LivingEntity.class,
+							new AABB(x - 3.0, boltY - 6.0, z - 3.0, x + 3.0, boltY + 6.0, z + 3.0))) {
 						if (Math.hypot(victim.getX() - x, victim.getZ() - z) < 3.0) {
 							victim.hurt(level.damageSources().magic(), 3.0f);
 						}
